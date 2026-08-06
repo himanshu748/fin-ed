@@ -162,6 +162,22 @@ def test_prompt_requires_deterministic_tools_sources_and_honest_abstention() -> 
         assert required in prompt
 
 
+def test_prompt_keeps_english_and_hindi_as_separate_response_languages() -> None:
+    # Catches the model drifting back to mixed Hinglish or romanized Hindi.
+    prompt = build_system_prompt(ParticipantProfile(LearningMode.STOCKS)).casefold()
+
+    for required in (
+        "reply entirely in english",
+        "reply entirely in hindi",
+        "devanagari",
+        "never mix english and hindi",
+        "never write hindi in latin characters",
+        "do not repeat the remembered romanized-hindi sentence",
+    ):
+        assert required in prompt
+    assert "hinglish" not in prompt
+
+
 def test_prompt_reconciles_the_remembered_fifty_rupees_without_guessing() -> None:
     prompt = build_system_prompt(ParticipantProfile(LearningMode.STOCKS))
     normalized = prompt.casefold()
@@ -201,7 +217,20 @@ def test_greeting_names_track_topic_and_adds_fno_risk_line() -> None:
     assert "Financial Services" in fno
     assert "F&O" in fno
     assert "high risk" in fno.casefold()
-    assert "education aur simulation" in fno.casefold()
+    assert "education and simulation" in fno.casefold()
+
+
+def test_greetings_are_english_only_and_do_not_use_romanized_hindi() -> None:
+    # Catches a mixed-language greeting being sent through an English locale.
+    greetings = [build_greeting(ParticipantProfile(mode)) for mode in LearningMode]
+    romanized_hindi = ("aaj", "aur", "hai", "mein", "nahi", "sawaal", "samjhenge")
+
+    assert all("English or Hindi" in greeting for greeting in greetings)
+    assert all(
+        word not in greeting.casefold()
+        for greeting in greetings
+        for word in romanized_hindi
+    )
 
 
 def test_greetings_do_not_emit_en_or_em_dashes() -> None:

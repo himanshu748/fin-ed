@@ -87,15 +87,15 @@ test('renders the complete Day 1 landing narrative and safety boundary', () => {
     welcome,
     [
       'VOICE-FIRST FINANCIAL LITERACY FOR INDIA',
-      'Price same tha. Phir loss kahan se hua?',
+      'Same price. Why did I still lose money?',
       'Talk to FinEd Saathi',
       'See the ₹6 breakdown',
       'Education only. FinEd does not recommend or execute trades and never asks for your broker password, PIN or OTP.',
       'How it works',
-      'Price loss zero tha. Cost loss zero nahi tha.',
-      'Sunega bhi. Samjhayega bhi.',
-      'Broker ka answer akela final answer nahi hai.',
-      'Agla trade nahi. Agla concept samjho.',
+      'The price loss was zero. The transaction cost was not.',
+      'It listens. Then it explains.',
+      'A broker answer is not the only final authority.',
+      'Learn the next concept, not the next trade.',
     ],
     'missing required landing copy'
   );
@@ -158,7 +158,7 @@ test('keeps the connected experience educational, transparent, and single-discon
     [
       "const locale = 'en-IN'",
       'Ask your first market question',
-      'Maine ₹6 mein stock liya, ₹6 mein hi bech diya, phir bhi mujhe ₹50 ka loss hua.',
+      'I bought and sold one share at ₹6. Why did I still lose ₹50?',
     ],
     'missing connected empty state'
   );

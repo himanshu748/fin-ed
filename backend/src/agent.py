@@ -32,6 +32,7 @@ from fined.agent import (
 from fined.chat_model import create_gemini_llm
 from fined.knowledge.embeddings import GeminiEmbedder
 from fined.knowledge.index import KnowledgeIndex, UnavailableKnowledgeRetriever
+from fined.murf_falcon import install_current_websocket_serializer
 
 logger = logging.getLogger("agent")
 
@@ -108,6 +109,7 @@ async def my_agent(ctx: JobContext) -> None:
         await _close_embedding_client(embedding_client)
 
     try:
+        install_current_websocket_serializer()
         embedder = GeminiEmbedder(embedding_client)
         index = _load_knowledge_retriever(KNOWLEDGE_DIRECTORY, embedder)
         session = AgentSession[SessionState](

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, TypeVar
 
 from livekit.agents import (
@@ -127,8 +128,11 @@ class ProviderErrorSanitizingLLM(llm.LLM):
         assert stream is not None
         return _sanitize_stream_errors(stream)
 
-    def prewarm(self) -> None:
-        self._provider_llm.prewarm()
+    def prewarm(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        if loop is None:
+            self._provider_llm.prewarm()
+        else:
+            self._provider_llm.prewarm(loop=loop)
 
     async def aclose(self) -> None:
         try:

@@ -58,7 +58,7 @@ export function AgentChatTranscript({
         {messages.length === 0 && (
           <ConversationEmptyState
             title="Ask your first market question"
-            description="Try: Maine ₹6 mein stock liya, ₹6 mein hi bech diya, phir bhi mujhe ₹50 ka loss hua."
+            description="Try: I bought and sold one share at ₹6. Why did I still lose ₹50?"
             className="min-h-72 rounded-[12px] border border-dashed border-[var(--ledger-rule)] bg-[var(--paper)]"
           />
         )}

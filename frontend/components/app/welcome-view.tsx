@@ -29,7 +29,7 @@ const steps = [
   {
     number: '02',
     title: 'Ask naturally',
-    body: 'Speak in Hindi, English or Hinglish. FinEd asks for one missing detail at a time.',
+    body: 'Speak in English or Hindi. FinEd answers in the same language without mixing them.',
   },
   {
     number: '03',
@@ -88,7 +88,7 @@ const sourceCards = [
 
 const capabilities = [
   ['8 learning modes', 'Pick one context before each call.'],
-  ['Nikhil, Conversational', 'Indian English voice using Murf Falcon 2.'],
+  ['Nikhil, Conversational', 'Indian English and Hindi voice using Murf Falcon 2.'],
   ['Angel One baseline', 'The first broker schedule used for fee illustrations.'],
   ['Deterministic calculator', 'Delivery-cost math is computed, not guessed by the model.'],
   ['No recommendations', 'Concepts and risk education, never a buy or sell call.'],
@@ -99,26 +99,26 @@ const capabilities = [
 
 const faqs = [
   {
-    question: 'Kya FinEd mujhe stock recommend karega?',
+    question: 'Will FinEd recommend a stock?',
     answer:
-      'Nahi. FinEd concepts, charges, taxes and risks samjhata hai. It does not recommend a security, target, strategy or allocation.',
+      'No. FinEd explains concepts, charges, taxes and risks. It does not recommend a security, target, strategy or allocation.',
   },
   {
-    question: '₹50 aur current estimate alag kyun ho sakte hain?',
-    answer: `₹50 abhi unresolved hai. Current illustration mein ${sixRupeeAssumptions.executed_buy_orders} executed buy order, ${sixRupeeAssumptions.executed_sell_orders} executed sell order aur ${sixRupeeAssumptions.demat_debits} sell-side DP debit hai. Brokerage ${sixRupeeRules.brokerage}; isliye buy brokerage ₹${sixRupeeResult.brokerage_buy}, sell brokerage ₹${sixRupeeResult.brokerage_sell}, DP ₹${sixRupeeResult.dp_charge_before_gst} before GST, total ₹${sixRupeeResult.total_charges}, ratio ${sixRupeeResult.fee_to_investment_percent}% aur break-even ₹${sixRupeeResult.break_even_sell_price} hai. Pehle dekho remembered ₹50 ${reconciliationLocation} mein kahan dikha. Phir trade date, delivery versus intraday, executed buy and sell order counts, sell-side DP debit count, promotion status, aur separate account or service charge check karo. ${contractNotePriority}`,
+    question: 'Why can ₹50 differ from the current estimate?',
+    answer: `The remembered ₹50 is unresolved. This illustration uses ${sixRupeeAssumptions.executed_buy_orders} executed buy order, ${sixRupeeAssumptions.executed_sell_orders} executed sell order and ${sixRupeeAssumptions.demat_debits} sell-side DP debit. Brokerage is ${sixRupeeRules.brokerage}; buy brokerage is ₹${sixRupeeResult.brokerage_buy}, sell brokerage is ₹${sixRupeeResult.brokerage_sell}, DP is ₹${sixRupeeResult.dp_charge_before_gst} before GST, total charges are ₹${sixRupeeResult.total_charges}, the ratio is ${sixRupeeResult.fee_to_investment_percent}% and break-even is ₹${sixRupeeResult.break_even_sell_price}. First locate where ₹50 appeared in ${reconciliationLocation}. Then check the trade date, delivery versus intraday, executed order counts, sell-side DP debit count, promotion status, and separate account or service charges. ${contractNotePriority}`,
   },
   {
-    question: 'ETF aur mutual fund mein basic difference kya hai?',
+    question: 'What is the basic difference between an ETF and a mutual fund?',
     answer:
       'An ETF trades on an exchange during market hours, so you generally need a demat and trading account. A mutual fund unit is bought or redeemed with the fund at its applicable NAV. Costs and liquidity mechanics also differ.',
   },
   {
-    question: 'Kya FinEd mera Angel One account access karta hai?',
+    question: 'Does FinEd access my Angel One account?',
     answer:
-      'Nahi. Angel One is a pricing and education baseline only. FinEd does not sign in to your account and never asks for a password, PIN or OTP.',
+      'No. Angel One is a pricing and education baseline only. FinEd does not sign in to your account and never asks for a password, PIN or OTP.',
   },
   {
-    question: 'Sources kitni baar update hote hain?',
+    question: 'How often are sources updated?',
     answer:
       'The corpus is curated and versioned. Every fee or rule answer should show its publisher, applicability date and last-verified date so you can check whether it fits your trade date.',
   },
@@ -230,11 +230,11 @@ export function WelcomeView({
               VOICE-FIRST FINANCIAL LITERACY FOR INDIA
             </p>
             <h1 className="font-display balance-text mt-5 max-w-[13ch] text-[clamp(2.5rem,7vw,5rem)] leading-[0.98] font-bold tracking-[-0.045em] text-[var(--ledger-ink)]">
-              Price same tha. Phir loss kahan se hua?
+              Same price. Why did I still lose money?
             </h1>
             <p className="mt-6 max-w-[58ch] text-[clamp(1.05rem,2vw,1.25rem)] leading-[1.55] text-[var(--muted-ink)]">
-              FinEd Saathi Indian market concepts, charges and risks ko simple Hinglish mein
-              samjhata hai. Ask by voice, see the math, and verify the source.
+              FinEd Saathi explains Indian market concepts, charges and risks in English or Hindi.
+              Ask by voice, see the math, and verify the source.
             </p>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
@@ -290,7 +290,7 @@ export function WelcomeView({
         <Reveal className="section-shell">
           <SectionHeading
             eyebrow="Choose before you connect"
-            title="Aaj market mein kya samajhna hai?"
+            title="What do you want to understand today?"
             copy="Your selected mode travels with the voice session and keeps the explanation focused. You can choose a new mode before the next call."
           />
           <div className="mt-10">
@@ -331,7 +331,7 @@ export function WelcomeView({
         <Reveal className="section-shell">
           <SectionHeading
             eyebrow="Current delivery illustration"
-            title="Price loss zero tha. Cost loss zero nahi tha."
+            title="The price loss was zero. The transaction cost was not."
             copy="This one-share NSE example uses the current versioned Angel One baseline. It separates the market result from the cost of completing the transaction."
           />
           <div className="mt-10 grid overflow-hidden rounded-[12px] border border-[var(--ledger-rule)] bg-[var(--surface)] lg:grid-cols-12">
@@ -435,7 +435,7 @@ export function WelcomeView({
               Voice-session proof
             </p>
             <h2 className="font-display balance-text mt-4 text-[clamp(2rem,4vw,3.5rem)] leading-[1.04] font-bold tracking-[-0.035em]">
-              Sunega bhi. Samjhayega bhi.
+              It listens. Then it explains.
             </h2>
             <p className="mt-5 text-lg leading-8 text-[#CBD3DE]">
               The spoken answer stays concise. The visible transcript keeps the calculation and
@@ -455,19 +455,17 @@ export function WelcomeView({
               </div>
             </div>
             <blockquote className="mt-5 text-xl leading-8 font-semibold">
-              “Maine ₹6 mein stock liya, ₹6 mein hi bech diya, phir bhi mujhe ₹50 ka loss hua.”
+              “I bought and sold one share at ₹6. Why did I still lose ₹50?”
             </blockquote>
             <div className="mt-5 border-l-2 border-[#AFC8F0] pl-5 text-[0.98rem] leading-7 text-[#E6EAF0]">
-              Price P&amp;L zero ho sakta hai, but ₹50 abhi unresolved hai. Sabse pehle batayein:
-              ₹50 {reconciliationLocation} mein dikha? Uske baad main ek detail at a time poochunga:
+              The price P&amp;L may be zero, but the remembered ₹50 is unresolved. First identify
+              whether ₹50 appeared in {reconciliationLocation}. Then check one detail at a time:
               trade date, delivery versus intraday, executed buy and sell order counts, sell-side DP
-              debit count, promotion status, and any separate account or service charge. Brokerage
-              rule {sixRupeeRules.brokerage}. Current fixture mein{' '}
-              {sixRupeeAssumptions.executed_buy_orders} executed buy order ka brokerage ₹
-              {sixRupeeResult.brokerage_buy}, {sixRupeeAssumptions.executed_sell_orders} executed
-              sell order ka ₹{sixRupeeResult.brokerage_sell}, aur {sixRupeeAssumptions.demat_debits}{' '}
-              sell-side DP debit ₹{sixRupeeResult.dp_charge_before_gst} before GST hai. This
-              illustrates about ₹{sixRupeeResult.total_charges}, not the remembered ₹50.
+              debit count, promotion status, and any separate account or service charge. The
+              brokerage rule is {sixRupeeRules.brokerage}. This fixture has ₹
+              {sixRupeeResult.brokerage_buy} buy brokerage, ₹{sixRupeeResult.brokerage_sell} sell
+              brokerage and a ₹{sixRupeeResult.dp_charge_before_gst} sell-side DP debit before GST.
+              It illustrates about ₹{sixRupeeResult.total_charges}, not the remembered ₹50.
             </div>
           </div>
         </Reveal>
@@ -477,7 +475,7 @@ export function WelcomeView({
         <Reveal className="section-shell">
           <SectionHeading
             eyebrow="Curated and versioned sources"
-            title="Broker ka answer akela final answer nahi hai."
+            title="A broker answer is not the only final authority."
             copy="FinEd keeps source classes separate and follows the higher-authority current source when records conflict. Every answer should expose publisher, date and link."
           />
           <p className="font-data mt-6 text-sm text-[var(--muted-ink)]">
@@ -583,7 +581,7 @@ export function WelcomeView({
               One concept at a time
             </p>
             <h2 className="font-display balance-text mt-4 max-w-[18ch] text-[clamp(2rem,4vw,3.5rem)] leading-[1.04] font-bold tracking-[-0.035em]">
-              Agla trade nahi. Agla concept samjho.
+              Learn the next concept, not the next trade.
             </h2>
           </div>
           <Button

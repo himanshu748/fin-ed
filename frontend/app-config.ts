@@ -34,8 +34,8 @@ export interface AppConfig {
 
 export const APP_CONFIG_DEFAULTS: AppConfig = {
   companyName: 'FinEd Saathi',
-  pageTitle: 'FinEd Saathi: Indian market concepts and costs in Hinglish',
-  pageDescription: 'Indian market concepts, charges and risks explained aloud in simple Hinglish.',
+  pageTitle: 'FinEd Saathi: Indian market concepts in English or Hindi',
+  pageDescription: 'Indian market concepts, charges and risks explained aloud in English or Hindi.',
 
   supportsChatInput: true,
   supportsVideoInput: false,

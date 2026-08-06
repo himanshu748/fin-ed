@@ -34,7 +34,7 @@ function statusFor(connectionState: ConnectionState, agentState: AgentState) {
     case 'thinking':
       return { label: 'Working through the concept', tone: 'active' as const };
     case 'speaking':
-      return { label: 'Explaining in Hinglish', tone: 'active' as const };
+      return { label: 'Explaining in English or Hindi', tone: 'active' as const };
     case 'failed':
       return { label: 'Voice agent unavailable', tone: 'failed' as const };
     case 'initializing':
@@ -113,7 +113,7 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
             Ask one market concept at a time.
           </h1>
           <p className="mt-3 leading-7 text-[var(--muted-ink)]">
-            Nikhil explains in conversational Indian English and Hinglish using Murf Falcon 2.
+            Nikhil answers in either English or Hindi using Murf Falcon 2. Languages are not mixed.
           </p>
 
           <div className="my-8 grid min-h-44 place-items-center rounded-[12px] border border-[var(--soft-rule)] bg-[var(--paper)] p-5">

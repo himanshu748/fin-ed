@@ -1,6 +1,6 @@
 # FinEd Saathi backend
 
-This Python service is the real-time voice agent for FinEd Saathi, a Hinglish
+This Python service is the real-time voice agent for FinEd Saathi, an English and Hindi
 financial-literacy tutor in the **Financial Services** track of VoiceForBharat.
 It connects to LiveKit Cloud as the named agent `my-agent`.
 
@@ -72,7 +72,7 @@ The Day 1 Indian voice is configured in `src/agent.py`:
 
 Speech recognition uses Deepgram Nova-3 with `language="multi"` and 100 ms
 endpointing for English/Hindi code-switching. The agent answers in concise
-Indian English and Hinglish.
+Indian English and Hindi.
 
 The Gemini policy lives in `src/fined/chat_model.py`. Its default is
 `gemini-3.6-flash`; the only explicit alternatives are

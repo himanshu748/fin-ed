@@ -1,6 +1,6 @@
 import { ImageResponse } from 'next/og';
 
-export const alt = 'FinEd Saathi explains Indian market concepts and costs in Hinglish';
+export const alt = 'FinEd Saathi explains Indian market concepts and costs in English or Hindi';
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
 
@@ -41,10 +41,10 @@ export default function Image() {
               marginTop: 32,
             }}
           >
-            Price same tha. Phir loss kahan se hua?
+            Same price. Why did I still lose money?
           </div>
           <div style={{ color: '#526174', display: 'flex', fontSize: 28, marginTop: 32 }}>
-            FinEd Saathi explains concepts, charges and risks in simple Hinglish.
+            FinEd Saathi explains concepts, charges and risks in English or Hindi.
           </div>
         </div>
 
