@@ -2,6 +2,12 @@ import { cache } from 'react';
 import { TokenSource } from 'livekit-client';
 import { APP_CONFIG_DEFAULTS } from '@/app-config';
 import type { AppConfig } from '@/app-config';
+import {
+  SANDBOX_CONNECTION_ERROR_MESSAGE,
+  participantMetadataRequest,
+  readSandboxConnectionResponse,
+  sanitizeParticipantMetadata,
+} from '@/lib/learning-modes';
 
 export const CONFIG_ENDPOINT = process.env.NEXT_PUBLIC_APP_CONFIG_ENDPOINT;
 export const SANDBOX_ID = process.env.SANDBOX_ID;
@@ -96,7 +102,7 @@ export function getStyles(appConfig: AppConfig) {
  * @returns A token source for a sandboxed LiveKit session
  */
 export function getSandboxTokenSource(appConfig: AppConfig) {
-  return TokenSource.custom(async () => {
+  return TokenSource.custom(async (options) => {
     const url = new URL(process.env.NEXT_PUBLIC_CONN_DETAILS_ENDPOINT!, window.location.origin);
     const sandboxId = appConfig.sandboxId ?? '';
     const roomConfig = appConfig.agentName
@@ -114,12 +120,22 @@ export function getSandboxTokenSource(appConfig: AppConfig) {
         },
         body: JSON.stringify({
           room_config: roomConfig,
+          ...participantMetadataRequest(options.participantMetadata),
         }),
       });
-      return await res.json();
-    } catch (error) {
-      console.error('Error fetching connection details:', error);
-      throw new Error('Error fetching connection details!');
+      return await readSandboxConnectionResponse(res);
+    } catch {
+      throw new Error(SANDBOX_CONNECTION_ERROR_MESSAGE);
     }
   });
+}
+
+export function createModeScopedTokenSource(appConfig: AppConfig, participantMetadata: string) {
+  if (sanitizeParticipantMetadata(participantMetadata) !== participantMetadata) {
+    throw new Error('Invalid participant metadata.');
+  }
+
+  return typeof process.env.NEXT_PUBLIC_CONN_DETAILS_ENDPOINT === 'string'
+    ? getSandboxTokenSource(appConfig)
+    : TokenSource.endpoint('/api/token');
 }

@@ -1,76 +1,82 @@
 'use client';
 
-import { useTheme } from 'next-themes';
-import { AnimatePresence, motion } from 'motion/react';
-import { useSessionContext } from '@livekit/components-react';
+import { useEffect, useRef, useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { useAgent, useSessionContext } from '@livekit/components-react';
 import type { AppConfig } from '@/app-config';
-import { AgentSessionView_01 } from '@/components/agents-ui/blocks/agent-session-view-01';
+import { FinEdSessionView } from '@/components/app/fin-ed-session-view';
 import { WelcomeView } from '@/components/app/welcome-view';
-
-const MotionWelcomeView = motion.create(WelcomeView);
-const MotionSessionView = motion.create(AgentSessionView_01);
-
-const VIEW_MOTION_PROPS = {
-  variants: {
-    visible: {
-      opacity: 1,
-    },
-    hidden: {
-      opacity: 0,
-    },
-  },
-  initial: 'hidden',
-  animate: 'visible',
-  exit: 'hidden',
-  transition: {
-    duration: 0.5,
-    ease: 'linear',
-  },
-};
+import type { LearningMode } from '@/lib/learning-modes';
 
 interface ViewControllerProps {
   appConfig: AppConfig;
+  learningMode: LearningMode;
+  onLearningModeChange: (mode: LearningMode) => void;
 }
 
-export function ViewController({ appConfig }: ViewControllerProps) {
-  const { isConnected, start } = useSessionContext();
-  const { resolvedTheme } = useTheme();
+export function ViewController({
+  appConfig,
+  learningMode,
+  onLearningModeChange,
+}: ViewControllerProps) {
+  const session = useSessionContext();
+  const agent = useAgent();
+  const shouldReduceMotion = useReducedMotion();
+  const [isStarting, setIsStarting] = useState(false);
+  const [connectionError, setConnectionError] = useState(false);
+  const handlingFailure = useRef(false);
+
+  useEffect(() => {
+    if (agent.state !== 'failed') {
+      handlingFailure.current = false;
+      return;
+    }
+
+    if (handlingFailure.current) return;
+    handlingFailure.current = true;
+    setConnectionError(true);
+    void session.end().catch(() => undefined);
+  }, [agent.state, session]);
+
+  const handleStart = async () => {
+    if (isStarting) return;
+
+    setConnectionError(false);
+    setIsStarting(true);
+    try {
+      await session.start();
+    } catch {
+      setConnectionError(true);
+      await session.end().catch(() => undefined);
+    } finally {
+      setIsStarting(false);
+    }
+  };
+
+  const motionProps = {
+    initial: shouldReduceMotion ? false : { opacity: 0, y: 12 },
+    animate: { opacity: 1, y: 0 },
+    exit: shouldReduceMotion ? undefined : { opacity: 0, y: -12 },
+    transition: { duration: shouldReduceMotion ? 0 : 0.2, ease: 'easeOut' as const },
+  };
 
   return (
-    <AnimatePresence mode="wait">
-      {/* Welcome view */}
-      {!isConnected && (
-        <MotionWelcomeView
-          key="welcome"
-          {...VIEW_MOTION_PROPS}
-          startButtonText={appConfig.startButtonText}
-          onStartCall={start}
-        />
+    <AnimatePresence mode="wait" initial={false}>
+      {!session.isConnected && (
+        <motion.div key="welcome" {...motionProps}>
+          <WelcomeView
+            learningMode={learningMode}
+            onLearningModeChange={onLearningModeChange}
+            onStartCall={handleStart}
+            isConnecting={isStarting}
+            connectionError={connectionError}
+          />
+        </motion.div>
       )}
-      {/* Session view */}
-      {isConnected && (
-        <MotionSessionView
-          key="session-view"
-          {...VIEW_MOTION_PROPS}
-          supportsChatInput={appConfig.supportsChatInput}
-          supportsVideoInput={appConfig.supportsVideoInput}
-          supportsScreenShare={appConfig.supportsScreenShare}
-          isPreConnectBufferEnabled={appConfig.isPreConnectBufferEnabled}
-          audioVisualizerType={appConfig.audioVisualizerType}
-          audioVisualizerColor={
-            resolvedTheme === 'dark'
-              ? appConfig.audioVisualizerColorDark
-              : appConfig.audioVisualizerColor
-          }
-          audioVisualizerColorShift={appConfig.audioVisualizerColorShift}
-          audioVisualizerBarCount={appConfig.audioVisualizerBarCount}
-          audioVisualizerGridRowCount={appConfig.audioVisualizerGridRowCount}
-          audioVisualizerGridColumnCount={appConfig.audioVisualizerGridColumnCount}
-          audioVisualizerRadialBarCount={appConfig.audioVisualizerRadialBarCount}
-          audioVisualizerRadialRadius={appConfig.audioVisualizerRadialRadius}
-          audioVisualizerWaveLineWidth={appConfig.audioVisualizerWaveLineWidth}
-          className="fixed inset-0"
-        />
+      {session.isConnected && (
+        <motion.div key="session-view" {...motionProps}>
+          <FinEdSessionView appConfig={appConfig} learningMode={learningMode} />
+        </motion.div>
       )}
     </AnimatePresence>
   );

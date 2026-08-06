@@ -1,81 +1,72 @@
-# Voice Agent Starter — Powered by Murf Falcon
+# FinEd Saathi
 
-Build a production voice AI agent in 5 minutes. Powered by the fastest TTS on the market - swap the system prompt to build anything from customer support to language tutors.
+FinEd Saathi is a voice-first Hinglish tutor for beginner concepts in the Indian
+financial market. It is the **Financial Services** track project for Day 1 of
+**10 Days of Voice Agents — VoiceForBharat Edition**.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Murf Falcon](https://img.shields.io/badge/TTS-Murf%20Falcon-6366F1)](https://murf.ai/api/docs/text-to-speech/streaming) [![LiveKit](https://img.shields.io/badge/Transport-LiveKit-002cf2)](https://docs.livekit.io) [![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?logo=typescript&logoColor=white)](https://www.typescriptlang.org/) [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+The agent explains products, fees, taxes, and risks; it does not place trades or
+give personalized investment advice. Its first worked example starts from a real
+beginner question:
 
----
+> Maine ₹6 mein stock liya, ₹6 mein hi bech diya, phir bhi mujhe ₹50 ka loss hua.
 
-## Why Murf Falcon
+FinEd separates price profit and loss from transaction costs, treats the
+remembered ₹50 as unresolved, and asks where that amount appeared before trying
+to reconcile it.
 
-- **55ms model latency** - fastest production TTS
-- **130ms time-to-first-audio** across 10+ global regions
-- **$0.01/1000 characters** - up to 10x cheaper than alternatives
-- **150+ voices** across 35+ languages
-- **99.38% pronunciation accuracy**
+## Day 1 build
 
----
+- Eight learning modes: Stocks, Mutual Funds & SIPs, ETFs, Gold, F&O, IPOs,
+  Bonds, and Ask Anything.
+- A responsive Next.js interface with a visible ₹6 delivery-charge illustration
+  and an education-only F&O warning.
+- Deepgram Nova-3 multilingual speech recognition with 100 ms endpointing for
+  Hinglish code-switching.
+- Google Gemini for the conversation and tool calls.
+- Murf Falcon 2 speech with `Nikhil`, `Conversational`, and Indian English
+  (`en-IN`).
+- Indian locale metadata and transcript-time formatting (`en-IN`).
+- LiveKit Cloud for the real-time browser-to-agent session.
 
-## Architecture
+The F&O mode teaches mechanics and risk only. It does not provide calls or a
+strategy for a live trade.
 
-```mermaid
-flowchart LR
-    A[🎙️ User speaks] -->|audio| B[Deepgram STT]
-    B -->|text| C[LLM]
-    C -->|response text| D[Murf Falcon TTS]
-    D -->|audio| E[LiveKit]
-    E -->|stream| F[🔊 User hears]
+## Conversation flow
 
-    style A fill:#444441,stroke:#888780,color:#fff
-    style B fill:#185FA5,stroke:#85B7EB,color:#fff
-    style C fill:#534AB7,stroke:#AFA9EC,color:#fff
-    style D fill:#0F6E56,stroke:#5DCAA5,color:#fff
-    style E fill:#D85A30,stroke:#F0997B,color:#fff
-    style F fill:#444441,stroke:#888780,color:#fff
+```text
+Browser microphone
+  -> LiveKit Cloud
+  -> Deepgram STT
+  -> Gemini + FinEd tools
+  -> Murf Falcon 2 TTS
+  -> LiveKit Cloud
+  -> Browser audio and transcript
 ```
 
----
-
-## Quickstart
+## Run locally with LiveKit Cloud
 
 ### Prerequisites
 
-- **Python** 3.10+
-- **[uv](https://docs.astral.sh/uv/)** - fast Python package manager
-  ```bash
-  # macOS/Linux
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-  # Windows (PowerShell)
-  powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-  ```
-- **Node.js** 18+
-- **pnpm** — fast Node package manager
-  ```bash
-  npm install -g pnpm
-  ```
-- A [LiveKit](https://cloud.livekit.io/) project (free tier available)
+- Python 3.10–3.14
+- [uv](https://docs.astral.sh/uv/)
+- Node.js and pnpm 9
+- LiveKit Cloud, Murf, Deepgram, and Google AI API credentials
 
-### Step 1: Clone the repo
+### 1. Configure the environment
 
 ```bash
-git clone https://github.com/murf-ai/murf-livekit-starter.git
-cd murf-livekit-starter
+cp backend/.env.example backend/.env.local
+cp frontend/.env.example frontend/.env.local
 ```
 
-### Step 2: Set up environment variables
+Fill the templates locally. The backend needs `LIVEKIT_URL`,
+`LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `MURF_API_KEY`, `DEEPGRAM_API_KEY`, and
+`GOOGLE_API_KEY`. The frontend needs the same LiveKit project credentials and
+`AGENT_NAME=my-agent`.
 
-Create `.env.local` in both `backend/` and `frontend/` (copy from `.env.example` in each). You need:
+Never commit either `.env.local` file.
 
-| Variable | Where to get it | Required |
-|----------|-----------------|----------|
-| `LIVEKIT_URL` | LiveKit Cloud dashboard | Yes |
-| `LIVEKIT_API_KEY` | LiveKit Cloud dashboard | Yes |
-| `LIVEKIT_API_SECRET` | LiveKit Cloud dashboard | Yes |
-| `MURF_API_KEY` | [murf.ai/api/dashboard](https://murf.ai/api/dashboard) | Yes |
-| `DEEPGRAM_API_KEY` | [deepgram.com](https://deepgram.com) | Yes |
-| `GOOGLE_API_KEY` (or `OPENAI_API_KEY`) | Depends on LLM choice | Yes |
-
-### Step 3: Install backend dependencies
+### 2. Install dependencies and voice models
 
 ```bash
 cd backend
@@ -83,192 +74,112 @@ uv sync
 uv run python src/agent.py download-files
 ```
 
-### Step 4: Install frontend dependencies
-
 ```bash
 cd frontend
 pnpm install
 ```
 
-### Step 5: Run it
+### 3. Start both processes
 
-**Option A - All-in-one (from repo root):**
-
-```bash
-# macOS/Linux
-chmod +x start_app.sh
-./start_app.sh
-
-# Windows (PowerShell)
-.\start_app.ps1
-```
-
-**Option B - Separate terminals:**
+Backend terminal:
 
 ```bash
-# Terminal 1 — LiveKit Server
-livekit-server --dev
-
-# Terminal 2 — Backend agent
-cd backend && uv run python src/agent.py dev
-
-# Terminal 3 — Frontend
-cd frontend && pnpm dev
+cd backend
+uv run dotenv -f .env.local run -- python src/agent.py dev
 ```
 
-Then open **http://localhost:3000** in your browser.
+Frontend terminal:
 
-You should now see the voice agent UI. Click **Start talking**, allow microphone access, and speak — the agent will respond with Murf Falcon TTS. Ensure your backend and (if using Option B) LiveKit server are running.
-
----
-
-## Deploy
-
-Want to deploy this beyond localhost? You'll need to deploy **two services**: the backend agent and the frontend. Both must use the same LiveKit project.
-
-> This is a two-service app — the backend agent and the frontend UI deploy separately. You'll need both running and connected to the same LiveKit project.
-
-### Backend (Python agent) — Deploy to Railway
-
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/tIVCF1?referralCode=cNjn2P&utm_medium=integration&utm_source=template&utm_campaign=generic)
-
-Set these environment variables in Railway:
-
-- `MURF_API_KEY`
-- `DEEPGRAM_API_KEY`
-- `GOOGLE_API_KEY` or `OPENAI_API_KEY`
-- `LIVEKIT_URL`
-- `LIVEKIT_API_KEY`
-- `LIVEKIT_API_SECRET`
-
-The backend runs as a long-lived Python process that connects to LiveKit as an agent. Railway handles this well.
-
-### Frontend (Next.js) — Deploy to Vercel
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/murf-ai/murf-livekit-starter&root-directory=frontend&env=LIVEKIT_URL,LIVEKIT_API_KEY,LIVEKIT_API_SECRET&project-name=murf-voice-agent&repository-name=murf-voice-agent)
-
-Set these environment variables in Vercel:
-
-- `LIVEKIT_URL`
-- `LIVEKIT_API_KEY`
-- `LIVEKIT_API_SECRET`
-- `AGENT_NAME` (optional — for explicit agent dispatch)
-
-The frontend is a standard Next.js app. Point it at the same LiveKit instance your backend agent is connected to.
-
-### Connecting them
-
-The frontend and backend don't call each other directly — they both connect to **LiveKit**, which handles the real-time audio transport.
-
-1. Use the **same** `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` on both Railway and Vercel
-2. Set `AGENT_NAME=my-agent` on Vercel — this matches the `agent_name="my-agent"` registered in `backend/src/agent.py`
-3. Verify: Railway logs should show the agent connected to LiveKit. Open your Vercel URL, click **Start talking** — the agent should respond
-
-If the agent doesn't connect, double-check that both services point to the same LiveKit project and that the backend is running (check Railway logs).
-
----
-
-## Change the Use Case
-
-The default system prompt makes this a **customer support agent**. You can change the agent’s behavior by editing the prompt.
-
-**Where the prompt lives:** `backend/src/agent.py`- the `SYSTEM_PROMPT` constant (near the top of the file, after the imports). Change that string to change what your voice agent does.
-
-### Example prompts (copy-paste)
-
-**Customer Support (default):**
-
-```
-You are a friendly and efficient customer support agent for a tech company. Help users with account issues, billing questions, and product troubleshooting. Be concise, empathetic, and solution-oriented. If you don't know something, say so honestly and offer to escalate.
+```bash
+cd frontend
+pnpm dev
 ```
 
-**Language Tutor:**
+Open [http://localhost:3000](http://localhost:3000), select a learning mode,
+choose **Talk to FinEd Saathi**, and allow microphone access. Both processes use
+the configured LiveKit Cloud project; a local LiveKit server is not required.
 
-```
-You are a patient and encouraging language tutor helping the user practice conversational Spanish. Speak primarily in Spanish but switch to English to explain grammar or vocabulary when needed. Correct mistakes gently and suggest better phrasing. Keep conversations natural and fun.
-```
+## Day 1 recording check
 
-**AI Receptionist:**
+1. Keep the backend and frontend running and select **Stocks**.
+2. Start the voice session and say that your track is **Financial Services**.
+3. Ask: “Maine ₹6 mein stock liya, ₹6 mein hi bech diya, phir bhi mujhe ₹50 ka
+   loss hua.”
+4. Capture the transcript and Nikhil's spoken response in the screen recording.
+5. Confirm the recording contains a connected session, your voice, and the
+   agent's audio before posting it for the challenge.
 
-```
-You are a professional receptionist for a medical clinic. Help callers schedule appointments, answer questions about office hours and services, and take messages for doctors. Be warm but efficient. Ask for the caller's name and reason for calling upfront.
-```
+## Knowledge-index behavior
 
-See the Configuration section below for voice, STT, and LLM options.
+The curated knowledge index is optional for the Day 1 conversation. If
+`backend/data/knowledge/generated/current` has never been published, the backend
+starts in a fixed evidence-unavailable mode. Voice interaction remains
+available, while a knowledge search returns no evidence and the agent must say
+that the fact could not be verified instead of inventing an answer.
 
----
+If `current` exists but is broken, malformed, or points to corrupt artifacts,
+startup fails. A damaged index is never silently treated as an intentionally
+absent index.
 
-## Configuration
+## Gemini model policy
 
-### Murf voice
+The configured default is `gemini-3.6-flash`. `GEMINI_MODEL` may explicitly
+select `gemini-3.5-flash-lite` or `gemini-2.5-flash`; other values fail safely,
+and the app does not silently switch models. Gemini 3.x uses minimal thinking,
+Gemini 2.5 uses a zero thinking budget, and every allowed model caps output at
+320 tokens. Availability and quotas depend on the active Google project.
 
-Edit the `tts=murf.TTS(...)` call in `backend/src/agent.py`. Set the `voice` argument to any Murf voice ID. Examples:
+## Verify the project
 
-- `en-US-natalie` — US English (female)
-- `en-UK-ruby` — UK English (female)
-- `en-US-miles` — US English (male)
-- `en-US-matthew` — US English (male, default in this starter)
+Backend deterministic tests and formatting:
 
-Browse all voices: [Murf Voice Library](https://murf.ai/api/docs/voices-styles/voice-library).
-
-### STT provider
-
-STT is configured in `backend/src/agent.py` in the `AgentSession(stt=...)` call. The default is Deepgram (`deepgram.STT(model="nova-3")`). You can swap to another LiveKit-compatible STT plugin if needed.
-
-### LLM (Gemini vs OpenAI)
-
-- **Gemini (default):** Set `GOOGLE_API_KEY` and use `llm=google.LLM(model="gemini-2.5-flash")` in `agent.py`.
-- **OpenAI:** Set `OPENAI_API_KEY`, add the OpenAI plugin, and use the corresponding `llm=openai.LLM(...)` in `agent.py`.
-
-### Audio format
-
-Murf Falcon and LiveKit handle audio format internally. For advanced options, see [Murf API docs](https://murf.ai/api/docs) and [LiveKit docs](https://docs.livekit.io).
-
----
-
-## Project Structure
-
-```
-murf-livekit-starter/
-├── backend/                 # Python voice agent (LiveKit Agents + Murf Falcon)
-│   ├── src/
-│   │   └── agent.py         # Agent entrypoint, pipeline (STT/LLM/TTS), system prompt
-│   ├── tests/               # Agent tests
-│   ├── .env.example         # Backend env template
-│   ├── pyproject.toml       # Python deps (uv)
-│   └── railway.toml         # Railway deploy config
-├── frontend/                # Next.js UI for voice sessions
-│   ├── app/
-│   │   ├── page.tsx         # Main page
-│   │   └── api/token/       # LiveKit token endpoint (dev)
-│   ├── components/          # UI (agents-ui, app config, theme)
-│   ├── app-config.ts        # Branding, title, button text, accent
-│   ├── .env.example         # Frontend env template
-│   └── package.json         # Node deps (pnpm)
-├── start_app.sh             # Start LiveKit + backend + frontend (macOS/Linux)
-├── start_app.ps1            # Start LiveKit + backend + frontend (Windows)
-├── README.md                # This file
+```bash
+cd backend
+uv run pytest -q --ignore=tests/test_agent.py
+uv run ruff check .
+uv run ruff format --check .
 ```
 
-For deeper documentation on each part, see:
+Frontend contract tests, types, formatting, and production build:
 
-- [Backend Documentation](./backend/README.md) — agent pipeline, voice/LLM/STT configuration, testing, deployment
-- [Frontend Documentation](./frontend/README.md) — UI customization, visualizers, theming, component architecture
+```bash
+cd frontend
+node --test tests/*.test.mjs
+pnpm exec tsc --noEmit
+pnpm format:check
+pnpm build
+```
 
----
+`backend/tests/test_agent.py` is a separate provider-backed evaluation suite and
+requires LiveKit Inference access.
 
-## Links
+## Project layout
 
-- [Murf API Docs](https://murf.ai/api/docs)
-- [Murf Voice Library](https://murf.ai/api/docs/voices-styles/voice-library)
-- [LiveKit Docs](https://docs.livekit.io)
-- [Deepgram Docs](https://developers.deepgram.com)
-- [Murf Falcon Benchmarks](https://murf.ai/falcon/benchmarks)
-- [TTS Latency Benchmarker](https://github.com/sahilsgupta/tts-latency-benchmarker) — run your own p50/p95 tests across providers
-- [Murf Discord](https://discord.gg/FbKAy96Sz7)
-- [Murf Startup Incubator](https://murf.ai/api) — 50M free characters for startups
+```text
+fin-ed/
+├── backend/
+│   ├── src/agent.py                  # LiveKit session and STT/LLM/TTS pipeline
+│   ├── src/fined/                    # Prompt, modes, calculator, safety, knowledge
+│   ├── data/knowledge/               # Source manifest and ignored generated index
+│   └── tests/                        # Deterministic tests and provider-backed evals
+├── frontend/
+│   ├── app/                          # Next.js routes and token endpoint
+│   ├── components/app/               # FinEd landing and live-session interface
+│   ├── lib/learning-modes.ts         # Shared eight-mode browser contract
+│   └── tests/                        # Design and participant-metadata contracts
+└── docs/DESIGN.md                    # Finance product design system
+```
 
----
+More detail is available in the [backend README](backend/README.md),
+[frontend README](frontend/README.md), and [design system](docs/DESIGN.md).
+
+## References
+
+- [Murf Falcon 2](https://murf.ai/api/docs/text-to-speech-models/falcon-2)
+- [Murf voice library](https://murf.ai/api/docs/voices-styles/voice-library)
+- [LiveKit Agents](https://docs.livekit.io/agents/)
+- [Gemini model catalog](https://ai.google.dev/gemini-api/docs/models)
+- [Deepgram Nova-3](https://developers.deepgram.com/docs/models-languages-overview)
 
 ## License
 

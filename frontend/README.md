@@ -1,32 +1,30 @@
-# Frontend — Voice Agent UI
+# FinEd Saathi frontend
 
-The React/Next.js frontend for the Voice Agent Starter. Built with [LiveKit Agents UI](https://livekit.io/ui) components, it provides a polished interface for real-time voice conversations with your agent.
+This Next.js interface connects the FinEd Saathi voice tutor to LiveKit for Day 1 of
+VoiceForBharat. It presents eight Indian-market learning modes:
 
-### Features
+- Stocks
+- Mutual Funds & SIPs
+- ETFs
+- Gold
+- F&O (education only)
+- IPOs
+- Bonds
+- Ask Anything
 
-- Real-time voice interaction with LiveKit Agents
-- Camera video streaming support
-- Screen sharing capabilities
-- Multiple audio visualizer styles (`bar`, `grid`, `radial`, `wave`, `aura`)
-- Light/dark theme switching with system preference detection
-- Customizable branding, colors, and UI text via configuration
+The UI includes the ₹6 stock charge illustration, mode-specific safety copy, a live transcript,
+and browser voice controls.
 
-## Setup
+## Run locally
 
-### 1. Install dependencies
+Install dependencies and create the local environment file:
 
 ```bash
-cd frontend
 pnpm install
-```
-
-### 2. Configure environment
-
-```bash
 cp .env.example .env.local
 ```
 
-Fill in your LiveKit credentials (same project as the backend):
+Set the same LiveKit project credentials used by the backend:
 
 ```env
 LIVEKIT_URL=wss://your-project.livekit.cloud
@@ -35,107 +33,59 @@ LIVEKIT_API_SECRET=your_secret
 AGENT_NAME=my-agent
 ```
 
-### 3. Run
+Start the frontend:
 
 ```bash
 pnpm dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Make sure your backend agent is running too.
+Open [http://localhost:3000](http://localhost:3000). The development command binds Next.js to
+`127.0.0.1`; start the backend agent separately before opening a voice session.
 
-## Customization
+## Token endpoint safety
 
-### Branding & UI (`app-config.ts`)
+`/api/token` is an unauthenticated development endpoint. Without an explicit opt-in, it issues a
+token only when all of these conditions hold:
 
-Edit [`app-config.ts`](app-config.ts) to change branding, features, and button text:
+- `NODE_ENV=development`
+- the request protocol is HTTP or HTTPS and the `Host` header is loopback (`localhost`,
+  `127.0.0.1`, or `::1`)
+- Next.js's synthesized `X-Forwarded-Host`, `Port`, `Proto`, and `For` values consistently describe
+  that same direct loopback request
 
-```ts
-export const APP_CONFIG_DEFAULTS: AppConfig = {
-  companyName: 'Murf AI',
-  pageTitle: 'Voice Agent Starter',
-  pageDescription: 'A voice agent powered by Murf Falcon — the fastest TTS API',
+The loopback server bind is the network boundary; request headers alone cannot identify the peer.
+Next.js can use a placeholder hostname in its internal request URL, so that hostname is not an
+authorization signal. The route rejects the standard `Forwarded` header, unknown `X-Forwarded-*`
+names, and public, conflicting, or malformed forwarding values. The server creates dispatch from
+`AGENT_NAME`, and request bodies cannot choose another agent.
 
-  supportsChatInput: true,
-  supportsVideoInput: true,
-  supportsScreenShare: true,
+For an intentional, short-lived public demo, the exact value below bypasses the development,
+direct-connection, and loopback checks:
 
-  logo: '/murf-logo.svg',
-  accent: '#6366F1',
-  logoDark: '/murf-logo-dark.svg',
-  accentDark: '#818cf8',
-  startButtonText: 'Start talking',
-
-  agentName: process.env.AGENT_NAME ?? undefined,
-};
+```env
+UNSAFE_ALLOW_UNAUTHENTICATED_PUBLIC_TOKEN_ENDPOINT=true
 ```
 
-### Audio visualizers
+That escape hatch is unsafe for production. A production token service requires authentication,
+authorization, and rate limiting.
 
-Set `audioVisualizerType` in [`app-config.ts`](app-config.ts):
-
-| Type | Description | Key options |
-|------|-------------|-------------|
-| `bar` (default) | Vertical bars | `audioVisualizerBarCount` |
-| `grid` | Dot grid | `audioVisualizerGridRowCount`, `audioVisualizerGridColumnCount` |
-| `radial` | Circular bars | `audioVisualizerRadialBarCount`, `audioVisualizerRadialRadius` |
-| `wave` | Oscilloscope wave | `audioVisualizerWaveLineWidth` |
-| `aura` | Shader-based glow | `audioVisualizerAuraColorShift` |
-
-Use `audioVisualizerColor` / `audioVisualizerColorDark` to set accent colors across all modes.
-
-### Editing components
-
-All UI components are local and fully editable:
-
-- **`components/agents-ui/`** — Core UI: media controls, audio visualizers, chat transcript, session provider
-- **`components/app/`** — App-level logic: view transitions, welcome screen, theming
-- **`components/ui/`** — Primitive shadcn/ui components (button, select, tooltip, etc.)
-
-To update Agents UI components to the latest version:
+## Verify
 
 ```bash
-pnpm shadcn:install
+node --test tests/*.test.mjs
+pnpm exec tsc --noEmit
+pnpm format:check
+pnpm build
 ```
 
-## Project Structure
+The focused tests cover the eight-mode metadata contract, responsive design contract, server-owned
+dispatch, loopback policy, forwarding-header rejection, fixed errors, and unsafe opt-in behavior.
 
+## Key files
+
+```text
+app/api/token/route.ts       LiveKit token endpoint
+components/app/              FinEd landing and session views
+lib/learning-modes.ts        Eight-mode participant metadata contract
+tests/                       Design, metadata, and endpoint security tests
 ```
-frontend/
-├── app/
-│   ├── page.tsx                # Main page
-│   ├── layout.tsx              # Root layout
-│   └── api/token/route.ts      # LiveKit token endpoint
-├── components/
-│   ├── agents-ui/              # Agents UI components (visualizers, controls, chat)
-│   ├── app/                    # App components (welcome view, theme, controller)
-│   ├── ai-elements/            # AI conversation elements
-│   └── ui/                     # Primitive shadcn/ui components
-├── hooks/                      # React hooks (audio visualizers, controls)
-├── lib/                        # Utilities
-├── public/                     # Static assets (logos, fonts)
-├── styles/                     # Global CSS
-├── app-config.ts               # Branding & feature configuration
-└── package.json                # Dependencies (pnpm)
-```
-
-## Deployment
-
-### Vercel
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/murf-ai/murf-livekit-starter&root-directory=frontend&env=LIVEKIT_URL,LIVEKIT_API_KEY,LIVEKIT_API_SECRET&project-name=murf-voice-agent&repository-name=murf-voice-agent)
-
-Set these environment variables:
-- `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`
-- `AGENT_NAME` (optional — for explicit agent dispatch)
-
-The frontend and backend don't call each other directly — they both connect to LiveKit, which handles real-time audio transport. Use the same LiveKit project credentials on both.
-
-## Links
-
-- [LiveKit Agents UI](https://livekit.io/ui)
-- [LiveKit JavaScript SDK](https://github.com/livekit/client-sdk-js)
-- [LiveKit Docs](https://docs.livekit.io)
-
-## License
-
-MIT — see [LICENSE](LICENSE).

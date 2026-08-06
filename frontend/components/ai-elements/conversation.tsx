@@ -1,7 +1,7 @@
 'use client';
 
 import type { ComponentProps } from 'react';
-import { useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ArrowDownIcon } from 'lucide-react';
 import { StickToBottom, useStickToBottomContext } from 'use-stick-to-bottom';
 import { Button } from '@/components/ui/button';
@@ -9,15 +9,34 @@ import { cn } from '@/lib/shadcn/utils';
 
 export type ConversationProps = ComponentProps<typeof StickToBottom>;
 
-export const Conversation = ({ className, ...props }: ConversationProps) => (
-  <StickToBottom
-    className={cn('relative flex-1 overflow-y-hidden', className)}
-    initial="smooth"
-    resize="smooth"
-    role="log"
-    {...props}
-  />
-);
+function usePrefersReducedMotion() {
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const updatePreference = () => setPrefersReducedMotion(mediaQuery.matches);
+    updatePreference();
+    mediaQuery.addEventListener('change', updatePreference);
+    return () => mediaQuery.removeEventListener('change', updatePreference);
+  }, []);
+
+  return prefersReducedMotion;
+}
+
+export const Conversation = ({ className, ...props }: ConversationProps) => {
+  const prefersReducedMotion = usePrefersReducedMotion();
+  const scrollBehavior = prefersReducedMotion ? 'instant' : 'smooth';
+
+  return (
+    <StickToBottom
+      className={cn('relative flex-1 overflow-y-hidden', className)}
+      initial="instant"
+      resize={scrollBehavior}
+      role="log"
+      {...props}
+    />
+  );
+};
 
 export type ConversationContentProps = ComponentProps<typeof StickToBottom.Content>;
 
@@ -73,7 +92,7 @@ export const ConversationScrollButton = ({
   return (
     !isAtBottom && (
       <Button
-        className={cn('absolute bottom-4 left-[50%] translate-x-[-50%] rounded-full', className)}
+        className={cn('absolute bottom-4 left-[50%] translate-x-[-50%] rounded-[10px]', className)}
         onClick={handleScrollToBottom}
         size="icon"
         type="button"

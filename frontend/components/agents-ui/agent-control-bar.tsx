@@ -1,9 +1,9 @@
 'use client';
 
-import { type ComponentProps, useEffect, useRef, useState } from 'react';
+import { type ComponentProps, useEffect, useId, useRef, useState } from 'react';
 import { Track } from 'livekit-client';
 import { Loader, MessageSquareTextIcon, SendHorizontal } from 'lucide-react';
-import { type MotionProps, motion } from 'motion/react';
+import { type MotionProps, motion, useReducedMotion } from 'motion/react';
 import { useChat } from '@livekit/components-react';
 import { AgentDisconnectButton } from '@/components/agents-ui/agent-disconnect-button';
 import { AgentTrackControl } from '@/components/agents-ui/agent-track-control';
@@ -56,7 +56,7 @@ const MOTION_PROPS: MotionProps = {
   },
   initial: 'hidden',
   transition: {
-    duration: 0.3,
+    duration: 0.2,
     ease: 'easeOut',
   },
 };
@@ -68,9 +68,12 @@ interface AgentChatInputProps {
 }
 
 function AgentChatInput({ chatOpen, onSend = async () => {}, className }: AgentChatInputProps) {
+  const inputId = useId();
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const wasChatOpen = useRef(chatOpen);
   const [isSending, setIsSending] = useState(false);
   const [message, setMessage] = useState<string>('');
+  const [sendError, setSendError] = useState(false);
   const isDisabled = isSending || message.trim().length === 0;
 
   const handleSend = async () => {
@@ -79,11 +82,12 @@ function AgentChatInput({ chatOpen, onSend = async () => {}, className }: AgentC
     }
 
     try {
+      setSendError(false);
       setIsSending(true);
       await onSend(message.trim());
       setMessage('');
-    } catch (error) {
-      console.error(error);
+    } catch {
+      setSendError(true);
     } finally {
       setIsSending(false);
     }
@@ -102,34 +106,51 @@ function AgentChatInput({ chatOpen, onSend = async () => {}, className }: AgentC
   };
 
   useEffect(() => {
-    if (chatOpen) return;
-    // when not disabled refocus on input
-    inputRef.current?.focus();
+    if (chatOpen && !wasChatOpen.current) {
+      inputRef.current?.focus();
+    }
+    wasChatOpen.current = chatOpen;
   }, [chatOpen]);
 
   return (
-    <div className={cn('mb-3 flex grow items-end gap-2 rounded-md pl-1 text-sm', className)}>
-      <textarea
-        autoFocus
-        ref={inputRef}
-        value={message}
-        disabled={!chatOpen || isSending}
-        placeholder="Type something..."
-        onKeyDown={handleKeyDown}
-        onChange={(e) => setMessage(e.target.value)}
-        className="field-sizing-content max-h-16 min-h-8 flex-1 resize-none py-2 [scrollbar-width:thin] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-      />
-      <Button
-        size="icon"
-        type="button"
-        disabled={isDisabled}
-        variant={isDisabled ? 'secondary' : 'default'}
-        title={isSending ? 'Sending...' : 'Send'}
-        onClick={handleButtonClick}
-        className="self-end disabled:cursor-not-allowed"
-      >
-        {isSending ? <Loader className="animate-spin" /> : <SendHorizontal />}
-      </Button>
+    <div className={cn('mb-3 grow rounded-[10px] text-sm', className)}>
+      <label htmlFor={inputId} className="sr-only">
+        Market question
+      </label>
+      <div className="flex items-end gap-2">
+        <textarea
+          id={inputId}
+          ref={inputRef}
+          value={message}
+          disabled={!chatOpen || isSending}
+          placeholder="Type a market question"
+          onKeyDown={handleKeyDown}
+          onChange={(event) => setMessage(event.target.value)}
+          aria-describedby={sendError ? `${inputId}-error` : undefined}
+          className="field-sizing-content max-h-24 min-h-11 flex-1 resize-none rounded-[10px] border border-[var(--ledger-rule)] bg-[var(--surface)] px-3 py-2 [scrollbar-width:thin] focus:border-[var(--ledger-blue)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+        />
+        <Button
+          size="icon"
+          type="button"
+          disabled={isDisabled}
+          variant={isDisabled ? 'secondary' : 'default'}
+          title={isSending ? 'Sending market question' : 'Send market question'}
+          aria-label={isSending ? 'Sending market question' : 'Send market question'}
+          onClick={handleButtonClick}
+          className="self-end disabled:cursor-not-allowed"
+        >
+          {isSending ? (
+            <Loader className="animate-spin motion-reduce:animate-none" />
+          ) : (
+            <SendHorizontal />
+          )}
+        </Button>
+      </div>
+      {sendError && (
+        <p id={`${inputId}-error`} role="alert" className="mt-2 text-sm text-[var(--risk-brick)]">
+          Message could not be sent. Check the connection and try again.
+        </p>
+      )}
     </div>
   );
 }
@@ -252,6 +273,7 @@ export function AgentControlBar({
   ...props
 }: AgentControlBarProps & ComponentProps<'div'>) {
   const { send } = useChat();
+  const shouldReduceMotion = useReducedMotion();
   const publishPermissions = usePublishPermissions();
   const [isChatOpenUncontrolled, setIsChatOpenUncontrolled] = useState(isChatOpen);
   const {
@@ -278,6 +300,7 @@ export function AgentControlBar({
   };
 
   const isEmpty = Object.values(visibleControls).every((value) => !value);
+  const chatOpen = onIsChatOpenChange ? isChatOpen : isChatOpenUncontrolled;
 
   if (isEmpty) {
     console.warn('AgentControlBar: `visibleControls` contains only false values.');
@@ -296,12 +319,13 @@ export function AgentControlBar({
     >
       <motion.div
         {...MOTION_PROPS}
-        inert={!(isChatOpen || isChatOpenUncontrolled)}
-        animate={isChatOpen || isChatOpenUncontrolled ? 'visible' : 'hidden'}
+        transition={{ duration: shouldReduceMotion ? 0 : 0.2, ease: 'easeOut' }}
+        inert={!chatOpen}
+        animate={chatOpen ? 'visible' : 'hidden'}
         className="border-input/50 flex w-full items-start overflow-hidden border-b"
       >
         <AgentChatInput
-          chatOpen={isChatOpen || isChatOpenUncontrolled}
+          chatOpen={chatOpen}
           onSend={handleSendMessage}
           className={cn(variant === 'livekit' && '[&_button]:rounded-full')}
         />
@@ -370,7 +394,7 @@ export function AgentControlBar({
           {visibleControls.chat && (
             <Toggle
               variant={variant === 'outline' ? 'outline' : 'default'}
-              pressed={isChatOpen || isChatOpenUncontrolled}
+              pressed={chatOpen}
               aria-label="Toggle transcript"
               onPressedChange={(state) => {
                 if (!onIsChatOpenChange) setIsChatOpenUncontrolled(state);

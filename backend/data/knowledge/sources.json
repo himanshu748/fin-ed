@@ -1,0 +1,305 @@
+{
+  "sources": [
+    {
+      "source_id": "angel_pricing_tariff",
+      "publisher": "Angel One",
+      "authority": "broker_pricing",
+      "url": "https://www.angelone.in/exchange-transaction-charges",
+      "topics": ["stocks", "fno"],
+      "broker": "Angel One",
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["Transaction Charges"]
+    },
+    {
+      "source_id": "angel_brokerage",
+      "publisher": "Angel One",
+      "authority": "broker_support",
+      "url": "https://www.angelone.in/support/charges-and-cashbacks/brokerage-charges",
+      "topics": ["stocks", "fno"],
+      "broker": "Angel One",
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["brokerage charges"],
+      "effective_from": "2024-11-01"
+    },
+    {
+      "source_id": "angel_dp",
+      "publisher": "Angel One",
+      "authority": "broker_support",
+      "url": "https://www.angelone.in/support/charges-and-cashbacks/dp-charges",
+      "topics": ["stocks"],
+      "broker": "Angel One",
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["DP charges"]
+    },
+    {
+      "source_id": "angel_stt",
+      "publisher": "Angel One",
+      "authority": "broker_support",
+      "url": "https://www.angelone.in/support/charges-and-cashbacks/stt-securities-transaction-tax",
+      "topics": ["stocks", "fno"],
+      "broker": "Angel One",
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["securities transaction tax"]
+    },
+    {
+      "source_id": "angel_gst",
+      "publisher": "Angel One",
+      "authority": "broker_support",
+      "url": "https://www.angelone.in/support/charges-and-cashbacks/gst-goods-services-tax",
+      "topics": ["stocks", "fno"],
+      "broker": "Angel One",
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["GST"]
+    },
+    {
+      "source_id": "angel_stamp",
+      "publisher": "Angel One",
+      "authority": "broker_support",
+      "url": "https://www.angelone.in/support/charges-and-cashbacks/stamp-duty",
+      "topics": ["stocks", "fno"],
+      "broker": "Angel One",
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["stamp duty"]
+    },
+    {
+      "source_id": "angel_sebi_charge",
+      "publisher": "Angel One",
+      "authority": "broker_support",
+      "url": "https://www.angelone.in/support/charges-and-cashbacks/sebi-charges",
+      "topics": ["stocks", "fno"],
+      "broker": "Angel One",
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["SEBI charges"]
+    },
+    {
+      "source_id": "angel_exchange_charge",
+      "publisher": "Angel One",
+      "authority": "broker_support",
+      "url": "https://www.angelone.in/support/charges-and-cashbacks/transaction-turnover-charges",
+      "topics": ["stocks", "fno"],
+      "broker": "Angel One",
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["turnover charges"]
+    },
+    {
+      "source_id": "angel_etf",
+      "publisher": "Angel One",
+      "authority": "broker_education",
+      "url": "https://www.angelone.in/knowledge-center/online-share-trading/etf",
+      "topics": ["etfs"],
+      "broker": "Angel One",
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["exchange traded fund"]
+    },
+    {
+      "source_id": "angel_mutual_fund_basics",
+      "publisher": "Angel One",
+      "authority": "broker_education",
+      "url": "https://www.angelone.in/knowledge-center/mutual-funds/what-is-mutual-fund",
+      "topics": ["mutual_funds"],
+      "broker": "Angel One",
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["mutual fund"]
+    },
+    {
+      "source_id": "angel_sip_vs_mutual_fund",
+      "publisher": "Angel One",
+      "authority": "broker_education",
+      "url": "https://www.angelone.in/knowledge-center/mutual-funds/differences-between-sip-and-mutual-funds",
+      "topics": ["mutual_funds"],
+      "broker": "Angel One",
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["SIP", "mutual fund"]
+    },
+    {
+      "source_id": "angel_ipo_basics",
+      "publisher": "Angel One",
+      "authority": "broker_education",
+      "url": "https://www.angelone.in/knowledge-center/ipo/ipo-beginners-guidelines-beginners-investing-ipo",
+      "topics": ["ipos"],
+      "broker": "Angel One",
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["IPO"]
+    },
+    {
+      "source_id": "angel_bond_basics",
+      "publisher": "Angel One",
+      "authority": "broker_education",
+      "url": "https://www.angelone.in/knowledge-center/online-share-trading/what-are-bonds-and-how-are-they-useful",
+      "topics": ["bonds"],
+      "broker": "Angel One",
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["bonds"]
+    },
+    {
+      "source_id": "angel_gold_basics",
+      "publisher": "Angel One",
+      "authority": "broker_education",
+      "url": "https://www.angelone.in/knowledge-center/Commodities-trading/how-to-invest-in-gold",
+      "topics": ["gold"],
+      "broker": "Angel One",
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["gold"]
+    },
+    {
+      "source_id": "angel_gold_etf",
+      "publisher": "Angel One",
+      "authority": "broker_education",
+      "url": "https://www.angelone.in/knowledge-center/commodities-trading/how-to-invest-in-gold-etf",
+      "topics": ["gold", "etfs"],
+      "broker": "Angel One",
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["gold ETF"]
+    },
+    {
+      "source_id": "sebi_shares",
+      "publisher": "SEBI Investor",
+      "authority": "regulator",
+      "url": "https://investor.sebi.gov.in/understandings_shares.html",
+      "topics": ["stocks", "general"],
+      "broker": null,
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["shares"]
+    },
+    {
+      "source_id": "sebi_market_structure",
+      "publisher": "SEBI Investor",
+      "authority": "regulator",
+      "url": "https://investor.sebi.gov.in/securities-stockmarket.html",
+      "topics": ["stocks", "ipos", "general"],
+      "broker": null,
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["securities market"]
+    },
+    {
+      "source_id": "sebi_mutual_funds",
+      "publisher": "SEBI Investor",
+      "authority": "regulator",
+      "url": "https://investor.sebi.gov.in/understanding_mf.html",
+      "topics": ["mutual_funds"],
+      "broker": null,
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["mutual fund"]
+    },
+    {
+      "source_id": "sebi_etf",
+      "publisher": "SEBI Investor",
+      "authority": "regulator",
+      "url": "https://investor.sebi.gov.in/exchange_traded_fund.html",
+      "topics": ["etfs"],
+      "broker": null,
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["exchange traded fund"]
+    },
+    {
+      "source_id": "sebi_bonds",
+      "publisher": "SEBI Investor",
+      "authority": "regulator",
+      "url": "https://investor.sebi.gov.in/understanding_bonds.html",
+      "topics": ["bonds"],
+      "broker": null,
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["bonds"]
+    },
+    {
+      "source_id": "sebi_ipo_asba",
+      "publisher": "SEBI Investor",
+      "authority": "regulator",
+      "url": "https://investor.sebi.gov.in/ipo_through_asba.html",
+      "topics": ["ipos"],
+      "broker": null,
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["ASBA"]
+    },
+    {
+      "source_id": "sebi_derivatives",
+      "publisher": "SEBI Investor",
+      "authority": "regulator",
+      "url": "https://investor.sebi.gov.in/understanding_derivatives.html",
+      "topics": ["fno"],
+      "broker": null,
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["derivatives"]
+    },
+    {
+      "source_id": "sebi_asset_classes",
+      "publisher": "SEBI Investor",
+      "authority": "regulator",
+      "url": "https://investor.sebi.gov.in/investment-assetclasses.html",
+      "topics": ["general", "gold"],
+      "broker": null,
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": ["investment asset classes", "precious metals"]
+    },
+    {
+      "source_id": "sebi_digital_gold_warning",
+      "publisher": "Securities and Exchange Board of India",
+      "authority": "regulator",
+      "url": "https://www.sebi.gov.in/media-and-notifications/press-releases/nov-2025/caution-to-public-regarding-dealing-in-digital-gold-_97676.html",
+      "topics": ["gold"],
+      "broker": null,
+      "verified_on": "2026-08-06",
+      "status": "optional",
+      "expected_terms": ["digital gold"]
+    },
+    {
+      "source_id": "cbic_jewellery_gst_faq",
+      "publisher": "CBIC, Government of India",
+      "authority": "regulator",
+      "url": "https://cbic-gst.gov.in/hindi/sectoral-faq.html",
+      "topics": ["gold"],
+      "broker": null,
+      "verified_on": "2026-08-06",
+      "status": "required",
+      "expected_terms": [
+        "Gold, Diamond or Silver Jewellery",
+        "3% of the total transaction value of jewellery"
+      ]
+    },
+    {
+      "source_id": "nse_etf",
+      "publisher": "National Stock Exchange of India",
+      "authority": "exchange",
+      "url": "https://www.nseindia.com/static/products-services/etfs-advantages",
+      "topics": ["etfs", "gold"],
+      "broker": null,
+      "verified_on": "2026-08-06",
+      "status": "optional",
+      "expected_terms": ["exchange traded fund"]
+    },
+    {
+      "source_id": "income_tax_itr2",
+      "publisher": "Income Tax Department",
+      "authority": "regulator",
+      "url": "https://www.incometax.gov.in/iec/foportal/node/11456",
+      "topics": ["gold", "general"],
+      "broker": null,
+      "verified_on": "2026-08-06",
+      "status": "optional",
+      "expected_terms": ["ITR-2"]
+    }
+  ]
+}

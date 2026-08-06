@@ -1,129 +1,179 @@
-# AGENTS.md
+# FinEd Saathi contributor guide
 
-This is a monorepo for a voice AI agent starter, powered by Murf Falcon TTS and LiveKit Agents.
+FinEd Saathi is a voice-first Hinglish tutor for beginner concepts in the Indian
+financial market. It is the Financial Services track project for VoiceForBharat.
+Treat it as an education product: it must not place trades, provide calls or
+targets, promise returns, or give personalized investment advice.
 
-## Repository structure
+## Product contracts
 
+Preserve these behaviors unless a task explicitly changes the product contract
+and updates its tests:
+
+- The eight modes are Stocks, Mutual Funds & SIPs, ETFs, Gold, F&O, IPOs,
+  Bonds, and Ask Anything.
+- F&O is education and simulation only, with a prominent risk warning and no
+  live strategy.
+- The canonical starter question is: “Maine ₹6 mein stock liya, ₹6 mein hi bech
+  diya, phir bhi mujhe ₹50 ka loss hua.” The remembered ₹50 remains unresolved
+  until the user identifies whether it appeared in the contract note, ledger or
+  available funds, or P&L.
+- The delivery calculator is schedule-backed and delivery-only. Do not use it
+  for intraday or F&O, reconstruct fee arithmetic in the LLM, or imply that each
+  buy and sell always costs ₹20 plus GST.
+- The Day 1 voice is Murf `Nikhil`, style `Conversational`, locale `en-IN`, model
+  `falcon-2`.
+- The configured Gemini default is `gemini-3.6-flash`. Only
+  `gemini-3.5-flash-lite` and `gemini-2.5-flash` may be selected explicitly.
+  Unknown, empty, or padded values fail safely; there is no cross-model fallback.
+- Gemini 3.x uses minimal thinking, Gemini 2.5 uses a zero thinking budget, and
+  all choices cap output at 320 tokens. Keep provider errors behind the fixed
+  safe error boundary.
+
+## Repository map
+
+```text
+fin-ed/
+├── backend/
+│   ├── src/agent.py                  # LiveKit server and STT/LLM/TTS lifecycle
+│   ├── src/fined/agent.py            # Prompt, modes, greeting, and tools
+│   ├── src/fined/calculator.py       # Delivery-charge calculation
+│   ├── src/fined/chat_model.py       # Gemini policy
+│   ├── src/fined/provider_safety.py  # Provider-error sanitization
+│   ├── src/fined/knowledge/          # Ingestion and retrieval
+│   ├── data/knowledge/sources.json   # Curated source manifest
+│   └── tests/                        # Unit, contract, lifecycle, and eval tests
+├── frontend/
+│   ├── app/                          # Next.js pages and token route
+│   ├── components/app/               # FinEd landing and live-session views
+│   ├── components/agents-ui/         # Voice and transcript controls
+│   ├── lib/learning-modes.ts         # Eight-mode metadata contract
+│   └── tests/                        # Design, metadata, and token security tests
+└── docs/DESIGN.md                    # Finance product design system
 ```
-murf-livekit-starter/
-├── backend/          # Python voice agent (LiveKit Agents + Murf Falcon TTS)
-│   ├── src/agent.py  # Agent entrypoint — all pipeline config lives here
-│   └── tests/        # LLM-judged eval tests
-├── frontend/         # Next.js UI (LiveKit Agents UI components)
-│   ├── app/          # Pages and API routes
-│   ├── components/   # UI components (agents-ui, app, ui)
-│   └── app-config.ts # Branding and feature config
-├── start_app.sh      # Start all services (macOS/Linux)
-└── start_app.ps1     # Start all services (Windows)
-```
 
-## Backend
+## Backend workflow
 
-### Tech stack
-- **Python 3.10+** with **uv** package manager
-- **LiveKit Agents SDK** (`livekit-agents ~1.4`) — voice AI agent framework
-- **Murf Falcon** (`livekit-murf`) — text-to-speech
-- **Deepgram Nova-3** — speech-to-text
-- **Google Gemini** — LLM
-- **Silero VAD** + **LiveKit Turn Detector** — voice activity and turn detection
+Use Python 3.10–3.14 and `uv`; do not install project dependencies with `pip`.
 
-### Key file: `backend/src/agent.py`
-This is the single entrypoint. It contains:
-- `SYSTEM_PROMPT` — controls the agent's behavior (change this to change the use case)
-- `Assistant` class — extends `Agent`, where tools are added via `@function_tool`
-- `my_agent()` — sets up the voice pipeline (STT → LLM → TTS) and connects to LiveKit
-- `prewarm()` — pre-loads the Silero VAD model
-
-### Running the backend
 ```bash
 cd backend
 uv sync
-uv run python src/agent.py download-files   # first time only
-uv run python src/agent.py dev              # development
-uv run python src/agent.py console          # terminal-only testing
+cp .env.example .env.local
+uv run python src/agent.py download-files
+uv run dotenv -f .env.local run -- python src/agent.py dev
 ```
 
-### Environment variables
-Copy `backend/.env.example` to `backend/.env.local`. Required keys:
-- `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`
-- `MURF_API_KEY`
-- `DEEPGRAM_API_KEY`
-- `GOOGLE_API_KEY`
+The backend requires LiveKit Cloud, Murf, Deepgram, and Google credentials. Keep
+all credentials in `.env.local`; never commit or print them.
 
-### Code style
-Uses **ruff** for linting and formatting:
+Run the deterministic suite and style checks with:
+
 ```bash
+cd backend
+uv run pytest -q --ignore=tests/test_agent.py
 uv run ruff check .
-uv run ruff format .
+uv run ruff format --check .
 ```
-Config is in `pyproject.toml` — 88 char line length, double quotes, space indent.
 
-### Testing
-Tests are in `backend/tests/test_agent.py`. They use LiveKit's testing framework with LLM-as-judge evaluation (not mocks). Run with:
+`tests/test_agent.py` is a separate LiveKit Inference-backed evaluation suite.
+Run it only when provider access is available:
+
 ```bash
-uv run pytest
+uv run pytest tests/test_agent.py -q
 ```
-Requires `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` to be set.
 
-When modifying the system prompt or adding tools, write tests first. Use the existing tests as a pattern — they call `session.run(user_input=...)` and use `.judge()` to evaluate responses.
+When changing prompts, tools, provider setup, or lifecycle behavior, add or
+update deterministic contract tests. Do not replace fixed safety assertions with
+LLM-judge-only coverage.
 
-### Dependencies
-Managed via `uv` and defined in `pyproject.toml`. Always use `uv sync` and `uv run` — never `pip install`.
+## Day 1 knowledge behavior
 
-## Frontend
+The published knowledge index is optional for the Day 1 voice conversation. If
+`backend/data/knowledge/generated/current` is genuinely absent, startup uses
+`UnavailableKnowledgeRetriever`; searches return no evidence and the tool tells
+the agent not to guess.
 
-### Tech stack
-- **Next.js** (React, TypeScript)
-- **pnpm** package manager
-- **LiveKit Agents UI** (shadcn-based components)
-- **Tailwind CSS**
+If `current` exists as a directory, symlink, broken symlink, or malformed
+pointer, the backend must attempt normal validation and propagate any failure.
+Never hide a corrupt index by treating it as intentionally absent.
 
-### Key files
-- `frontend/app-config.ts` — branding, feature flags, accent colors, visualizer config
-- `frontend/app/page.tsx` — main page
-- `frontend/app/api/token/route.ts` — LiveKit token endpoint
-- `frontend/components/app/` — app-level logic (welcome view, view controller, theme)
-- `frontend/components/agents-ui/` — voice UI components (visualizers, controls, chat)
+Generated index builds are ignored by Git. Keep the source manifest and tests
+tracked. Embeddings use `gemini-embedding-001` at 768 dimensions; changing that
+contract requires rebuilding and validating the versioned artifacts.
 
-### Running the frontend
+## Frontend workflow
+
+Use the repository's pinned pnpm version.
+
 ```bash
 cd frontend
 pnpm install
+cp .env.example .env.local
 pnpm dev
 ```
 
-### Environment variables
-Copy `frontend/.env.example` to `frontend/.env.local`. Required:
-- `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`
-- `AGENT_NAME` (optional — set to `my-agent` for explicit dispatch)
+The frontend must use the same LiveKit Cloud project as the backend and
+`AGENT_NAME=my-agent`.
 
-### Linting
+Verify frontend changes with:
+
 ```bash
-pnpm lint         # ESLint
-pnpm format:check # Prettier
+cd frontend
+node --test tests/*.test.mjs
+pnpm exec tsc --noEmit
+pnpm format:check
+pnpm build
 ```
 
-## Common tasks
+Follow `docs/DESIGN.md` for product UI work. Keep all eight modes accessible by
+keyboard, preserve the pre-connect F&O warning, and retain fixed safe error copy
+instead of exposing provider or token-service details.
 
-### Change what the agent does
-Edit `SYSTEM_PROMPT` in `backend/src/agent.py`. See `backend/README.md` for example prompts.
+## Token endpoint security
 
-### Change the voice
-Edit the `voice` argument in `murf.TTS(...)` in `backend/src/agent.py`. Browse voices at https://murf.ai/api/docs/voices-styles/voice-library.
+`frontend/app/api/token/route.ts` contains a development token issuer. Its
+security properties are part of the tested contract:
 
-### Add a tool to the agent
-Add a method to the `Assistant` class in `backend/src/agent.py` with the `@function_tool` decorator. There's a commented example (weather lookup) in the file. Import `function_tool` and `RunContext` from `livekit.agents`.
+- It accepts `POST` only for direct local development by default: `pnpm dev`
+  binds to `127.0.0.1`; `Host` and Next.js's synthesized forwarding fields must
+  describe one coherent loopback request. Public, conflicting, malformed, RFC
+  `Forwarded`, and unknown `X-Forwarded-*` values are rejected.
+- Production requests are rejected even with a loopback-looking `Host` unless
+  the exact unsafe demo opt-in is enabled.
+- `LIVEKIT_API_SECRET` remains server-only. Never expose it through a
+  `NEXT_PUBLIC_` variable, response, log, or client component.
+- Agent dispatch is server-owned through `AGENT_NAME`; callers cannot choose an
+  agent, room, participant identity, or participant name.
+- The only accepted caller-controlled request field is `participant_metadata`.
+  Its JSON string is bounded and sanitized to an object containing one
+  allowlisted `learning_mode`; invalid input falls back to `general`.
+- Rooms and participant identities are generated server-side, token lifetime is
+  15 minutes, and success and error responses use `Cache-Control: no-store`.
+- Errors return and log fixed generic messages without raw exceptions or secret
+  values.
 
-### Switch the LLM
-Replace the `llm=google.LLM(...)` call in `agent.py`. For OpenAI: install `livekit-agents[openai]`, set `OPENAI_API_KEY`, import `openai` from `livekit.plugins`, and use `openai.LLM(...)`.
+`UNSAFE_ALLOW_UNAUTHENTICATED_PUBLIC_TOKEN_ENDPOINT=true` deliberately bypasses
+the development, direct-connection, and loopback checks. Use it only for an
+intentional short-lived demo. Replace the bundled endpoint with an
+authenticated, authorized, rate-limited token service before a public
+deployment.
 
-### Change frontend branding
-Edit `frontend/app-config.ts` — company name, page title, logo paths, accent colors, button text, visualizer type.
+## Change discipline
 
-## Documentation references
+- Preserve unrelated work in a dirty tree and keep changes scoped to the task.
+- Add tests alongside behavior changes and run the smallest focused test first,
+  then the relevant full suite.
+- Do not weaken source precedence, financial safety, metadata sanitation,
+  provider-error sanitation, or credential handling to make a test pass.
+- Do not commit generated indexes, local environment files, browser recordings,
+  screenshots, caches, or internal planning artifacts.
+- Run `git diff --check` before handing off a change.
 
-- Murf Falcon TTS: https://murf.ai/api/docs/text-to-speech/streaming
-- Murf Voice Library: https://murf.ai/api/docs/voices-styles/voice-library
-- LiveKit Agents SDK: https://docs.livekit.io/agents
-- LiveKit Agents UI: https://livekit.io/ui
-- Deepgram STT: https://developers.deepgram.com
+## References
+
+- [Murf Falcon 2](https://murf.ai/api/docs/text-to-speech-models/falcon-2)
+- [Murf voice library](https://murf.ai/api/docs/voices-styles/voice-library)
+- [LiveKit Agents](https://docs.livekit.io/agents/)
+- [Gemini models](https://ai.google.dev/gemini-api/docs/models)
+- [Deepgram Nova-3](https://developers.deepgram.com/docs/models-languages-overview)

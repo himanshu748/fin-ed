@@ -1,133 +1,171 @@
+from __future__ import annotations
+
 import logging
+import os
+from pathlib import Path
 
 from dotenv import load_dotenv
+from google import genai
 from livekit import rtc
 from livekit.agents import (
-    Agent,
     AgentServer,
     AgentSession,
     JobContext,
     JobProcess,
+    MetricsCollectedEvent,
     cli,
-    inference,
-    tokenize,
+    metrics,
     room_io,
+    tokenize,
 )
-from livekit.plugins import murf, silero, google, deepgram, noise_cancellation
+from livekit.plugins import deepgram, google, murf, noise_cancellation, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
+
+from fined.agent import (
+    FinEdAssistant,
+    ParticipantProfile,
+    SessionState,
+    build_greeting,
+    build_system_prompt,
+    parse_participant_profile,
+)
+from fined.chat_model import create_gemini_llm
+from fined.knowledge.embeddings import GeminiEmbedder
+from fined.knowledge.index import KnowledgeIndex, UnavailableKnowledgeRetriever
 
 logger = logging.getLogger("agent")
 
-load_dotenv(".env.local")
+KNOWLEDGE_DIRECTORY = (
+    Path(__file__).resolve().parents[1] / "data" / "knowledge" / "generated"
+)
+KNOWLEDGE_UNAVAILABLE_WARNING = (
+    "Knowledge index is unavailable; starting in evidence-unavailable mode"
+)
 
-# Change this prompt to change what your voice agent does.
-# See README.md for example prompts (customer support, language tutor, receptionist).
-SYSTEM_PROMPT = """You are a friendly and efficient customer support agent for a tech company. Help users with account issues, billing questions, and product troubleshooting. Be concise, empathetic, and solution-oriented. If you don't know something, say so honestly and offer to escalate. Your responses are concise and without complex formatting, emojis, or symbols."""
-
-
-class Assistant(Agent):
-    def __init__(self) -> None:
-        super().__init__(instructions=SYSTEM_PROMPT)
-
-    # To add tools, use the @function_tool decorator.
-    # Here's an example that adds a simple weather tool.
-    # You also have to add `from livekit.agents import function_tool, RunContext` to the top of this file
-    # @function_tool
-    # async def lookup_weather(self, context: RunContext, location: str):
-    #     """Use this tool to look up current weather information in the given location.
-    #
-    #     If the location is not supported by the weather service, the tool will indicate this. You must tell the user the location's weather is unavailable.
-    #
-    #     Args:
-    #         location: The location to look up weather information for (e.g. city name)
-    #     """
-    #
-    #     logger.info(f"Looking up weather for {location}")
-    #
-    #     return "sunny with a temperature of 70 degrees."
-
+# Preserve the starter's evaluation import and prompt seams.
+Assistant = FinEdAssistant
+SYSTEM_PROMPT = build_system_prompt(ParticipantProfile())
 
 server = AgentServer()
 
 
-def prewarm(proc: JobProcess):
+def prewarm(proc: JobProcess) -> None:
     proc.userdata["vad"] = silero.VAD.load()
 
 
 server.setup_fnc = prewarm
 
 
+def _load_knowledge_retriever(
+    directory: Path, embedder: GeminiEmbedder
+) -> KnowledgeIndex | UnavailableKnowledgeRetriever:
+    if not os.path.lexists(directory / "current"):
+        logger.warning(KNOWLEDGE_UNAVAILABLE_WARNING)
+        return UnavailableKnowledgeRetriever()
+    return KnowledgeIndex.load(directory, embedder)
+
+
+async def _close_embedding_client(client: genai.Client) -> None:
+    try:
+        await client.aio.aclose()
+    except Exception:
+        logger.warning("Embedding client cleanup failed")
+
+
+def _log_latency_components(metric: metrics.AgentMetrics) -> None:
+    if isinstance(metric, metrics.EOUMetrics):
+        logger.info(
+            "Turn latency components: end_of_utterance_delay=%.3f "
+            "transcription_delay=%.3f user_turn_completion_delay=%.3f",
+            metric.end_of_utterance_delay,
+            metric.transcription_delay,
+            metric.on_user_turn_completed_delay,
+        )
+    elif isinstance(metric, metrics.TTSMetrics):
+        logger.info("TTS latency component: ttfb=%.3f", metric.ttfb)
+
+
 @server.rtc_session(agent_name="my-agent")
-async def my_agent(ctx: JobContext):
-    # Logging setup
-    # Add any other context you want in all log entries here
+async def my_agent(ctx: JobContext) -> None:
+    await ctx.connect()
+    participant = await ctx.wait_for_participant()
+    profile = parse_participant_profile(participant.metadata)
+
     ctx.log_context_fields = {
         "room": ctx.room.name,
+        "mode": profile.learning_mode.value,
     }
 
-    # Set up a voice AI pipeline using Murf Falcon, Gemini, Deepgram, and the LiveKit turn detector
-    session = AgentSession(
-        # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
-        # See all available models at https://docs.livekit.io/agents/models/stt/
-        stt=deepgram.STT(model="nova-3"),
-        # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
-        # See all available models at https://docs.livekit.io/agents/models/llm/
-        llm=google.LLM(
-                model="gemini-2.5-flash",
+    load_dotenv(".env.local")
+    embedding_client = genai.Client()
+    client_closed = False
+
+    async def close_client_once() -> None:
+        nonlocal client_closed
+        if client_closed:
+            return
+        client_closed = True
+        await _close_embedding_client(embedding_client)
+
+    try:
+        embedder = GeminiEmbedder(embedding_client)
+        index = _load_knowledge_retriever(KNOWLEDGE_DIRECTORY, embedder)
+        session = AgentSession[SessionState](
+            userdata=SessionState(profile=profile, retriever=index),
+            stt=deepgram.STT(
+                model="nova-3",
+                language="multi",
+                endpointing_ms=100,
             ),
-        # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
-        # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
-        tts=murf.TTS(
-                voice="en-US-matthew", 
-                style="Conversation",
+            llm=create_gemini_llm(google.LLM),
+            tts=murf.TTS(
+                voice="Nikhil",
+                style="Conversational",
+                model="falcon-2",
+                locale="en-IN",
                 tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
-                text_pacing=True
+                text_pacing=True,
             ),
-        # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
-        # See more at https://docs.livekit.io/agents/build/turns
-        turn_detection=MultilingualModel(),
-        vad=ctx.proc.userdata["vad"],
-        # allow the LLM to generate a response while waiting for the end of turn
-        # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
-        preemptive_generation=True,
-    )
+            turn_detection=MultilingualModel(),
+            vad=ctx.proc.userdata["vad"],
+            preemptive_generation=True,
+        )
 
-    # To use a realtime model instead of a voice pipeline, use the following session setup instead.
-    # (Note: This is for the OpenAI Realtime API. For other providers, see https://docs.livekit.io/agents/models/realtime/))
-    # 1. Install livekit-agents[openai]
-    # 2. Set OPENAI_API_KEY in .env.local
-    # 3. Add `from livekit.plugins import openai` to the top of this file
-    # 4. Use the following session setup instead of the version above
-    # session = AgentSession(
-    #     llm=openai.realtime.RealtimeModel(voice="marin")
-    # )
+        usage = metrics.UsageCollector()
 
-    # # Add a virtual avatar to the session, if desired
-    # # For other providers, see https://docs.livekit.io/agents/models/avatar/
-    # avatar = hedra.AvatarSession(
-    #   avatar_id="...",  # See https://docs.livekit.io/agents/models/avatar/plugins/hedra
-    # )
-    # # Start the avatar and wait for it to join
-    # await avatar.start(session, room=ctx.room)
+        @session.on("metrics_collected")
+        def on_metrics(event: MetricsCollectedEvent) -> None:
+            metrics.log_metrics(event.metrics, logger=logger)
+            usage.collect(event.metrics)
+            _log_latency_components(event.metrics)
 
-    # Start the session, which initializes the voice pipeline and warms up the models
-    await session.start(
-        agent=Assistant(),
-        room=ctx.room,
-        room_options=room_io.RoomOptions(
-            audio_input=room_io.AudioInputOptions(
-                noise_cancellation=lambda params: (
-                    noise_cancellation.BVCTelephony()
-                    if params.participant.kind
-                    == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
-                    else noise_cancellation.BVC()
+        async def on_shutdown(reason: str) -> None:
+            del reason
+            try:
+                logger.info("Agent usage summary: %s", usage.get_summary())
+            finally:
+                await close_client_once()
+
+        ctx.add_shutdown_callback(on_shutdown)
+
+        await session.start(
+            agent=FinEdAssistant(profile),
+            room=ctx.room,
+            room_options=room_io.RoomOptions(
+                audio_input=room_io.AudioInputOptions(
+                    noise_cancellation=lambda params: (
+                        noise_cancellation.BVCTelephony()
+                        if params.participant.kind
+                        == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+                        else noise_cancellation.BVC()
+                    ),
                 ),
             ),
-        ),
-    )
-
-    # Join the room and connect to the user
-    await ctx.connect()
+        )
+        await session.say(build_greeting(profile))
+    except BaseException:
+        await close_client_once()
+        raise
 
 
 if __name__ == "__main__":

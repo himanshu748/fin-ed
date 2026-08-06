@@ -7,6 +7,7 @@ import { AgentChatIndicator } from '@/components/agents-ui/agent-chat-indicator'
 import {
   Conversation,
   ConversationContent,
+  ConversationEmptyState,
   ConversationScrollButton,
 } from '@/components/ai-elements/conversation';
 import { Message, MessageContent, MessageResponse } from '@/components/ai-elements/message';
@@ -54,16 +55,23 @@ export function AgentChatTranscript({
   return (
     <Conversation className={className} {...props}>
       <ConversationContent>
+        {messages.length === 0 && (
+          <ConversationEmptyState
+            title="Ask your first market question"
+            description="Try: Maine ₹6 mein stock liya, ₹6 mein hi bech diya, phir bhi mujhe ₹50 ka loss hua."
+            className="min-h-72 rounded-[12px] border border-dashed border-[var(--ledger-rule)] bg-[var(--paper)]"
+          />
+        )}
         {messages.map((receivedMessage) => {
           const { id, timestamp, from, message } = receivedMessage;
-          const locale = navigator?.language ?? 'en-US';
+          const locale = 'en-IN';
           const messageOrigin = from?.isLocal ? 'user' : 'assistant';
           const time = new Date(timestamp);
           const title = time.toLocaleTimeString(locale, { timeStyle: 'full' });
 
           return (
             <Message key={id} title={title} from={messageOrigin}>
-              <MessageContent>
+              <MessageContent className="break-words [&_a]:break-all [&_a]:text-[var(--ledger-blue)] [&_a]:underline [&_a]:underline-offset-4">
                 <MessageResponse>{message}</MessageResponse>
               </MessageContent>
             </Message>

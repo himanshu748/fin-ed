@@ -2,3 +2,11 @@
 .env.*
 !.env.example
 .DS_Store
+
+# Local agent planning and review artifacts
+/.superpowers/sdd/
+/docs/superpowers/
+
+# Rebuildable local knowledge indexes (retain the directory placeholder)
+/backend/data/knowledge/generated/*
+!/backend/data/knowledge/generated/.gitkeep

@@ -1,0 +1,31 @@
+{
+  "fixture_id": "angel-one-nse-delivery-six-rupee-v1",
+  "historical_loss_status": "unresolved",
+  "remembered_statement": "Maine ₹6 mein stock liya, ₹6 mein hi bech diya, phir bhi mujhe ₹50 ka loss hua.",
+  "assumptions": {
+    "broker": "Angel One",
+    "trade_date": "2026-08-06",
+    "product": "equity_delivery",
+    "exchange": "NSE",
+    "quantity": 1,
+    "buy_price": "6.00",
+    "sell_price": "6.00",
+    "executed_buy_orders": 1,
+    "executed_sell_orders": 1,
+    "demat_debits": 1,
+    "brokerage_promotion_applies": false
+  },
+  "rules": {
+    "brokerage": "lower of ₹20 or 0.1% per executed order, subject to a ₹5 minimum",
+    "dp_charge": "₹20 before GST per ISIN per sell-side demat debit"
+  },
+  "result": {
+    "brokerage_buy": "5.00",
+    "brokerage_sell": "5.00",
+    "dp_charge_before_gst": "20.00",
+    "total_charges": "35.41",
+    "net_pnl": "-35.41",
+    "fee_to_investment_percent": "590.22",
+    "break_even_sell_price": "41.46"
+  }
+}

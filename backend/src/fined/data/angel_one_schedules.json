@@ -1,0 +1,80 @@
+{
+  "broker": "Angel One",
+  "schedules": [
+    {
+      "effective_from": "2026-03-01",
+      "effective_to": null,
+      "brokerage_rule_effective_from": "2024-11-01",
+      "statutory_exchange_rates_effective_from": "2026-03-01",
+      "delivery_brokerage_rate": "0.001",
+      "delivery_brokerage_cap": "20",
+      "delivery_brokerage_minimum": "5",
+      "new_account_brokerage_credit_cap": "500",
+      "new_account_promotion_days": 30,
+      "dp_charge_before_gst": "20",
+      "stt_delivery_rate_each_side": "0.001",
+      "stamp_duty_delivery_buy_rate": "0.00015",
+      "sebi_turnover_rate_each_side": "0.000001",
+      "nse_transaction_rate_each_side": "0.000030699",
+      "nse_ipft_rate_each_side": "0.000000001",
+      "bse_transaction_rates": {
+        "A": "0.0000375",
+        "B": "0.0000375",
+        "E": "0.0000275",
+        "F": "0.0000275",
+        "FC": "0.0000275",
+        "G": "0.0000275",
+        "GC": "0.0000275",
+        "I": "0.0000275",
+        "W": "0.0000275",
+        "T": "0.0000275",
+        "M": "0.0000275",
+        "MT": "0.0000275",
+        "MS": "0.0000275",
+        "TS": "0.0000275",
+        "IF": "0.0000275",
+        "IT": "0.0000275",
+        "XC": "0.001",
+        "XD": "0.001",
+        "XT": "0.001",
+        "Z": "0.001",
+        "ZP": "0.001",
+        "P": "0.01",
+        "R": "0.01",
+        "SS": "0.01",
+        "ST": "0.01"
+      },
+      "gst_rate": "0.18",
+      "sources": [
+        {
+          "title": "Angel One Brokerage Charges",
+          "url": "https://www.angelone.in/support/charges-and-cashbacks/brokerage-charges"
+        },
+        {
+          "title": "Angel One Exchange Transaction Charges",
+          "url": "https://www.angelone.in/exchange-transaction-charges"
+        },
+        {
+          "title": "Angel One DP Charges",
+          "url": "https://www.angelone.in/support/charges-and-cashbacks/dp-charges"
+        },
+        {
+          "title": "NSE Circular NSE/FA/73061",
+          "url": "https://nsearchives.nseindia.com/content/circulars/FA73061.pdf"
+        },
+        {
+          "title": "BSE transaction charge circular 20250429-51",
+          "url": "https://www.bseindia.com/markets/MarketInfo/DownloadAttach.aspx?attachedId=8a7fec3a-95bc-4bd2-82de-76e2a84e2915&id=20250429-51"
+        },
+        {
+          "title": "SEBI FAQ on Indian Stamp Act amendments",
+          "url": "https://www.sebi.gov.in/sebi_data/faqfiles/sep-2020/1599820228476.pdf"
+        },
+        {
+          "title": "SEBI Stock Brokers Regulations, Schedule V",
+          "url": "https://www.sebi.gov.in/sebi_data/commondocs/stockbroamendregu_p.pdf"
+        }
+      ]
+    }
+  ]
+}

@@ -1,65 +1,633 @@
-import { Button } from '@/components/ui/button';
+'use client';
 
-function WelcomeImage() {
+import { ArrowRight, ChevronDown, ExternalLink, Mic, ShieldCheck } from 'lucide-react';
+import { FeeReceipt } from '@/components/app/fee-receipt';
+import { ModeBento } from '@/components/app/mode-bento';
+import { Reveal } from '@/components/app/reveal';
+import { SiteNav } from '@/components/app/site-nav';
+import { Button } from '@/components/ui/button';
+import sixRupeeFixture from '@/data/six-rupee-delivery.json';
+import type { LearningMode } from '@/lib/learning-modes';
+
+const educationBoundary =
+  'Education only. FinEd does not recommend or execute trades and never asks for your broker password, PIN or OTP.';
+const reconciliationLocation = 'contract-note total charges, ledger or available funds, or P&L';
+const contractNotePriority =
+  'Contract-note or Trades & Charges rows outrank this generic estimate.';
+const {
+  assumptions: sixRupeeAssumptions,
+  result: sixRupeeResult,
+  rules: sixRupeeRules,
+} = sixRupeeFixture;
+
+const steps = [
+  {
+    number: '01',
+    title: 'Choose a topic',
+    body: 'Stocks, SIPs, ETFs, gold, F&O, IPOs, bonds or an open Indian market question.',
+  },
+  {
+    number: '02',
+    title: 'Ask naturally',
+    body: 'Speak in Hindi, English or Hinglish. FinEd asks for one missing detail at a time.',
+  },
+  {
+    number: '03',
+    title: 'Check the explanation',
+    body: 'Hear the answer, inspect the math and open the named source with its verification date.',
+  },
+] as const;
+
+const sourceCards = [
+  {
+    rank: '01A',
+    type: 'Regulator and government',
+    publisher: 'SEBI',
+    title: 'SEBI Stock Brokers Regulations, Schedule V',
+    applicability: 'Official cash-market turnover fee authority',
+    verified: 'Verified 06 Aug 2026',
+    href: 'https://www.sebi.gov.in/sebi_data/commondocs/stockbroamendregu_p.pdf',
+  },
+  {
+    rank: '01B',
+    type: 'Regulator and government',
+    publisher: 'SEBI',
+    title: 'SEBI FAQ on Indian Stamp Act amendments',
+    applicability: 'Stamp-duty rules effective 01 Jul 2020',
+    verified: 'Verified 06 Aug 2026',
+    href: 'https://www.sebi.gov.in/sebi_data/faqfiles/sep-2020/1599820228476.pdf',
+  },
+  {
+    rank: '02',
+    type: 'Exchange',
+    publisher: 'NSE',
+    title: 'Circular NSE/FA/73061',
+    applicability: 'Applicable 01 Mar 2026',
+    verified: 'Verified 06 Aug 2026',
+    href: 'https://nsearchives.nseindia.com/content/circulars/FA73061.pdf',
+  },
+  {
+    rank: '03',
+    type: 'Broker pricing and support',
+    publisher: 'Angel One',
+    title: 'Brokerage charges',
+    applicability: 'Baseline effective 01 Nov 2024',
+    verified: 'Verified 06 Aug 2026',
+    href: 'https://www.angelone.in/support/charges-and-cashbacks/brokerage-charges',
+  },
+  {
+    rank: '04',
+    type: 'Broker education',
+    publisher: 'Angel One',
+    title: 'ETF complete guide',
+    applicability: 'Updated 05 May 2026',
+    verified: 'Verified 06 Aug 2026',
+    href: 'https://www.angelone.in/knowledge-center/online-share-trading/etf',
+  },
+] as const;
+
+const capabilities = [
+  ['8 learning modes', 'Pick one context before each call.'],
+  ['Nikhil, Conversational', 'Indian English voice using Murf Falcon 2.'],
+  ['Angel One baseline', 'The first broker schedule used for fee illustrations.'],
+  ['Deterministic calculator', 'Delivery-cost math is computed, not guessed by the model.'],
+  ['No recommendations', 'Concepts and risk education, never a buy or sell call.'],
+  ['No trade execution', 'FinEd cannot place, modify or cancel an order.'],
+  ['No broker credentials', 'It never needs your password, PIN or OTP.'],
+  ['F&O simulation only', 'Mechanics and risk in a protected learning mode.'],
+] as const;
+
+const faqs = [
+  {
+    question: 'Kya FinEd mujhe stock recommend karega?',
+    answer:
+      'Nahi. FinEd concepts, charges, taxes and risks samjhata hai. It does not recommend a security, target, strategy or allocation.',
+  },
+  {
+    question: '₹50 aur current estimate alag kyun ho sakte hain?',
+    answer: `₹50 abhi unresolved hai. Current illustration mein ${sixRupeeAssumptions.executed_buy_orders} executed buy order, ${sixRupeeAssumptions.executed_sell_orders} executed sell order aur ${sixRupeeAssumptions.demat_debits} sell-side DP debit hai. Brokerage ${sixRupeeRules.brokerage}; isliye buy brokerage ₹${sixRupeeResult.brokerage_buy}, sell brokerage ₹${sixRupeeResult.brokerage_sell}, DP ₹${sixRupeeResult.dp_charge_before_gst} before GST, total ₹${sixRupeeResult.total_charges}, ratio ${sixRupeeResult.fee_to_investment_percent}% aur break-even ₹${sixRupeeResult.break_even_sell_price} hai. Pehle dekho remembered ₹50 ${reconciliationLocation} mein kahan dikha. Phir trade date, delivery versus intraday, executed buy and sell order counts, sell-side DP debit count, promotion status, aur separate account or service charge check karo. ${contractNotePriority}`,
+  },
+  {
+    question: 'ETF aur mutual fund mein basic difference kya hai?',
+    answer:
+      'An ETF trades on an exchange during market hours, so you generally need a demat and trading account. A mutual fund unit is bought or redeemed with the fund at its applicable NAV. Costs and liquidity mechanics also differ.',
+  },
+  {
+    question: 'Kya FinEd mera Angel One account access karta hai?',
+    answer:
+      'Nahi. Angel One is a pricing and education baseline only. FinEd does not sign in to your account and never asks for a password, PIN or OTP.',
+  },
+  {
+    question: 'Sources kitni baar update hote hain?',
+    answer:
+      'The corpus is curated and versioned. Every fee or rule answer should show its publisher, applicability date and last-verified date so you can check whether it fits your trade date.',
+  },
+] as const;
+
+function SectionHeading({
+  eyebrow,
+  title,
+  copy,
+}: {
+  eyebrow: string;
+  title: string;
+  copy?: string;
+}) {
+  return (
+    <div className="max-w-3xl">
+      <p className="font-data text-xs font-medium tracking-[0.08em] text-[var(--ledger-blue)] uppercase">
+        {eyebrow}
+      </p>
+      <h2 className="font-display balance-text mt-4 text-[clamp(2rem,4vw,3.5rem)] leading-[1.04] font-bold tracking-[-0.035em] text-[var(--ledger-ink)]">
+        {title}
+      </h2>
+      {copy && (
+        <p className="mt-5 max-w-[68ch] text-lg leading-8 text-[var(--muted-ink)]">{copy}</p>
+      )}
+    </div>
+  );
+}
+
+function StepSketch({ index }: { index: number }) {
   return (
     <svg
-      width="64"
-      height="64"
-      viewBox="0 0 64 64"
+      aria-hidden="true"
+      viewBox="0 0 88 56"
+      className="h-14 w-[5.5rem] text-[var(--ledger-blue)]"
       fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      className="text-fg0 mb-4 size-16"
     >
-      <path
-        d="M15 24V40C15 40.7957 14.6839 41.5587 14.1213 42.1213C13.5587 42.6839 12.7956 43 12 43C11.2044 43 10.4413 42.6839 9.87868 42.1213C9.31607 41.5587 9 40.7957 9 40V24C9 23.2044 9.31607 22.4413 9.87868 21.8787C10.4413 21.3161 11.2044 21 12 21C12.7956 21 13.5587 21.3161 14.1213 21.8787C14.6839 22.4413 15 23.2044 15 24ZM22 5C21.2044 5 20.4413 5.31607 19.8787 5.87868C19.3161 6.44129 19 7.20435 19 8V56C19 56.7957 19.3161 57.5587 19.8787 58.1213C20.4413 58.6839 21.2044 59 22 59C22.7956 59 23.5587 58.6839 24.1213 58.1213C24.6839 57.5587 25 56.7957 25 56V8C25 7.20435 24.6839 6.44129 24.1213 5.87868C23.5587 5.31607 22.7956 5 22 5ZM32 13C31.2044 13 30.4413 13.3161 29.8787 13.8787C29.3161 14.4413 29 15.2044 29 16V48C29 48.7957 29.3161 49.5587 29.8787 50.1213C30.4413 50.6839 31.2044 51 32 51C32.7956 51 33.5587 50.6839 34.1213 50.1213C34.6839 49.5587 35 48.7957 35 48V16C35 15.2044 34.6839 14.4413 34.1213 13.8787C33.5587 13.3161 32.7956 13 32 13ZM42 21C41.2043 21 40.4413 21.3161 39.8787 21.8787C39.3161 22.4413 39 23.2044 39 24V40C39 40.7957 39.3161 41.5587 39.8787 42.1213C40.4413 42.6839 41.2043 43 42 43C42.7957 43 43.5587 42.6839 44.1213 42.1213C44.6839 41.5587 45 40.7957 45 40V24C45 23.2044 44.6839 22.4413 44.1213 21.8787C43.5587 21.3161 42.7957 21 42 21ZM52 17C51.2043 17 50.4413 17.3161 49.8787 17.8787C49.3161 18.4413 49 19.2044 49 20V44C49 44.7957 49.3161 45.5587 49.8787 46.1213C50.4413 46.6839 51.2043 47 52 47C52.7957 47 53.5587 46.6839 54.1213 46.1213C54.6839 45.5587 55 44.7957 55 44V20C55 19.2044 54.6839 18.4413 54.1213 17.8787C53.5587 17.3161 52.7957 17 52 17Z"
-        fill="currentColor"
-      />
+      {index === 0 && (
+        <>
+          <rect x="5" y="8" width="78" height="40" rx="8" stroke="currentColor" strokeWidth="1.7" />
+          <path
+            d="M18 20H70M18 28H60M18 36H52"
+            stroke="currentColor"
+            strokeWidth="1.7"
+            strokeLinecap="round"
+          />
+          <circle cx="73" cy="36" r="5" fill="#EAF1FD" stroke="currentColor" strokeWidth="1.7" />
+        </>
+      )}
+      {index === 1 && (
+        <>
+          <path
+            d="M12 20V36M21 12V44M30 18V38M39 8V48M48 16V40M57 11V45M66 20V36M75 24V32"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+          <path d="M9 50H78" stroke="#D8D0C0" strokeWidth="1.5" />
+        </>
+      )}
+      {index === 2 && (
+        <>
+          <path d="M7 8H61V48H7V8Z" stroke="currentColor" strokeWidth="1.7" />
+          <path
+            d="M16 18H51M16 26H47M16 34H42"
+            stroke="currentColor"
+            strokeWidth="1.7"
+            strokeLinecap="round"
+          />
+          <path d="M61 19H80V43H52V36" stroke="#1F6B4F" strokeWidth="1.7" />
+          <path
+            d="M60 34L65 39L74 27"
+            stroke="#1F6B4F"
+            strokeWidth="1.7"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </>
+      )}
     </svg>
   );
 }
 
 interface WelcomeViewProps {
-  startButtonText: string;
+  learningMode: LearningMode;
+  onLearningModeChange: (mode: LearningMode) => void;
   onStartCall: () => void;
+  isConnecting: boolean;
+  connectionError: boolean;
 }
 
-export const WelcomeView = ({
-  startButtonText,
+export function WelcomeView({
+  learningMode,
+  onLearningModeChange,
   onStartCall,
-  ref,
-}: React.ComponentProps<'div'> & WelcomeViewProps) => {
+  isConnecting,
+  connectionError,
+}: WelcomeViewProps) {
+  const connectLabel = isConnecting ? 'Connecting to FinEd Saathi' : 'Talk to FinEd Saathi';
+
   return (
-    <div ref={ref}>
-      <section className="bg-background flex flex-col items-center justify-center text-center">
-        <WelcomeImage />
+    <div id="top" className="min-h-svh bg-[var(--paper)]">
+      <SiteNav connectLabel={connectLabel} isConnecting={isConnecting} onConnect={onStartCall} />
 
-        <p className="text-foreground max-w-prose pt-1 leading-6 font-medium">
-          Chat live with your voice AI agent
-        </p>
+      <section className="hero-paper-pattern relative flex min-h-[calc(100svh-4.5rem)] items-center overflow-hidden py-12 sm:py-16 lg:py-20">
+        <div className="section-shell grid items-center gap-12 lg:grid-cols-12 lg:gap-8">
+          <div className="lg:col-span-7">
+            <p className="font-data text-xs font-medium tracking-[0.08em] text-[var(--ledger-blue)] uppercase">
+              VOICE-FIRST FINANCIAL LITERACY FOR INDIA
+            </p>
+            <h1 className="font-display balance-text mt-5 max-w-[13ch] text-[clamp(2.5rem,7vw,5rem)] leading-[0.98] font-bold tracking-[-0.045em] text-[var(--ledger-ink)]">
+              Price same tha. Phir loss kahan se hua?
+            </h1>
+            <p className="mt-6 max-w-[58ch] text-[clamp(1.05rem,2vw,1.25rem)] leading-[1.55] text-[var(--muted-ink)]">
+              FinEd Saathi Indian market concepts, charges and risks ko simple Hinglish mein
+              samjhata hai. Ask by voice, see the math, and verify the source.
+            </p>
 
-        <Button
-          size="lg"
-          onClick={onStartCall}
-          className="mt-6 w-64 rounded-full font-mono text-xs font-bold tracking-wider uppercase"
-        >
-          {startButtonText}
-        </Button>
+            <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+              <Button
+                type="button"
+                size="lg"
+                disabled={isConnecting}
+                onClick={onStartCall}
+                className="min-w-60"
+              >
+                <Mic aria-hidden="true" />
+                {connectLabel}
+              </Button>
+              <Button asChild size="lg" variant="outline">
+                <a href="#why-the-loss">
+                  See the ₹6 breakdown
+                  <ArrowRight aria-hidden="true" />
+                </a>
+              </Button>
+            </div>
+
+            {connectionError && (
+              <div
+                role="alert"
+                className="mt-5 max-w-2xl rounded-[12px] border border-[var(--risk-brick)] bg-[var(--risk-wash)] p-[18px] text-[var(--risk-brick)]"
+              >
+                <p className="leading-6">
+                  Connection failed. Your broker account and credentials were not accessed.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={onStartCall}
+                  className="mt-3 border-[var(--risk-brick)] bg-[var(--surface)] text-[var(--risk-brick)]"
+                >
+                  Try connecting again
+                </Button>
+              </div>
+            )}
+
+            <p className="mt-6 max-w-[62ch] text-sm leading-6 text-[var(--muted-ink)]">
+              {educationBoundary}
+            </p>
+          </div>
+
+          <div className="lg:col-span-5">
+            <FeeReceipt />
+          </div>
+        </div>
       </section>
 
-      <div className="fixed bottom-5 left-0 flex w-full items-center justify-center">
-        <p className="text-muted-foreground max-w-prose pt-1 text-xs leading-5 font-normal text-pretty md:text-sm">
-          Need help getting set up? Check out the{' '}
-          <a
-            target="_blank"
-            rel="noopener noreferrer"
-            href="https://docs.livekit.io/agents/start/voice-ai/"
-            className="underline"
+      <section id="topics" className="section-space border-t border-[var(--ledger-rule)]">
+        <Reveal className="section-shell">
+          <SectionHeading
+            eyebrow="Choose before you connect"
+            title="Aaj market mein kya samajhna hai?"
+            copy="Your selected mode travels with the voice session and keeps the explanation focused. You can choose a new mode before the next call."
+          />
+          <div className="mt-10">
+            <ModeBento
+              value={learningMode}
+              onChange={onLearningModeChange}
+              disabled={isConnecting}
+              disabledReason="Mode selection is paused while connecting."
+            />
+          </div>
+        </Reveal>
+      </section>
+
+      <section
+        id="how-it-works"
+        className="section-space border-t border-[var(--ledger-rule)] bg-[var(--surface)]"
+      >
+        <Reveal className="section-shell">
+          <SectionHeading eyebrow="Three clear steps" title="How it works" />
+          <ol className="mt-10 grid gap-px overflow-hidden rounded-[12px] border border-[var(--ledger-rule)] bg-[var(--ledger-rule)] md:grid-cols-3">
+            {steps.map((step, index) => (
+              <li key={step.number} className="bg-[var(--surface)] p-[18px] sm:p-6">
+                <div className="flex items-start justify-between gap-4">
+                  <span className="font-data text-sm font-medium text-[var(--ledger-blue)]">
+                    {step.number}
+                  </span>
+                  <StepSketch index={index} />
+                </div>
+                <h3 className="font-display mt-8 text-xl font-semibold">{step.title}</h3>
+                <p className="mt-3 leading-7 text-[var(--muted-ink)]">{step.body}</p>
+              </li>
+            ))}
+          </ol>
+        </Reveal>
+      </section>
+
+      <section id="why-the-loss" className="section-space border-t border-[var(--ledger-rule)]">
+        <Reveal className="section-shell">
+          <SectionHeading
+            eyebrow="Current delivery illustration"
+            title="Price loss zero tha. Cost loss zero nahi tha."
+            copy="This one-share NSE example uses the current versioned Angel One baseline. It separates the market result from the cost of completing the transaction."
+          />
+          <div className="mt-10 grid overflow-hidden rounded-[12px] border border-[var(--ledger-rule)] bg-[var(--surface)] lg:grid-cols-12">
+            <div className="border-b border-[var(--ledger-rule)] p-[18px] sm:p-6 lg:col-span-5 lg:border-r lg:border-b-0">
+              <FeeReceipt compact />
+            </div>
+            <div className="p-[18px] sm:p-6 lg:col-span-7">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--soft-rule)] pb-5">
+                <div>
+                  <p className="font-data text-xs tracking-[0.08em] text-[var(--muted-ink)] uppercase">
+                    Assumptions
+                  </p>
+                  <p className="mt-2 font-semibold">
+                    NSE delivery · {sixRupeeAssumptions.quantity} share ·{' '}
+                    {sixRupeeAssumptions.executed_buy_orders} executed buy order ·{' '}
+                    {sixRupeeAssumptions.executed_sell_orders} executed sell order ·{' '}
+                    {sixRupeeAssumptions.demat_debits} sell-side DP debit · standard post-promotion
+                    brokerage
+                  </p>
+                </div>
+                <span className="rounded-[8px] border border-[var(--ledger-blue)] bg-[var(--blue-wash)] px-3 py-2 text-sm font-semibold text-[var(--ledger-blue)]">
+                  Illustrative estimate
+                </span>
+              </div>
+              <div className="mt-5 grid gap-2 rounded-[10px] border border-[var(--ledger-rule)] bg-[var(--paper)] p-4 text-sm leading-6 text-[var(--muted-ink)]">
+                <p>
+                  <strong className="text-[var(--ledger-ink)]">Brokerage formula:</strong>{' '}
+                  {sixRupeeRules.brokerage}.
+                </p>
+                <p>
+                  <strong className="text-[var(--ledger-ink)]">DP formula:</strong>{' '}
+                  {sixRupeeRules.dp_charge}.
+                </p>
+              </div>
+              <dl className="mt-2">
+                {[
+                  [
+                    'Trade value and market P&L',
+                    `₹${sixRupeeAssumptions.buy_price} buy · ₹${sixRupeeAssumptions.sell_price} sell · ₹0.00 P&L`,
+                  ],
+                  [
+                    `Buy brokerage (${sixRupeeAssumptions.executed_buy_orders} executed order)`,
+                    `₹${sixRupeeResult.brokerage_buy}`,
+                  ],
+                  [
+                    `Sell brokerage (${sixRupeeAssumptions.executed_sell_orders} executed order)`,
+                    `₹${sixRupeeResult.brokerage_sell}`,
+                  ],
+                  ['Statutory and exchange charges', 'about ₹0.01'],
+                  ['GST, 18% of taxable charges', 'about ₹5.40'],
+                  [
+                    `DP charge (${sixRupeeAssumptions.demat_debits} sell-side demat debit, before GST)`,
+                    `₹${sixRupeeResult.dp_charge_before_gst}`,
+                  ],
+                ].map(([label, amount]) => (
+                  <div
+                    key={label}
+                    className="grid gap-1 border-b border-[var(--soft-rule)] py-4 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-6"
+                  >
+                    <dt className="text-[var(--muted-ink)]">{label}</dt>
+                    <dd className="font-data text-left font-medium text-[var(--ledger-ink)] sm:text-right">
+                      {amount}
+                    </dd>
+                  </div>
+                ))}
+                <div className="grid gap-1 border-t-2 border-[var(--ledger-ink)] py-5 sm:grid-cols-[1fr_auto] sm:items-end sm:gap-6">
+                  <dt>
+                    <span className="font-display block text-xl font-bold">
+                      Total charges and net result
+                    </span>
+                    <span className="mt-1 block text-sm text-[var(--muted-ink)]">
+                      Fee-to-investment ratio {sixRupeeResult.fee_to_investment_percent}% of the ₹
+                      {sixRupeeAssumptions.buy_price} buy value. Current illustrative break-even
+                      sell price ₹{sixRupeeResult.break_even_sell_price}.
+                    </span>
+                  </dt>
+                  <dd className="font-data text-left text-xl font-medium text-[var(--risk-brick)] sm:text-right">
+                    about negative ₹{sixRupeeResult.total_charges}
+                  </dd>
+                </div>
+              </dl>
+              <div className="mt-5 rounded-[12px] border border-[var(--risk-brick)] bg-[var(--risk-wash)] p-4 text-sm leading-6 text-[var(--risk-brick)]">
+                <p className="font-display font-semibold">₹50 status: unresolved</p>
+                <p className="mt-2">
+                  First locate whether ₹50 appeared in {reconciliationLocation}. Then confirm trade
+                  date, delivery versus intraday, executed buy and sell order counts, sell-side DP
+                  transaction or debit count, promotion status, and any separate account or service
+                  charge.
+                </p>
+                <p className="mt-2 font-semibold">{contractNotePriority}</p>
+              </div>
+            </div>
+          </div>
+        </Reveal>
+      </section>
+
+      <section className="section-space border-t border-[var(--ledger-rule)] bg-[var(--ledger-ink)] text-[var(--surface)]">
+        <Reveal className="section-shell grid gap-8 lg:grid-cols-12 lg:items-center">
+          <div className="lg:col-span-5">
+            <p className="font-data text-xs tracking-[0.08em] text-[#AFC8F0] uppercase">
+              Voice-session proof
+            </p>
+            <h2 className="font-display balance-text mt-4 text-[clamp(2rem,4vw,3.5rem)] leading-[1.04] font-bold tracking-[-0.035em]">
+              Sunega bhi. Samjhayega bhi.
+            </h2>
+            <p className="mt-5 text-lg leading-8 text-[#CBD3DE]">
+              The spoken answer stays concise. The visible transcript keeps the calculation and
+              source links available for inspection.
+            </p>
+          </div>
+          <div className="rounded-[12px] border border-[#41516A] bg-[#1B2C48] p-[18px] sm:p-6 lg:col-span-7">
+            <div className="flex items-center gap-3 border-b border-[#41516A] pb-4">
+              <span className="grid size-10 place-items-center rounded-[10px] bg-[#EAF1FD] text-[var(--ledger-blue)]">
+                <Mic aria-hidden="true" className="size-5" />
+              </span>
+              <div>
+                <p className="font-data text-xs tracking-[0.08em] text-[#AFC8F0] uppercase">
+                  Example transcript
+                </p>
+                <p className="mt-1 text-sm text-[#CBD3DE]">Stocks mode</p>
+              </div>
+            </div>
+            <blockquote className="mt-5 text-xl leading-8 font-semibold">
+              “Maine ₹6 mein stock liya, ₹6 mein hi bech diya, phir bhi mujhe ₹50 ka loss hua.”
+            </blockquote>
+            <div className="mt-5 border-l-2 border-[#AFC8F0] pl-5 text-[0.98rem] leading-7 text-[#E6EAF0]">
+              Price P&amp;L zero ho sakta hai, but ₹50 abhi unresolved hai. Sabse pehle batayein:
+              ₹50 {reconciliationLocation} mein dikha? Uske baad main ek detail at a time poochunga:
+              trade date, delivery versus intraday, executed buy and sell order counts, sell-side DP
+              debit count, promotion status, and any separate account or service charge. Brokerage
+              rule {sixRupeeRules.brokerage}. Current fixture mein{' '}
+              {sixRupeeAssumptions.executed_buy_orders} executed buy order ka brokerage ₹
+              {sixRupeeResult.brokerage_buy}, {sixRupeeAssumptions.executed_sell_orders} executed
+              sell order ka ₹{sixRupeeResult.brokerage_sell}, aur {sixRupeeAssumptions.demat_debits}{' '}
+              sell-side DP debit ₹{sixRupeeResult.dp_charge_before_gst} before GST hai. This
+              illustrates about ₹{sixRupeeResult.total_charges}, not the remembered ₹50.
+            </div>
+          </div>
+        </Reveal>
+      </section>
+
+      <section id="sources" className="section-space border-t border-[var(--ledger-rule)]">
+        <Reveal className="section-shell">
+          <SectionHeading
+            eyebrow="Curated and versioned sources"
+            title="Broker ka answer akela final answer nahi hai."
+            copy="FinEd keeps source classes separate and follows the higher-authority current source when records conflict. Every answer should expose publisher, date and link."
+          />
+          <p className="font-data mt-6 text-sm text-[var(--muted-ink)]">
+            regulator &gt; exchange &gt; broker pricing &gt; broker support &gt; broker education
+          </p>
+          <div className="mt-8 grid gap-3 md:grid-cols-2 lg:grid-cols-12">
+            {sourceCards.map((source, index) => (
+              <article
+                key={source.title}
+                className={`${index < 2 ? 'lg:col-span-7' : 'lg:col-span-5'} rounded-[12px] border border-[var(--ledger-rule)] bg-[var(--surface)] p-[18px] transition-transform duration-200 ease-out hover:-translate-y-[3px] sm:p-6`}
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <span className="font-data text-sm font-medium text-[var(--ledger-blue)]">
+                    {source.rank}
+                  </span>
+                  <ShieldCheck aria-hidden="true" className="size-6 text-[var(--banknote-green)]" />
+                </div>
+                <p className="font-data mt-7 text-xs tracking-[0.08em] text-[var(--muted-ink)] uppercase">
+                  {source.type}
+                </p>
+                <h3 className="font-display mt-2 text-xl font-semibold">
+                  {source.publisher}: {source.title}
+                </h3>
+                <dl className="mt-4 grid gap-2 text-sm text-[var(--muted-ink)]">
+                  <div className="flex flex-wrap justify-between gap-2">
+                    <dt>Applicability</dt>
+                    <dd className="font-data">{source.applicability}</dd>
+                  </div>
+                  <div className="flex flex-wrap justify-between gap-2">
+                    <dt>Last checked</dt>
+                    <dd className="font-data">{source.verified}</dd>
+                  </div>
+                </dl>
+                <a
+                  href={source.href}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-5 inline-flex min-h-10 items-center gap-2 font-semibold text-[var(--ledger-blue)] underline decoration-[var(--ledger-rule)] underline-offset-4 hover:text-[var(--ledger-blue-hover)]"
+                >
+                  Open source <ExternalLink aria-hidden="true" className="size-4" />
+                </a>
+              </article>
+            ))}
+          </div>
+        </Reveal>
+      </section>
+
+      <section className="section-space border-t border-[var(--ledger-rule)] bg-[var(--surface)]">
+        <Reveal className="section-shell">
+          <SectionHeading
+            eyebrow="Capabilities and boundaries"
+            title="Built to explain, not persuade."
+          />
+          <div className="mt-10 grid gap-px overflow-hidden rounded-[12px] border border-[var(--ledger-rule)] bg-[var(--ledger-rule)] sm:grid-cols-2 lg:grid-cols-4">
+            {capabilities.map(([title, body], index) => (
+              <article key={title} className="min-h-48 bg-[var(--surface)] p-[18px] sm:p-6">
+                <span className="font-data text-sm font-medium text-[var(--ledger-blue)]">
+                  {String(index + 1).padStart(2, '0')}
+                </span>
+                <h3 className="font-display mt-7 text-lg font-semibold">{title}</h3>
+                <p className="mt-3 text-sm leading-6 text-[var(--muted-ink)]">{body}</p>
+              </article>
+            ))}
+          </div>
+        </Reveal>
+      </section>
+
+      <section className="section-space border-t border-[var(--ledger-rule)]">
+        <Reveal className="section-shell grid gap-10 lg:grid-cols-12">
+          <div className="lg:col-span-4">
+            <SectionHeading
+              eyebrow="Beginner questions"
+              title="FAQ"
+              copy="Short answers before you share any trade detail."
+            />
+          </div>
+          <div className="grid gap-3 lg:col-span-8">
+            {faqs.map((faq) => (
+              <details
+                key={faq.question}
+                className="group rounded-[12px] border border-[var(--ledger-rule)] bg-[var(--surface)] open:border-[var(--ledger-blue)]"
+              >
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-4 rounded-[12px] px-[18px] py-4 font-semibold transition-colors duration-200 ease-out hover:bg-[var(--blue-wash)] sm:px-6 [&::-webkit-details-marker]:hidden">
+                  {faq.question}
+                  <ChevronDown
+                    aria-hidden="true"
+                    className="size-5 shrink-0 text-[var(--ledger-blue)] transition-transform duration-200 ease-out group-open:rotate-180"
+                  />
+                </summary>
+                <p className="border-t border-[var(--soft-rule)] px-[18px] py-5 leading-7 text-[var(--muted-ink)] sm:px-6">
+                  {faq.answer}
+                </p>
+              </details>
+            ))}
+          </div>
+        </Reveal>
+      </section>
+
+      <section className="border-y border-[var(--ledger-rule)] bg-[var(--blue-wash)] py-16 sm:py-20">
+        <Reveal className="section-shell flex flex-col items-start justify-between gap-8 lg:flex-row lg:items-end">
+          <div>
+            <p className="font-data text-xs tracking-[0.08em] text-[var(--ledger-blue)] uppercase">
+              One concept at a time
+            </p>
+            <h2 className="font-display balance-text mt-4 max-w-[18ch] text-[clamp(2rem,4vw,3.5rem)] leading-[1.04] font-bold tracking-[-0.035em]">
+              Agla trade nahi. Agla concept samjho.
+            </h2>
+          </div>
+          <Button
+            type="button"
+            size="lg"
+            disabled={isConnecting}
+            onClick={onStartCall}
+            className="min-w-60"
           >
-            Voice AI quickstart
-          </a>
-          .
-        </p>
-      </div>
+            <Mic aria-hidden="true" />
+            {connectLabel}
+          </Button>
+        </Reveal>
+      </section>
+
+      <footer className="bg-[var(--ledger-ink)] py-10 text-[var(--surface)]">
+        <div className="section-shell grid gap-8 md:grid-cols-[1fr_auto] md:items-end">
+          <div>
+            <p className="font-display text-xl font-bold">FinEd Saathi</p>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-[#CBD3DE]">
+              Financial Services track. {educationBoundary}
+            </p>
+            <p className="mt-3 text-sm text-[#CBD3DE]">
+              Indian voice: Nikhil, Conversational, powered by Murf Falcon 2.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+            <a
+              href="#sources"
+              className="flex min-h-10 items-center text-[#D8E5FA] underline underline-offset-4"
+            >
+              Source methodology
+            </a>
+            <a
+              href="https://github.com/himanshu748/fin-ed"
+              target="_blank"
+              rel="noreferrer"
+              className="flex min-h-10 items-center text-[#D8E5FA] underline underline-offset-4"
+            >
+              Public repository
+            </a>
+          </div>
+        </div>
+      </footer>
     </div>
   );
-};
+}
