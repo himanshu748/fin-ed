@@ -1,7 +1,8 @@
 # FinEd Saathi
 
-FinEd Saathi is a voice-first Hinglish tutor for beginner concepts in the Indian
-financial market. It is the **Financial Services** track project for Day 1 of
+FinEd Saathi is a voice-first English and Hindi tutor for beginner concepts in
+the Indian financial market. It follows the language style the user chooses,
+including user-led code-mixing. It is the **Financial Services** track project for Days 1 and 2 of
 **10 Days of Voice Agents — VoiceForBharat Edition**.
 
 The agent explains products, fees, taxes, and risks; it does not place trades or
@@ -14,14 +15,14 @@ FinEd separates price profit and loss from transaction costs, treats the
 remembered ₹50 as unresolved, and asks where that amount appeared before trying
 to reconcile it.
 
-## Day 1 build
+## Days 1 and 2 build
 
 - Eight learning modes: Stocks, Mutual Funds & SIPs, ETFs, Gold, F&O, IPOs,
   Bonds, and Ask Anything.
 - A responsive Next.js interface with a visible ₹6 delivery-charge illustration
   and an education-only F&O warning.
 - Deepgram Nova-3 multilingual speech recognition with 100 ms endpointing for
-  Hinglish code-switching.
+  English, Hindi, and user-led code-switching.
 - Google Gemini for the conversation and tool calls.
 - Murf Falcon 2 speech with `Nikhil`, `Conversational`, and Indian English
   (`en-IN`).
@@ -30,6 +31,18 @@ to reconcile it.
 
 The F&O mode teaches mechanics and risk only. It does not provide calls or a
 strategy for a live trade.
+
+### Day 2 persona and guardrails
+
+- A named Indian financial-literacy tutor with explicit identity, objectives,
+  knowledge boundaries, speaking style, and an education-only greeting.
+- English input receives English, Hindi input receives Devanagari Hindi, and a
+  code-mixed turn receives a matching code-mixed response.
+- A deterministic pre-LLM layer stops credentials, personalised investment
+  recommendations, guaranteed outcomes, wrongdoing, and prompt extraction.
+- Every refusal states the boundary, gives a short reason, and offers a safe
+  educational, official-support, professional, or SEBI-registered next step.
+- Ten completed adversarial checks are recorded in [RED_TEAM.md](RED_TEAM.md).
 
 ## Conversation flow
 
@@ -109,6 +122,18 @@ the configured LiveKit Cloud project; a local LiveKit server is not required.
 5. Confirm the recording contains a connected session, your voice, and the
    agent's audio before posting it for the challenge.
 
+## Day 2 recording check
+
+1. Start in **Stocks** mode and let the agent introduce itself and its
+   education-only boundary.
+2. Ask the ₹6/₹50 question in Hindi or code-mixed speech, then ask one follow-up
+   in English to demonstrate user-led language matching.
+3. Ask for a “guaranteed F&O strategy and best stock” and record the refusal,
+   risk explanation, and SEBI-registered adviser escalation.
+4. Keep OTPs, PINs, passwords, account numbers, and other real private data out
+   of the recording.
+5. Capture both the transcript and Nikhil's Murf Falcon 2 audio.
+
 ## Knowledge-index behavior
 
 The curated knowledge index is optional for the Day 1 conversation. If
@@ -167,6 +192,7 @@ fin-ed/
 │   ├── components/app/               # FinEd landing and live-session interface
 │   ├── lib/learning-modes.ts         # Shared eight-mode browser contract
 │   └── tests/                        # Design and participant-metadata contracts
+├── RED_TEAM.md                       # Ten completed Day 2 adversarial checks
 └── docs/DESIGN.md                    # Finance product design system
 ```
 

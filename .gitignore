@@ -4,7 +4,7 @@
 .DS_Store
 
 # Local agent planning and review artifacts
-/.superpowers/sdd/
+/.superpowers/
 /docs/superpowers/
 
 # Rebuildable local knowledge indexes (retain the directory placeholder)
