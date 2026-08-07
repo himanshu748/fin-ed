@@ -173,7 +173,7 @@ test('keeps the connected experience educational, transparent, and single-discon
 
   includesAll(
     session,
-    ['Mode locked for this call', 'Education only.', 'AgentAudioVisualizerBar'],
+    ['Learning focus for this call', 'Education only.', 'AgentAudioVisualizerBar'],
     'missing session guardrails'
   );
   assert.ok(

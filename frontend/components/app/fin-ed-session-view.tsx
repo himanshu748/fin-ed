@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { ConnectionState } from 'livekit-client';
-import { BookOpen, LockKeyhole, Mic2, ShieldCheck } from 'lucide-react';
+import { BookOpen, Mic2, ShieldCheck } from 'lucide-react';
 import { useReducedMotion } from 'motion/react';
 import {
   type AgentState,
@@ -133,10 +133,12 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
 
           <div className="rounded-[12px] border border-[var(--ledger-blue)] bg-[var(--blue-wash)] p-4">
             <div className="flex items-center gap-2 font-semibold text-[var(--ledger-blue)]">
-              <LockKeyhole aria-hidden="true" className="size-4" />
+              <BookOpen aria-hidden="true" className="size-4" />
               <span>{activeMode?.label ?? 'Ask Anything'}</span>
             </div>
-            <p className="mt-2 text-sm text-[var(--muted-ink)]">Mode locked for this call</p>
+            <p className="mt-2 text-sm text-[var(--muted-ink)]">
+              Learning focus for this call. End the call to choose another topic.
+            </p>
           </div>
 
           <p className="mt-5 text-sm leading-6 text-[var(--muted-ink)]">

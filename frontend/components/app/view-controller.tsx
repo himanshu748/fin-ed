@@ -27,7 +27,7 @@ export function ViewController({
   const handlingFailure = useRef(false);
 
   useEffect(() => {
-    if (agent.state !== 'failed') {
+    if (agent.state !== 'failed' || !session.isConnected) {
       handlingFailure.current = false;
       return;
     }
