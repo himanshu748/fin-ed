@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from livekit.agents import RunContext, ToolError
+from livekit.agents import Agent, ChatContext, ModelSettings, RunContext, ToolError
 
 from fined.agent import (
     FinEdAssistant,
@@ -162,20 +162,45 @@ def test_prompt_requires_deterministic_tools_sources_and_honest_abstention() -> 
         assert required in prompt
 
 
-def test_prompt_keeps_english_and_hindi_as_separate_response_languages() -> None:
-    # Catches the model drifting back to mixed Hinglish or romanized Hindi.
+def test_prompt_matches_the_users_language_register() -> None:
+    # Catches forced Hinglish or rejection of the Day 2 code-mixed requirement.
     prompt = build_system_prompt(ParticipantProfile(LearningMode.STOCKS)).casefold()
 
     for required in (
         "reply entirely in english",
         "reply entirely in hindi",
         "devanagari",
-        "never mix english and hindi",
-        "never write hindi in latin characters",
+        "code-mixed",
+        "matching code-mixed register",
+        "do not introduce code-mixing",
+        "continue in english or hindi",
         "do not repeat the remembered romanized-hindi sentence",
     ):
         assert required in prompt
-    assert "hinglish" not in prompt
+
+
+def test_prompt_defines_day_two_persona_objectives_and_limits() -> None:
+    prompt = build_system_prompt(ParticipantProfile(LearningMode.STOCKS)).casefold()
+
+    for required in (
+        "identity",
+        "voice-first indian financial-markets tutor",
+        "objectives",
+        "successful call",
+        "never ask for an otp",
+        "never recommend buying, selling, or holding",
+        "never provide targets, signals, guaranteed returns",
+        "never execute a trade",
+        "sebi-registered investment adviser",
+        "official broker support",
+        "qualified tax professional",
+        "boundary plainly",
+        "one-sentence reason",
+        "allowed alternative",
+        "twenty words or fewer",
+        "one question",
+    ):
+        assert required in prompt
 
 
 def test_prompt_reconciles_the_remembered_fifty_rupees_without_guessing() -> None:
@@ -212,20 +237,23 @@ def test_greeting_names_track_topic_and_adds_fno_risk_line() -> None:
     fno = build_greeting(ParticipantProfile(LearningMode.FNO))
 
     assert "Financial Services" in stocks
+    assert "FinEd Saathi" in stocks
     assert "Stocks" in stocks
-    assert len(stocks) < 240
+    assert "English, Hindi, or both" in stocks
+    assert "education, not investment advice" in stocks
+    assert len(stocks) < 320
     assert "Financial Services" in fno
     assert "F&O" in fno
     assert "high risk" in fno.casefold()
     assert "education and simulation" in fno.casefold()
 
 
-def test_greetings_are_english_only_and_do_not_use_romanized_hindi() -> None:
-    # Catches a mixed-language greeting being sent through an English locale.
+def test_greetings_are_english_and_offer_user_led_language_choice() -> None:
+    # Catches the greeting forcing Hinglish before the user has chosen a register.
     greetings = [build_greeting(ParticipantProfile(mode)) for mode in LearningMode]
     romanized_hindi = ("aaj", "aur", "hai", "mein", "nahi", "sawaal", "samjhenge")
 
-    assert all("English or Hindi" in greeting for greeting in greetings)
+    assert all("English, Hindi, or both" in greeting for greeting in greetings)
     assert all(
         word not in greeting.casefold()
         for greeting in greetings
@@ -241,6 +269,69 @@ def test_greetings_do_not_emit_en_or_em_dashes() -> None:
     assert all(
         dash not in greeting for greeting in greetings for dash in prohibited_dashes
     )
+
+
+@pytest.mark.asyncio
+async def test_llm_node_short_circuits_guardrails_before_provider_or_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_called = False
+
+    async def fake_llm_node(*args, **kwargs):
+        nonlocal provider_called
+        provider_called = True
+        yield "provider reply"
+
+    monkeypatch.setattr(Agent.default, "llm_node", fake_llm_node)
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(
+        role="user",
+        content="Give me a guaranteed F&O strategy for tomorrow.",
+    )
+
+    output = [
+        chunk
+        async for chunk in FinEdAssistant().llm_node(
+            chat_ctx,
+            [],
+            ModelSettings(),
+        )
+    ]
+
+    assert provider_called is False
+    assert output == [
+        "I can't promise returns or provide guaranteed F&O calls. Markets carry "
+        "risk, and F&O can cause rapid losses. I can explain the mechanics and "
+        "risk, or you can consult a SEBI-registered investment adviser."
+    ]
+
+
+@pytest.mark.asyncio
+async def test_llm_node_delegates_safe_education_to_the_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_called = False
+
+    async def fake_llm_node(*args, **kwargs):
+        nonlocal provider_called
+        provider_called = True
+        yield "An ETF trades on an exchange."
+
+    monkeypatch.setattr(Agent.default, "llm_node", fake_llm_node)
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content="What is an ETF?")
+
+    output = [
+        chunk
+        async for chunk in FinEdAssistant().llm_node(
+            chat_ctx,
+            [],
+            ModelSettings(),
+        )
+    ]
+
+    assert provider_called is True
+    assert output == ["An ETF trades on an exchange."]
 
 
 def test_fined_assistant_defaults_to_general_and_exposes_exact_tool_names() -> None:
