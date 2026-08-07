@@ -10,7 +10,7 @@ import sixRupeeFixture from '@/data/six-rupee-delivery.json';
 import type { LearningMode } from '@/lib/learning-modes';
 
 const educationBoundary =
-  'Education only. FinEd does not recommend or execute trades and never asks for your broker password, PIN or OTP.';
+  'Education only. FinEd does not recommend or execute trades and never asks for your broker password, PIN or OTP. Personalised decisions belong with a SEBI-registered investment adviser.';
 const reconciliationLocation = 'contract-note total charges, ledger or available funds, or P&L';
 const contractNotePriority =
   'Contract-note or Trades & Charges rows outrank this generic estimate.';
@@ -29,7 +29,7 @@ const steps = [
   {
     number: '02',
     title: 'Ask naturally',
-    body: 'Speak in English or Hindi. FinEd answers in the same language without mixing them.',
+    body: 'Speak in English, Hindi, or both. FinEd matches the language style you use.',
   },
   {
     number: '03',
@@ -223,7 +223,7 @@ export function WelcomeView({
     <div id="top" className="min-h-svh bg-[var(--paper)]">
       <SiteNav connectLabel={connectLabel} isConnecting={isConnecting} onConnect={onStartCall} />
 
-      <section className="hero-paper-pattern relative flex min-h-[calc(100svh-4.5rem)] items-center overflow-hidden py-12 sm:py-16 lg:py-20">
+      <section className="hero-paper-pattern relative flex min-h-[calc(100svh-4.5rem)] items-start overflow-hidden pt-4 pb-12 sm:pt-8 sm:pb-16 lg:pt-10 lg:pb-20">
         <div className="section-shell grid items-center gap-12 lg:grid-cols-12 lg:gap-8">
           <div className="lg:col-span-7">
             <p className="font-data text-xs font-medium tracking-[0.08em] text-[var(--ledger-blue)] uppercase">
@@ -233,8 +233,9 @@ export function WelcomeView({
               Same price. Why did I still lose money?
             </h1>
             <p className="mt-6 max-w-[58ch] text-[clamp(1.05rem,2vw,1.25rem)] leading-[1.55] text-[var(--muted-ink)]">
-              FinEd Saathi explains Indian market concepts, charges and risks in English or Hindi.
-              Ask by voice, see the math, and verify the source.
+              FinEd Saathi explains Indian market concepts, charges and risks in English, Hindi, or
+              both. Ask by voice, see the math, and verify the source. It provides education, not
+              investment advice.
             </p>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap">

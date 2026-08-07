@@ -101,6 +101,33 @@ test('renders the complete Day 1 landing narrative and safety boundary', () => {
   );
 });
 
+test('moves the existing hero upward and publishes the Day 2 language contract', () => {
+  const welcome = read('components/app/welcome-view.tsx');
+  const session = read('components/app/fin-ed-session-view.tsx');
+
+  includesAll(
+    welcome,
+    [
+      'items-start',
+      'pt-4',
+      'English, Hindi, or both',
+      'It provides education,',
+      'investment advice.',
+    ],
+    'missing Day 2 hero contract'
+  );
+  includesAll(
+    session,
+    ['matches the language', 'style you use', 'SEBI-registered investment adviser'],
+    'missing Day 2 session contract'
+  );
+  assert.ok(!welcome.includes('without mixing them'), 'welcome must allow user-led code-mixing');
+  assert.ok(
+    !session.includes('Languages are not mixed'),
+    'session must allow user-led code-mixing'
+  );
+});
+
 test('uses an accessible inline receipt illustration with the ₹6 example', () => {
   const receipt = read('components/app/fee-receipt.tsx');
 
