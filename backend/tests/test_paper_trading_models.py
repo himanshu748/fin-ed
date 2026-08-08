@@ -10,6 +10,8 @@ from fined.paper_trading.models import (
     PaperOrderDraft,
     PaperPortfolioSummary,
     decode_paper_dashboard_ack,
+    decode_paper_draft_ack,
+    decode_paper_order_result,
     decode_paper_portfolio_summary,
 )
 
@@ -42,7 +44,8 @@ def test_draft_serializes_only_public_fields() -> None:
 
     assert payload["version"] == 1
     assert payload["paper"] is True
-    assert payload["quote"]["provider"] == "Angel One SmartAPI"
+    assert payload["quote_provider"] == "Angel One SmartAPI"
+    assert payload["quote_time"] == "2026-08-08T09:15:00+00:00"
     assert set(payload) == {
         "version",
         "paper",
@@ -53,7 +56,8 @@ def test_draft_serializes_only_public_fields() -> None:
         "trading_symbol",
         "quantity",
         "price_paise",
-        "quote",
+        "quote_provider",
+        "quote_time",
         "expires_at",
         "notional_paise",
         "charge_paise",
@@ -134,6 +138,46 @@ def test_decoders_reject_unknown_response_keys() -> None:
 
     with pytest.raises(ValueError):
         decode_paper_dashboard_ack(response)
+
+
+@pytest.mark.parametrize("version", [True, 1.0, "1"])
+@pytest.mark.parametrize(
+    ("decoder", "response"),
+    [
+        (decode_paper_dashboard_ack, {"paper": True, "opened": True}),
+        (
+            decode_paper_draft_ack,
+            {"paper": True, "prepared": True, "draft_id": "draft-1"},
+        ),
+        (
+            decode_paper_portfolio_summary,
+            {
+                "paper": True,
+                "cash_paise": 10_000_000,
+                "holdings_value_paise": 0,
+                "total_value_paise": 10_000_000,
+            },
+        ),
+        (
+            decode_paper_order_result,
+            {
+                "paper": True,
+                "draft_id": "draft-1",
+                "side": "buy",
+                "trading_symbol": "RELIANCE-EQ",
+                "quantity": 1,
+                "fill_price_paise": 250_050,
+                "simulated_at": "2026-08-08T09:15:00+00:00",
+                "cash_paise": 9_749_950,
+            },
+        ),
+    ],
+)
+def test_every_response_decoder_rejects_non_integer_version(
+    version: object, decoder: object, response: dict[str, object]
+) -> None:
+    with pytest.raises(ValueError):
+        decoder(json.dumps({"version": version, **response}))  # type: ignore[operator]
 
 
 def test_summary_decoder_accepts_only_the_versioned_public_shape() -> None:

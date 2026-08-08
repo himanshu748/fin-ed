@@ -92,7 +92,12 @@ def _require_exact_keys(
 
 
 def _require_paper_envelope(payload: Mapping[str, object]) -> None:
-    if payload.get("version") != RPC_VERSION or payload.get("paper") is not True:
+    version = payload.get("version")
+    if (
+        not _is_int(version)
+        or version != RPC_VERSION
+        or payload.get("paper") is not True
+    ):
         raise ValueError("paper RPC payload has an unsupported version")
 
 
@@ -185,10 +190,8 @@ class PaperOrderDraft:
                 "trading_symbol": self.trading_symbol,
                 "quantity": self.quantity,
                 "price_paise": self.price_paise,
-                "quote": {
-                    "provider": self.quote_provider,
-                    "time": self.quote_time.isoformat(),
-                },
+                "quote_provider": self.quote_provider,
+                "quote_time": self.quote_time.isoformat(),
                 "expires_at": self.expires_at.isoformat(),
                 "notional_paise": self.notional_paise,
                 "charge_paise": self.charge_paise,

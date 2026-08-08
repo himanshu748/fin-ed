@@ -96,6 +96,9 @@ async def test_prepare_order_sends_only_the_public_draft_payload() -> None:
     "response",
     [
         "not json",
+        '{"version":true,"paper":true,"opened":true}',
+        '{"version":1.0,"paper":true,"opened":true}',
+        '{"version":"1","paper":true,"opened":true}',
         '{"version":2,"paper":true,"opened":true}',
         '{"version":1,"paper":true,"opened":true,"access_token":"secret"}',
         "x" * (MAX_RPC_PAYLOAD_BYTES + 1),
