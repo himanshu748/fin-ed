@@ -422,9 +422,8 @@ test('scopes the paper workspace transition and restores keyboard focus', () => 
       '? 18 : -18',
       'duration: 0.26',
       'timeline?.kill()',
-      'context?.revert()',
+      'context.revert()',
       'workspaceRef',
-      'sessionHeadingRef',
       'paperTradingTriggerRef.current?.focus()',
     ],
     'missing scoped workspace transition or focus lifecycle'

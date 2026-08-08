@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
+import { gsap } from 'gsap';
 import { ConnectionState } from 'livekit-client';
 import { BookOpen, LayoutDashboard, Mic2, ShieldCheck } from 'lucide-react';
 import { useReducedMotion } from 'motion/react';
@@ -82,13 +83,12 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
   const paperTradingTriggerRef = useRef<HTMLButtonElement>(null);
   const previousPaperViewRef = useRef<PaperTradingView>(paperTrading.view);
   const workspaceRef = useRef<HTMLDivElement>(null);
-  const sessionHeadingRef = useRef<HTMLHeadingElement>(null);
   const activeMode = LEARNING_MODES.find((mode) => mode.value === learningMode);
   const status = statusFor(session.connectionState, agent.state);
   const visualizerState: AgentState =
     shouldReduceMotion && agent.state === 'speaking' ? 'listening' : agent.state;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const previousView = previousPaperViewRef.current;
     previousPaperViewRef.current = paperTrading.view;
 
@@ -98,7 +98,6 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
       if (paperTrading.view === 'dashboard') {
         workspaceRef.current?.querySelector<HTMLElement>('h1')?.focus();
       } else {
-        sessionHeadingRef.current?.focus();
         paperTradingTriggerRef.current?.focus();
       }
     };
@@ -108,34 +107,27 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
       return;
     }
 
-    let cancelled = false;
-    let context: { revert(): void } | undefined;
-    let timeline: { kill(): void } | undefined;
+    const workspace = workspaceRef.current;
+    if (!workspace) return;
 
-    void import('gsap').then(({ gsap }) => {
-      const workspace = workspaceRef.current;
-      if (cancelled || !workspace) return;
-
-      context = gsap.context(() => {
-        const workspaceTimeline = gsap.timeline({ onComplete: moveFocus });
-        timeline = workspaceTimeline.fromTo(
-          workspace,
-          { autoAlpha: 0, x: paperTrading.view === 'dashboard' ? 18 : -18 },
-          {
-            autoAlpha: 1,
-            x: 0,
-            duration: 0.26,
-            ease: 'power2.out',
-            clearProps: 'transform,opacity,visibility',
-          }
-        );
-      }, workspace);
-    });
+    let timeline: gsap.core.Timeline | undefined;
+    const context = gsap.context(() => {
+      timeline = gsap.timeline({ onComplete: moveFocus }).fromTo(
+        workspace,
+        { autoAlpha: 0, x: paperTrading.view === 'dashboard' ? 18 : -18 },
+        {
+          autoAlpha: 1,
+          x: 0,
+          duration: 0.26,
+          ease: 'power2.out',
+          clearProps: 'transform,opacity,visibility',
+        }
+      );
+    }, workspace);
 
     return () => {
-      cancelled = true;
       timeline?.kill();
-      context?.revert();
+      context.revert();
     };
   }, [paperTrading.view, shouldReduceMotion]);
 
@@ -211,7 +203,7 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
 
       <div ref={workspaceRef} data-workspace-view={paperTrading.view}>
         {paperTrading.view === 'dashboard' ? (
-          <PaperTradingDashboard />
+          <PaperTradingDashboard focusHeadingOnMount={false} />
         ) : (
           <main className="section-shell grid min-h-[calc(100svh-11rem)] gap-5 py-5 lg:grid-cols-[minmax(16rem,0.72fr)_minmax(0,1.28fr)] lg:py-8">
             <aside className="flex flex-col rounded-[12px] border border-[var(--ledger-rule)] bg-[var(--surface)] p-[18px] sm:p-6">
@@ -222,7 +214,6 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
                 <ShieldCheck aria-hidden="true" className="size-5 text-[var(--banknote-green)]" />
               </div>
               <h1
-                ref={sessionHeadingRef}
                 tabIndex={-1}
                 className="font-display mt-4 text-2xl leading-tight font-bold focus-visible:outline-3 focus-visible:outline-offset-4 focus-visible:outline-[var(--ledger-blue)]"
               >
@@ -269,7 +260,7 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
                 </span>
               </div>
 
-              <div className={isTranscriptOpen ? 'min-h-0 flex-1' : 'sr-only'}>
+              <div hidden={!isTranscriptOpen} inert={!isTranscriptOpen} className="min-h-0 flex-1">
                 <AgentChatTranscript
                   agentState={agent.state}
                   messages={messages}

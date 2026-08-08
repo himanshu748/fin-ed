@@ -50,6 +50,203 @@ function findElement(node, predicate) {
   return findElement(node.props?.children, predicate);
 }
 
+function dependenciesChanged(previous, next) {
+  if (previous === undefined || next === undefined || previous.length !== next.length) return true;
+  return previous.some((value, index) => !Object.is(value, next[index]));
+}
+
+function createSessionHarness({ initialView = 'session', reduceMotion = false } = {}) {
+  const states = [];
+  const refs = [];
+  const layoutEffects = [];
+  const passiveEffects = [];
+  const timelines = [];
+  let stateCursor = 0;
+  let refCursor = 0;
+  let layoutCursor = 0;
+  let passiveCursor = 0;
+  let pendingLayoutEffects = [];
+  let pendingPassiveEffects = [];
+  let triggerFocusCalls = 0;
+  let dashboardFocusCalls = 0;
+  let sessionHeadingFocusCalls = 0;
+  let contextReverts = 0;
+  let timelineKills = 0;
+
+  const trigger = { focus: () => (triggerFocusCalls += 1) };
+  const dashboardHeading = { focus: () => (dashboardFocusCalls += 1) };
+  const workspace = {
+    querySelector(selector) {
+      return selector === 'h1' ? dashboardHeading : null;
+    },
+  };
+  const sessionHeading = { focus: () => (sessionHeadingFocusCalls += 1) };
+  const paperTrading = {
+    view: initialView,
+    openDashboard() {},
+  };
+
+  function scheduleEffect(records, pending, index, effect, dependencies) {
+    if (dependenciesChanged(records[index]?.dependencies, dependencies)) {
+      pending.push({ index, effect, dependencies });
+    }
+  }
+
+  function flushEffects(records, pending) {
+    for (const item of pending) {
+      records[item.index]?.cleanup?.();
+      const cleanup = item.effect();
+      records[item.index] = {
+        cleanup: typeof cleanup === 'function' ? cleanup : null,
+        dependencies: item.dependencies,
+      };
+    }
+    pending.length = 0;
+  }
+
+  const react = {
+    useEffect(effect, dependencies) {
+      const index = passiveCursor;
+      passiveCursor += 1;
+      scheduleEffect(passiveEffects, pendingPassiveEffects, index, effect, dependencies);
+    },
+    useLayoutEffect(effect, dependencies) {
+      const index = layoutCursor;
+      layoutCursor += 1;
+      scheduleEffect(layoutEffects, pendingLayoutEffects, index, effect, dependencies);
+    },
+    useRef(initialValue) {
+      const index = refCursor;
+      refCursor += 1;
+      if (!(index in refs)) {
+        const current =
+          index === 0
+            ? trigger
+            : index === 2
+              ? workspace
+              : index === 3
+                ? sessionHeading
+                : initialValue;
+        refs[index] = { current };
+      }
+      return refs[index];
+    },
+    useState(initialValue) {
+      const index = stateCursor;
+      stateCursor += 1;
+      if (!(index in states)) states[index] = initialValue;
+      return [
+        states[index],
+        (value) => {
+          states[index] = typeof value === 'function' ? value(states[index]) : value;
+        },
+      ];
+    },
+  };
+
+  const gsap = {
+    context(callback, scope) {
+      assert.equal(scope, workspace);
+      callback();
+      return { revert: () => (contextReverts += 1) };
+    },
+    timeline(options) {
+      const timeline = {
+        options,
+        from: null,
+        to: null,
+        target: null,
+        fromTo(target, from, to) {
+          timeline.target = target;
+          timeline.from = from;
+          timeline.to = to;
+          return timeline;
+        },
+        kill() {
+          timelineKills += 1;
+        },
+      };
+      timelines.push(timeline);
+      return timeline;
+    },
+  };
+
+  const AgentChatTranscript = () => null;
+  const AgentControlBar = () => null;
+  const PaperTradingDashboard = () => null;
+  const icon = () => null;
+  const iconModule = new Proxy({}, { get: () => icon });
+  const connectionState = {
+    Connected: 'connected',
+    Disconnected: 'disconnected',
+    Reconnecting: 'reconnecting',
+    SignalReconnecting: 'signal-reconnecting',
+  };
+  const FinEdSessionView = compile(
+    'components/app/fin-ed-session-view.tsx',
+    new Map([
+      ['react', react],
+      ['react/jsx-runtime', jsxRuntime],
+      ['gsap', { gsap }],
+      ['livekit-client', { ConnectionState: connectionState }],
+      ['lucide-react', iconModule],
+      ['motion/react', { useReducedMotion: () => reduceMotion }],
+      [
+        '@livekit/components-react',
+        {
+          useAgent: () => ({ state: 'idle' }),
+          useSessionContext: () => ({
+            connectionState: connectionState.Connected,
+            isConnected: true,
+          }),
+          useSessionMessages: () => ({ messages: [] }),
+          useVoiceAssistant: () => ({ audioTrack: undefined }),
+        },
+      ],
+      [
+        '@/components/agents-ui/agent-audio-visualizer-bar',
+        { AgentAudioVisualizerBar: () => null },
+      ],
+      ['@/components/agents-ui/agent-chat-transcript', { AgentChatTranscript }],
+      ['@/components/agents-ui/agent-control-bar', { AgentControlBar }],
+      ['@/components/paper-trading/paper-trading-dashboard', { PaperTradingDashboard }],
+      [
+        '@/components/paper-trading/paper-trading-provider',
+        { usePaperTrading: () => paperTrading },
+      ],
+      ['@/lib/learning-modes', { LEARNING_MODES: [{ value: 'general', label: 'Ask Anything' }] }],
+    ])
+  ).FinEdSessionView;
+
+  return {
+    AgentChatTranscript,
+    AgentControlBar,
+    PaperTradingDashboard,
+    paperTrading,
+    timelines,
+    render() {
+      stateCursor = 0;
+      refCursor = 0;
+      layoutCursor = 0;
+      passiveCursor = 0;
+      pendingLayoutEffects = [];
+      pendingPassiveEffects = [];
+      const tree = FinEdSessionView({ appConfig: {}, learningMode: 'general' });
+      flushEffects(layoutEffects, pendingLayoutEffects);
+      return tree;
+    },
+    unmount() {
+      for (const record of [...layoutEffects, ...passiveEffects]) record?.cleanup?.();
+    },
+    focusCalls() {
+      return { triggerFocusCalls, dashboardFocusCalls, sessionHeadingFocusCalls };
+    },
+    cleanupCalls() {
+      return { contextReverts, timelineKills };
+    },
+  };
+}
+
 function loadViewController({ agentState, isConnected, startError }) {
   const stateWrites = [];
   let stateIndex = 0;
@@ -65,6 +262,9 @@ function loadViewController({ agentState, isConnected, startError }) {
   };
   const react = {
     useEffect(effect) {
+      effect();
+    },
+    useLayoutEffect(effect) {
       effect();
     },
     useRef(value) {
@@ -186,6 +386,9 @@ test('opening the paper workspace does not end the live voice session', () => {
     useEffect(effect) {
       effect();
     },
+    useLayoutEffect(effect) {
+      effect();
+    },
     useRef(value) {
       return { current: value };
     },
@@ -198,6 +401,7 @@ test('opening the paper workspace does not end the live voice session', () => {
     new Map([
       ['react', react],
       ['react/jsx-runtime', jsxRuntime],
+      ['gsap', { gsap: {} }],
       ['livekit-client', { ConnectionState: connectionState }],
       ['lucide-react', iconModule],
       ['motion/react', { useReducedMotion: () => true }],
@@ -241,4 +445,119 @@ test('opening the paper workspace does not end the live voice session', () => {
 
   assert.equal(openDashboardCalls, 1);
   assert.equal(endCalls, 0);
+});
+
+test('a collapsed transcript uses native hidden semantics instead of leaving links tabbable', () => {
+  const harness = createSessionHarness({ reduceMotion: true });
+  let view = harness.render();
+  const controls = findElement(view, (element) => element.type === harness.AgentControlBar);
+  assert.ok(controls, 'voice controls must render');
+
+  controls.props.onIsChatOpenChange(false);
+  view = harness.render();
+  const transcriptWrapper = findElement(view, (element) => {
+    const children = Array.isArray(element.props?.children)
+      ? element.props.children
+      : [element.props?.children];
+    return children.some((child) => child?.type === harness.AgentChatTranscript);
+  });
+
+  assert.ok(transcriptWrapper, 'transcript wrapper must stay mounted');
+  assert.equal(transcriptWrapper.props.hidden, true);
+  assert.equal(transcriptWrapper.props.inert, true);
+  assert.doesNotMatch(transcriptWrapper.props.className, /sr-only/);
+});
+
+test('workspace transitions start in the layout phase and transfer focus once after completion', () => {
+  const harness = createSessionHarness();
+  harness.render();
+
+  harness.paperTrading.view = 'dashboard';
+  let view = harness.render();
+  assert.equal(harness.timelines.length, 1, 'dashboard animation must exist before paint');
+  assert.deepEqual(harness.focusCalls(), {
+    triggerFocusCalls: 0,
+    dashboardFocusCalls: 0,
+    sessionHeadingFocusCalls: 0,
+  });
+  const dashboard = findElement(view, (element) => element.type === harness.PaperTradingDashboard);
+  assert.equal(dashboard?.props.focusHeadingOnMount, false);
+  assert.deepEqual(harness.timelines[0].from, { autoAlpha: 0, x: 18 });
+  assert.equal(harness.timelines[0].to.duration, 0.26);
+
+  harness.timelines[0].options.onComplete();
+  assert.equal(harness.focusCalls().dashboardFocusCalls, 1);
+
+  harness.paperTrading.view = 'session';
+  view = harness.render();
+  assert.equal(harness.timelines.length, 2);
+  assert.deepEqual(harness.cleanupCalls(), { contextReverts: 1, timelineKills: 1 });
+  assert.equal(harness.focusCalls().triggerFocusCalls, 0);
+  harness.timelines[1].options.onComplete();
+  assert.deepEqual(harness.focusCalls(), {
+    triggerFocusCalls: 1,
+    dashboardFocusCalls: 1,
+    sessionHeadingFocusCalls: 0,
+  });
+
+  harness.unmount();
+  assert.deepEqual(harness.cleanupCalls(), { contextReverts: 2, timelineKills: 2 });
+});
+
+test('paper dashboard autofocus can be disabled without changing its standalone default', () => {
+  function renderDashboard(props) {
+    let focusCalls = 0;
+    const react = {
+      useEffect(effect) {
+        effect();
+      },
+      useRef() {
+        return { current: { focus: () => (focusCalls += 1) } };
+      },
+      useState(value) {
+        return [value, () => undefined];
+      },
+    };
+    const icon = () => null;
+    const context = {
+      readiness: 'ready',
+      portfolio: { startingCashPaise: 10_000_000, holdings: [], fills: [] },
+      draft: null,
+      error: null,
+      closeDashboard() {},
+      confirmDraft() {},
+      resetPortfolio() {},
+    };
+    const Dashboard = compile(
+      'components/paper-trading/paper-trading-dashboard.tsx',
+      new Map([
+        ['react', react],
+        ['react/jsx-runtime', jsxRuntime],
+        ['lucide-react', new Proxy({}, { get: () => icon })],
+        [
+          '@radix-ui/react-dialog',
+          {
+            Root: 'div',
+            Trigger: 'div',
+            Portal: 'div',
+            Overlay: 'div',
+            Content: 'div',
+            Title: 'div',
+            Description: 'div',
+            Close: 'div',
+          },
+        ],
+        ['@/components/paper-trading/activity-ledger', { ActivityLedger: () => null }],
+        ['@/components/paper-trading/holdings-ledger', { HoldingsLedger: () => null }],
+        ['@/components/paper-trading/order-review', { OrderReview: () => null }],
+        ['@/components/paper-trading/paper-trading-provider', { usePaperTrading: () => context }],
+        ['@/components/paper-trading/portfolio-summary', { PortfolioSummary: () => null }],
+      ])
+    ).PaperTradingDashboard;
+    Dashboard(props);
+    return focusCalls;
+  }
+
+  assert.equal(renderDashboard({ focusHeadingOnMount: false }), 0);
+  assert.equal(renderDashboard({}), 1);
 });

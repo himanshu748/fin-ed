@@ -115,6 +115,13 @@ function statefulReact(refCurrents = []) {
           pendingEffects.push({ index, effect, dependencies });
         }
       },
+      useLayoutEffect(effect, dependencies) {
+        const index = effectCursor;
+        effectCursor += 1;
+        if (dependenciesChanged(effectRecords[index]?.dependencies, dependencies)) {
+          pendingEffects.push({ index, effect, dependencies });
+        }
+      },
       useRef(initialValue) {
         const index = refCursor;
         refCursor += 1;
@@ -266,6 +273,7 @@ function loadSessionViewForFocus(react, paperTrading) {
     new Map([
       ['react', react],
       ['react/jsx-runtime', jsxRuntime],
+      ['gsap', { gsap: {} }],
       ['livekit-client', { ConnectionState: connectionState }],
       ['lucide-react', iconModule],
       ['motion/react', { useReducedMotion: () => true }],

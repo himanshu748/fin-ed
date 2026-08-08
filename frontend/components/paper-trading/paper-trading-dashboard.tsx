@@ -13,7 +13,13 @@ const RESET_COMPLETE_STATUS = 'Practice portfolio reset.';
 const RESET_STORAGE_RECOVERY =
   'Browser storage is unavailable. Close this dialog, restore site storage access, then reload.';
 
-export function PaperTradingDashboard() {
+interface PaperTradingDashboardProps {
+  focusHeadingOnMount?: boolean;
+}
+
+export function PaperTradingDashboard({
+  focusHeadingOnMount = true,
+}: PaperTradingDashboardProps = {}) {
   const { readiness, portfolio, draft, error, closeDashboard, confirmDraft, resetPortfolio } =
     usePaperTrading();
   const [isResetOpen, setIsResetOpen] = useState(false);
@@ -22,8 +28,8 @@ export function PaperTradingDashboard() {
   const dashboardHeadingRef = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
-    dashboardHeadingRef.current?.focus();
-  }, []);
+    if (focusHeadingOnMount) dashboardHeadingRef.current?.focus();
+  }, [focusHeadingOnMount]);
 
   async function handleReset() {
     if (isResetting) return;
