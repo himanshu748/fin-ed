@@ -197,6 +197,27 @@ test('keeps the connected experience educational, transparent, and single-discon
   assert.ok(!controls.includes('autoFocus'), 'chat input must not steal focus');
 });
 
+test('keeps voice controls mounted while the paper workspace replaces only session content', () => {
+  const session = read('components/app/fin-ed-session-view.tsx');
+
+  includesAll(
+    session,
+    [
+      'usePaperTrading',
+      'Paper trading',
+      '<PaperTradingDashboard',
+      '<AgentControlBar',
+      'paperTrading.view ===',
+    ],
+    'missing connected paper view integration'
+  );
+  assert.ok(
+    session.indexOf('<AgentControlBar') > session.indexOf("paperTrading.view === 'dashboard'"),
+    'AgentControlBar must remain outside the conditional paper workspace'
+  );
+  assert.ok(!session.includes('session.end()'), 'opening paper trading must not end the session');
+});
+
 test('honors reduced motion without idle animation loops', () => {
   const styles = read('styles/globals.css');
   const reveal = read('components/app/reveal.tsx');
