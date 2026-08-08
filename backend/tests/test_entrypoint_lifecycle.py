@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import date
@@ -8,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from livekit import rtc
 
 import agent as entrypoint
 from fined.knowledge.ingest import BuildError
@@ -52,6 +54,7 @@ class FakeSession:
         self.fail_at = fail_at
         self.userdata: object | None = None
         self.kwargs: dict[str, object] = {}
+        self.spoken: list[str] = []
 
     def on(self, event_name: str):
         assert event_name == "metrics_collected"
@@ -72,17 +75,41 @@ class FakeSession:
 
     async def say(self, greeting: str) -> None:
         self.events.append("say")
+        self.spoken.append(greeting)
         if self.fail_at == "say":
             raise LifecycleAbort("say")
-        assert "Indian markets learning companion" in greeting
-        assert "track" not in greeting.casefold()
+        if len(self.spoken) == 1:
+            assert "Indian markets learning companion" in greeting
+            assert "track" not in greeting.casefold()
+
+
+class FakeLocalParticipant:
+    def __init__(self, events: list[str], fail_at: str | None) -> None:
+        self.events = events
+        self.fail_at = fail_at
+        self.rpc_methods: dict[str, Any] = {}
+        self.outbound_rpc_calls: list[dict[str, object]] = []
+
+    def register_rpc_method(self, method_name: str, handler: Any) -> Any:
+        self.events.append("rpc_registration")
+        if self.fail_at == "rpc_registration":
+            raise LifecycleAbort("rpc_registration")
+        self.rpc_methods[method_name] = handler
+        return handler
+
+    async def perform_rpc(self, **kwargs: object) -> str:
+        self.outbound_rpc_calls.append(kwargs)
+        return '{"version":1,"paper":true,"opened":true}'
 
 
 class FakeContext:
     def __init__(self, events: list[str], fail_at: str | None) -> None:
         self.events = events
         self.fail_at = fail_at
-        self.room = SimpleNamespace(name="test-room")
+        self.local_participant = FakeLocalParticipant(events, fail_at)
+        self.room = SimpleNamespace(
+            name="test-room", local_participant=self.local_participant
+        )
         self.proc = SimpleNamespace(userdata={"vad": object()})
         self.log_context_fields: dict[str, str] = {}
         self.shutdown_callbacks: list[Any] = []
@@ -92,7 +119,9 @@ class FakeContext:
 
     async def wait_for_participant(self) -> SimpleNamespace:
         self.events.append("participant")
-        return SimpleNamespace(metadata='{"learning_mode":"stocks"}')
+        return SimpleNamespace(
+            identity="learner-1", metadata='{"learning_mode":"stocks"}'
+        )
 
     def add_shutdown_callback(self, callback: Any) -> None:
         self.events.append("shutdown_registration")
@@ -244,6 +273,7 @@ def _install_lifecycle_fakes(
         "session",
         "usage",
         "metrics_registration",
+        "rpc_registration",
         "shutdown_registration",
         "start",
         "say",
@@ -307,6 +337,7 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
         "session",
         "usage",
         "metrics_registration",
+        "rpc_registration",
         "shutdown_registration",
         "start",
         "say",
@@ -316,6 +347,13 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
     state = harness.session.userdata
     assert state is not None
     assert state.profile.learning_mode is LearningMode.STOCKS  # type: ignore[union-attr]
+    assert state.paper_trading is not None  # type: ignore[union-attr]
+    dashboard_ack = await state.paper_trading.open_dashboard()  # type: ignore[union-attr]
+    assert dashboard_ack.opened is True
+    assert (
+        harness.context.local_participant.outbound_rpc_calls[0]["destination_identity"]
+        == "learner-1"
+    )
     assert harness.llm_kwargs == {
         "model": "gemini-3.6-flash",
         "thinking_config": {"thinking_level": "minimal"},
@@ -338,6 +376,65 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
     await callback("duplicate shutdown")
 
     assert harness.client.aio.close_attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_result_rpc_accepts_only_original_participant_and_strict_payload(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    harness = _install_lifecycle_fakes(monkeypatch, None, tmp_path / "generated")
+    await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
+    handler = harness.context.local_participant.rpc_methods[
+        "fined.paper.v1.order_result"
+    ]
+    payload = json.dumps(
+        {
+            "version": 1,
+            "paper": True,
+            "draft_id": "draft-1",
+            "side": "buy",
+            "trading_symbol": "RELIANCE-EQ",
+            "quantity": 1,
+            "fill_price_paise": 250_050,
+            "simulated_at": "2026-08-08T09:15:00+00:00",
+            "cash_paise": 9_749_950,
+        }
+    )
+
+    with pytest.raises(rtc.RpcError, match="not authorized"):
+        await handler(rtc.RpcInvocationData("request-1", "intruder", payload, 5.0))
+
+    acknowledgement = await handler(
+        rtc.RpcInvocationData("request-2", "learner-1", payload, 5.0)
+    )
+
+    assert acknowledgement == '{"version":1,"paper":true,"acknowledged":true}'
+    assert len(harness.session.spoken) == 2
+    assert harness.session.spoken[-1] == (
+        "The browser confirmed the simulated paper result."
+    )
+
+
+@pytest.mark.asyncio
+async def test_result_rpc_rejects_malformed_payload_without_speaking_private_data(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    harness = _install_lifecycle_fakes(monkeypatch, None, tmp_path / "generated")
+    await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
+    handler = harness.context.local_participant.rpc_methods[
+        "fined.paper.v1.order_result"
+    ]
+
+    with pytest.raises(rtc.RpcError) as failure:
+        await handler(
+            rtc.RpcInvocationData(
+                "request-1", "learner-1", '{"access_token":"secret"}', 5.0
+            )
+        )
+
+    assert str(failure.value) == "Invalid paper result."
+    assert "secret" not in str(failure.value)
+    assert len(harness.session.spoken) == 1
 
 
 @pytest.mark.asyncio

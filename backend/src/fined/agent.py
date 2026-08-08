@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
-from datetime import date
-from decimal import Decimal, DecimalException, InvalidOperation
+from datetime import UTC, date, datetime
+from decimal import ROUND_HALF_UP, Decimal, DecimalException, InvalidOperation
 from typing import Protocol
+from zoneinfo import ZoneInfo
 
 from livekit.agents import (
     Agent,
@@ -21,14 +23,16 @@ from livekit.agents import (
 
 from fined.calculator import (
     BSE_GROUPS,
+    DeliveryFill,
     DeliveryTrade,
     ScheduleConfigurationError,
     UnsupportedScheduleError,
+    calculate_delivery_fill,
     calculate_delivery_trade,
 )
 from fined.guardrails import evaluate_guardrail, render_refusal
 from fined.knowledge.index import SearchHit
-from fined.market_data.models import QuoteRequest
+from fined.market_data.models import InstrumentSearchRequest, QuoteRequest
 from fined.market_data.provider import (
     MARKET_DATA_UNAVAILABLE_MESSAGE,
     MarketDataProvider,
@@ -36,11 +40,19 @@ from fined.market_data.provider import (
     UnavailableMarketDataProvider,
 )
 from fined.modes import LearningMode, parse_learning_mode
+from fined.paper_trading import (
+    PAPER_DRAFT_LIFETIME,
+    PaperOrderDraft,
+    PaperTradingBridge,
+    PaperTradingUIUnavailableError,
+)
+from fined.paper_trading.bridge import PAPER_TRADING_UI_UNAVAILABLE_MESSAGE
 from fined.speech import strip_markdown_links_for_speech
 
 MAX_PARTICIPANT_METADATA_BYTES = 1024
 MAX_SEARCH_QUERY_BYTES = 4096
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_INDIA_TIME = ZoneInfo("Asia/Kolkata")
 
 _TOPIC_NAMES = {
     LearningMode.STOCKS: "Stocks",
@@ -70,12 +82,27 @@ class ParticipantProfile:
     learning_mode: LearningMode = LearningMode.GENERAL
 
 
+class _UnavailablePaperTradingBridge:
+    async def open_dashboard(self):
+        raise PaperTradingUIUnavailableError()
+
+    async def prepare_order(self, draft: PaperOrderDraft):
+        del draft
+        raise PaperTradingUIUnavailableError()
+
+    async def get_portfolio_summary(self):
+        raise PaperTradingUIUnavailableError()
+
+
 @dataclass
 class SessionState:
     profile: ParticipantProfile
     retriever: KnowledgeRetriever
     market_data: MarketDataProvider = field(
         default_factory=UnavailableMarketDataProvider
+    )
+    paper_trading: PaperTradingBridge = field(
+        default_factory=_UnavailablePaperTradingBridge
     )
 
 
@@ -121,6 +148,13 @@ KNOWLEDGE
 - Use retrieval for facts that can change, including taxes, charges, prices, broker policies, and regulations.
 - Use the quote tool only for a timestamped current price. A quote is educational data, never an order or recommendation.
 - If current evidence is unavailable, say it could not be verified instead of guessing.
+
+PAPER TRADING
+- Paper trading is a browser-only educational simulation with virtual money.
+- Use open_paper_trading_dashboard for intent to practise or view the paper portfolio.
+- Use prepare_paper_order only after side, supported instrument, and positive whole quantity are known.
+- The tool prepares a draft. Never say it filled until the browser reports a confirmed paper result.
+- Never provide a recommendation or convert a paper request into a real broker action.
 
 LANGUAGE
 - Reply entirely in English when the user speaks English.
@@ -313,6 +347,184 @@ class FinEdAssistant(Agent):
         )
         return result
 
+    @function_tool(name="open_paper_trading_dashboard")
+    async def open_paper_trading_dashboard(
+        self,
+        context: RunContext[SessionState],
+    ) -> dict[str, object]:
+        """Open the learner's browser-only paper dashboard without placing an order."""
+        try:
+            acknowledgement = await context.userdata.paper_trading.open_dashboard()
+        except Exception:
+            raise ToolError(PAPER_TRADING_UI_UNAVAILABLE_MESSAGE) from None
+        return {
+            "opened": acknowledgement.opened,
+            "paper": True,
+            "is_order": False,
+        }
+
+    @function_tool(name="search_market_instruments")
+    async def search_market_instruments(
+        self,
+        context: RunContext[SessionState],
+        query: str,
+        exchange: str | None = None,
+    ) -> dict[str, object]:
+        """Find supported cash-market instruments without selecting one implicitly.
+
+        Args:
+            query: Instrument name or trading-symbol text, from 1 to 128 characters.
+            exchange: Optional exact cash exchange, NSE or BSE.
+        """
+        try:
+            request = InstrumentSearchRequest(query=query, exchange=exchange)
+        except (TypeError, ValueError) as exc:
+            raise ToolError(str(exc)) from None
+        try:
+            instruments = await context.userdata.market_data.search_instruments(request)
+        except Exception:
+            raise ToolError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
+
+        matches = [instrument.to_public_dict() for instrument in instruments]
+        if len(matches) == 1:
+            message = "Use the exact exchange and symbol token shown for a paper draft."
+        elif matches:
+            message = "Ask the learner to choose one exact exchange and instrument."
+        else:
+            message = "No supported cash equity or ETF instrument was found."
+        return {
+            "matches": matches,
+            "requires_selection": len(matches) != 1,
+            "paper": True,
+            "is_order": False,
+            "message": message,
+        }
+
+    @function_tool(name="prepare_paper_order")
+    async def prepare_paper_order(
+        self,
+        context: RunContext[SessionState],
+        side: str,
+        exchange: str,
+        symbol_token: str,
+        quantity: int,
+        bse_group: str | None = None,
+    ) -> dict[str, object]:
+        """Prepare an expiring delivery draft for browser confirmation only.
+
+        Args:
+            side: Exact paper side, buy or sell.
+            exchange: Cash-market exchange, exactly NSE or BSE.
+            symbol_token: Numeric token from search_market_instruments.
+            quantity: Positive whole share or ETF-unit quantity.
+            bse_group: Optional allowlisted BSE scrip group for charge estimation.
+        """
+        state = context.userdata
+        if state.profile.learning_mode is LearningMode.FNO:
+            raise ToolError(
+                "Paper order preparation supports cash equity and ETF delivery only."
+            )
+        if not isinstance(side, str) or side not in {"buy", "sell"}:
+            raise ToolError("side must be buy or sell.")
+        parsed_quantity = _positive_integer(quantity, "quantity")
+        try:
+            quote_request = QuoteRequest(exchange=exchange, symbol_token=symbol_token)
+        except (TypeError, ValueError) as exc:
+            raise ToolError(str(exc)) from None
+        try:
+            quote = await state.market_data.get_quote(quote_request)
+        except Exception:
+            raise ToolError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
+
+        quote_time = quote.exchange_time
+        expires_at = quote_time + PAPER_DRAFT_LIFETIME
+        if expires_at <= datetime.now(UTC):
+            raise ToolError("A fresh quote is required to prepare a paper order.")
+        try:
+            price_paise = _rupees_to_paise(quote.last_traded_price)
+            notional_paise = parsed_quantity * price_paise
+        except (DecimalException, OverflowError, ValueError):
+            raise ToolError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
+
+        charge_paise: int | None = None
+        cash_effect_paise: int | None = None
+        charge_status = "unavailable"
+        try:
+            parsed_bse_group = _validate_bse_group(exchange, bse_group)
+            breakdown = calculate_delivery_fill(
+                DeliveryFill(
+                    side=side,
+                    trade_date=quote.exchange_time.astimezone(_INDIA_TIME).date(),
+                    exchange=exchange,
+                    quantity=parsed_quantity,
+                    price=quote.last_traded_price,
+                    brokerage_promotion_applies=False,
+                    bse_group=parsed_bse_group,
+                )
+            )
+            charge_paise = _rupees_to_paise(breakdown.total_charges)
+            cash_effect_paise = (
+                -(notional_paise + charge_paise)
+                if side == "buy"
+                else notional_paise - charge_paise
+            )
+            charge_status = "estimated"
+        except Exception:
+            pass
+
+        try:
+            draft = PaperOrderDraft(
+                draft_id=secrets.token_urlsafe(18),
+                side=side,
+                exchange=exchange,
+                symbol_token=symbol_token,
+                trading_symbol=quote.trading_symbol,
+                quantity=parsed_quantity,
+                price_paise=price_paise,
+                quote_provider=quote.provider,
+                quote_time=quote_time,
+                expires_at=expires_at,
+                notional_paise=notional_paise,
+                charge_paise=charge_paise,
+                cash_effect_paise=cash_effect_paise,
+                charge_status=charge_status,
+            )
+            acknowledgement = await state.paper_trading.prepare_order(draft)
+            if not acknowledgement.prepared:
+                raise PaperTradingUIUnavailableError()
+        except Exception:
+            raise ToolError(PAPER_TRADING_UI_UNAVAILABLE_MESSAGE) from None
+        return {
+            "paper": True,
+            "prepared": True,
+            "draft_id": draft.draft_id,
+            "requires_browser_confirmation": True,
+            "filled": False,
+            "is_order": False,
+            "message": (
+                "A paper draft is ready in the browser. It is not filled unless "
+                "the learner confirms it there."
+            ),
+        }
+
+    @function_tool(name="get_paper_portfolio_summary")
+    async def get_paper_portfolio_summary(
+        self,
+        context: RunContext[SessionState],
+    ) -> dict[str, object]:
+        """Read the browser-owned virtual-money paper portfolio summary."""
+        try:
+            summary = await context.userdata.paper_trading.get_portfolio_summary()
+        except Exception:
+            raise ToolError(PAPER_TRADING_UI_UNAVAILABLE_MESSAGE) from None
+        return {
+            "cash_paise": summary.cash_paise,
+            "holdings_value_paise": summary.holdings_value_paise,
+            "total_value_paise": summary.total_value_paise,
+            "paper": True,
+            "is_order": False,
+        }
+
     @function_tool(name="calculate_angel_one_trade_cost")
     async def calculate_angel_one_trade_cost(
         self,
@@ -467,6 +679,13 @@ def _positive_decimal(value: object, field: str) -> Decimal:
     if not parsed.is_finite() or parsed <= 0:
         raise ToolError(f"{field} must be a positive finite decimal string.")
     return parsed
+
+
+def _rupees_to_paise(value: Decimal) -> int:
+    paise = (value * Decimal(100)).quantize(Decimal(1), rounding=ROUND_HALF_UP)
+    if not paise.is_finite() or paise <= 0:
+        raise ValueError("money value must be finite and positive")
+    return int(paise)
 
 
 def _validate_bse_group(exchange: str, value: str | None) -> str | None:

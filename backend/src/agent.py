@@ -34,6 +34,8 @@ from fined.knowledge.embeddings import GeminiEmbedder
 from fined.knowledge.index import KnowledgeIndex, UnavailableKnowledgeRetriever
 from fined.market_data.angel_one import create_market_data_provider
 from fined.murf_falcon import install_current_websocket_serializer
+from fined.paper_trading import LiveKitPaperTradingBridge
+from fined.paper_trading.models import decode_paper_order_result
 
 logger = logging.getLogger("agent")
 
@@ -43,6 +45,9 @@ KNOWLEDGE_DIRECTORY = (
 KNOWLEDGE_UNAVAILABLE_WARNING = (
     "Knowledge index is unavailable; starting in evidence-unavailable mode"
 )
+PAPER_ORDER_RESULT_METHOD = "fined.paper.v1.order_result"
+PAPER_RESULT_ACK = '{"version":1,"paper":true,"acknowledged":true}'
+PAPER_RESULT_SENTENCE = "The browser confirmed the simulated paper result."
 
 # Preserve the starter's evaluation import and prompt seams.
 Assistant = FinEdAssistant
@@ -113,11 +118,15 @@ async def my_agent(ctx: JobContext) -> None:
         install_current_websocket_serializer()
         embedder = GeminiEmbedder(embedding_client)
         index = _load_knowledge_retriever(KNOWLEDGE_DIRECTORY, embedder)
+        paper_trading = LiveKitPaperTradingBridge(
+            ctx.room.local_participant, participant.identity
+        )
         session = AgentSession[SessionState](
             userdata=SessionState(
                 profile=profile,
                 retriever=index,
                 market_data=create_market_data_provider(),
+                paper_trading=paper_trading,
             ),
             stt=deepgram.STT(
                 model="nova-3",
@@ -145,6 +154,20 @@ async def my_agent(ctx: JobContext) -> None:
             metrics.log_metrics(event.metrics, logger=logger)
             usage.collect(event.metrics)
             _log_latency_components(event.metrics)
+
+        async def on_paper_order_result(data: rtc.RpcInvocationData) -> str:
+            if data.caller_identity != participant.identity:
+                raise rtc.RpcError(2001, "Paper result caller is not authorized.")
+            try:
+                decode_paper_order_result(data.payload)
+            except Exception:
+                raise rtc.RpcError(2002, "Invalid paper result.") from None
+            await session.say(PAPER_RESULT_SENTENCE)
+            return PAPER_RESULT_ACK
+
+        ctx.room.local_participant.register_rpc_method(
+            PAPER_ORDER_RESULT_METHOD, on_paper_order_result
+        )
 
         async def on_shutdown(reason: str) -> None:
             del reason
