@@ -105,6 +105,7 @@ test('rejects impossible calendar dates in drafts and reducer actions', () => {
     /timestamp/
   );
   assert.throws(() => createPaperPortfolio('2026-02-30T00:00:00.000Z', 'portfolio-1'), /timestamp/);
+  assert.throws(() => createPaperPortfolio('0000-01-01T00:00:00.000Z', 'portfolio-1'), /timestamp/);
 });
 
 test('records a confirmed paper buy once without mutating the prior portfolio', () => {

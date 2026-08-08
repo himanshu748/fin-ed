@@ -37,6 +37,27 @@ function memoryStorage(entries = {}) {
   };
 }
 
+function exclusiveLockCoordinator() {
+  let tail = Promise.resolve();
+  let requestCount = 0;
+  return {
+    get requestCount() {
+      return requestCount;
+    },
+    request(name, options, callback) {
+      assert.equal(name, PAPER_PORTFOLIO_STORAGE_KEY);
+      assert.deepEqual(options, { mode: 'exclusive' });
+      requestCount += 1;
+      const result = tail.then(callback);
+      tail = result.then(
+        () => undefined,
+        () => undefined
+      );
+      return result;
+    },
+  };
+}
+
 function buyDraft() {
   return decodePaperOrderDraft({
     version: 1,
@@ -85,11 +106,15 @@ test('reports a missing browser portfolio without creating one', () => {
   assert.deepEqual(loadPaperPortfolio(storage), { status: 'missing' });
 });
 
-test('persists and strictly reloads a valid version-one portfolio', () => {
+test('persists and strictly reloads a valid version-one portfolio', async () => {
   const storage = memoryStorage();
   const portfolio = createPaperPortfolio(NOW, 'portfolio-1');
+  const locks = exclusiveLockCoordinator();
 
-  assert.deepEqual(savePaperPortfolio(storage, portfolio), { status: 'saved', portfolio });
+  assert.deepEqual(await savePaperPortfolio(storage, portfolio, locks), {
+    status: 'saved',
+    portfolio,
+  });
   assert.deepEqual(loadPaperPortfolio(storage), { status: 'ready', portfolio });
 });
 
@@ -148,7 +173,7 @@ test('rejects structurally valid portfolios whose fills cannot replay', () => {
   }
 });
 
-test('reports unavailable storage when browser access throws', () => {
+test('reports unavailable storage when browser access throws', async () => {
   const unavailable = {
     getItem() {
       throw new Error('blocked');
@@ -159,22 +184,31 @@ test('reports unavailable storage when browser access throws', () => {
   };
 
   assert.deepEqual(loadPaperPortfolio(unavailable), { status: 'unavailable' });
-  assert.deepEqual(savePaperPortfolio(unavailable, createPaperPortfolio(NOW, 'portfolio-1')), {
-    status: 'unavailable',
-  });
+  assert.deepEqual(
+    await savePaperPortfolio(
+      unavailable,
+      createPaperPortfolio(NOW, 'portfolio-1'),
+      exclusiveLockCoordinator()
+    ),
+    { status: 'unavailable' }
+  );
 });
 
-test('keeps the newer revision already written by another tab', () => {
+test('keeps the newer revision already written by another tab', async () => {
   const storage = memoryStorage();
   const older = createPaperPortfolio(NOW, 'portfolio-1');
   const newer = reducePaperPortfolio(older, { type: 'reset', now: '2026-08-08T00:01:00.000Z' });
+  const locks = exclusiveLockCoordinator();
 
-  assert.equal(savePaperPortfolio(storage, newer).status, 'saved');
-  assert.deepEqual(savePaperPortfolio(storage, older), { status: 'stale', portfolio: newer });
+  assert.equal((await savePaperPortfolio(storage, newer, locks)).status, 'saved');
+  assert.deepEqual(await savePaperPortfolio(storage, older, locks), {
+    status: 'stale',
+    portfolio: newer,
+  });
   assert.deepEqual(loadPaperPortfolio(storage), { status: 'ready', portfolio: newer });
 });
 
-test('rejects divergent equal-revision portfolios from another tab', () => {
+test('rejects divergent equal-revision portfolios from another tab', async () => {
   const storage = memoryStorage();
   const initial = createPaperPortfolio(NOW, 'portfolio-1');
   const existing = reducePaperPortfolio(initial, {
@@ -186,13 +220,47 @@ test('rejects divergent equal-revision portfolios from another tab', () => {
     draft: buyDraft(),
     now: '2026-08-08T00:00:02.000Z',
   });
+  const locks = exclusiveLockCoordinator();
 
   assert.equal(existing.revision, divergent.revision);
   assert.notDeepEqual(existing, divergent);
-  assert.equal(savePaperPortfolio(storage, existing).status, 'saved');
-  assert.deepEqual(savePaperPortfolio(storage, divergent), {
+  assert.equal((await savePaperPortfolio(storage, existing, locks)).status, 'saved');
+  assert.deepEqual(await savePaperPortfolio(storage, divergent, locks), {
     status: 'stale',
     portfolio: existing,
   });
   assert.deepEqual(loadPaperPortfolio(storage), { status: 'ready', portfolio: existing });
+});
+
+test('does not claim a safe save when cross-tab coordination is unavailable', async () => {
+  const storage = memoryStorage();
+  const portfolio = createPaperPortfolio(NOW, 'portfolio-1');
+
+  assert.deepEqual(await savePaperPortfolio(storage, portfolio, null), { status: 'unavailable' });
+  assert.deepEqual(loadPaperPortfolio(storage), { status: 'missing' });
+});
+
+test('serializes concurrent divergent revision-one saves through one exclusive lock', async () => {
+  const storage = memoryStorage();
+  const initial = createPaperPortfolio(NOW, 'portfolio-1');
+  const firstCandidate = reducePaperPortfolio(initial, {
+    type: 'reset',
+    now: '2026-08-08T00:00:01.000Z',
+  });
+  const secondCandidate = reducePaperPortfolio(initial, {
+    type: 'confirmDraft',
+    draft: buyDraft(),
+    now: '2026-08-08T00:00:02.000Z',
+  });
+  const locks = exclusiveLockCoordinator();
+
+  const first = savePaperPortfolio(storage, firstCandidate, locks);
+  const second = savePaperPortfolio(storage, secondCandidate, locks);
+  const [firstResult, secondResult] = await Promise.all([first, second]);
+
+  assert.equal(locks.requestCount, 2);
+  assert.equal([firstResult, secondResult].filter((result) => result.status === 'saved').length, 1);
+  assert.deepEqual(firstResult, { status: 'saved', portfolio: firstCandidate });
+  assert.deepEqual(secondResult, { status: 'stale', portfolio: firstCandidate });
+  assert.deepEqual(loadPaperPortfolio(storage), { status: 'ready', portfolio: firstCandidate });
 });

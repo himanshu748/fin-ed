@@ -78,3 +78,11 @@ export interface PaperPortfolioStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
 }
+
+export interface PaperPortfolioLockCoordinator {
+  request<T>(
+    name: string,
+    options: { mode: 'exclusive' },
+    callback: () => T | Promise<T>
+  ): Promise<T>;
+}
