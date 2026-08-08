@@ -296,6 +296,20 @@ def test_fill_promotion_uncertainty_is_called_out_as_an_estimate() -> None:
     assert any("promotion" in reason.lower() for reason in result.estimate_reasons)
 
 
+def test_fill_rejects_promotion_without_remaining_account_credit() -> None:
+    with pytest.raises(ValueError, match="remaining account-level promotion credit"):
+        calculate_delivery_fill(
+            DeliveryFill(
+                side="buy",
+                trade_date=date(2026, 8, 8),
+                exchange="NSE",
+                quantity=1,
+                price=Decimal("100"),
+                brokerage_promotion_applies=True,
+            )
+        )
+
+
 def test_fill_side_must_be_buy_or_sell() -> None:
     with pytest.raises(ValueError, match="side"):
         DeliveryFill(

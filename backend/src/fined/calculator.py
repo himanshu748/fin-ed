@@ -297,6 +297,11 @@ def calculate_delivery_trade(trade: DeliveryTrade) -> ChargeBreakdown:
 
 def calculate_delivery_fill(fill: DeliveryFill) -> FillChargeBreakdown:
     """Calculate a schedule-backed illustrative delivery estimate for one fill."""
+    if fill.brokerage_promotion_applies is True:
+        raise ValueError(
+            "Standalone promoted paper fills require remaining account-level promotion credit; "
+            "set brokerage_promotion_applies to False or None"
+        )
     schedule = _schedule_for(fill.trade_date)
     _validate_bse_group(fill, schedule)
     notional = Decimal(fill.quantity) * fill.price
