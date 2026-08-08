@@ -220,6 +220,33 @@ test('keeps voice controls mounted while the paper workspace replaces only sessi
   assert.ok(!session.includes('session.end()'), 'opening paper trading must not end the session');
 });
 
+test('keeps the paper workspace simulated, browser-owned, and quote-gated', () => {
+  const dashboard = read('components/paper-trading/paper-trading-dashboard.tsx');
+  const orderReview = read('components/paper-trading/order-review.tsx');
+  const portfolioSummary = read('components/paper-trading/portfolio-summary.tsx');
+
+  includesAll(
+    dashboard,
+    ['Paper trading only', 'starting virtual cash', 'No real money or broker account.'],
+    'missing paper portfolio safety boundary'
+  );
+  includesAll(
+    orderReview,
+    [
+      'Paper quote expired. Ask for a new quote.',
+      'This is a simulated paper order. No real money or broker order will be used.',
+      'Confirm paper buy',
+      'Confirm paper sell',
+    ],
+    'missing explicit paper fill and confirmation boundary'
+  );
+  includesAll(
+    portfolioSummary,
+    ['Current/live value:', 'Unavailable', 'trusted current quote is required'],
+    'missing honest no-quote state'
+  );
+});
+
 test('honors reduced motion without idle animation loops', () => {
   const styles = read('styles/globals.css');
   const reveal = read('components/app/reveal.tsx');

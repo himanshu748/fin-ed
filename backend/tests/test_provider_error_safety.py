@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import ast
 import importlib
 import logging
 import traceback
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -23,6 +25,26 @@ PROVIDER_REQUEST_ID_SENTINEL = "SECRET_PROVIDER_REQUEST_ID"
 PROVIDER_CAUSE_SENTINEL = "SECRET_PROVIDER_CAUSE"
 SYNCHRONOUS_UNEXPECTED_SENTINEL = "SECRET_SYNC_PROVIDER_EXCEPTION"
 
+FORBIDDEN_BROKER_ENDPOINTS = (
+    "placeOrder",
+    "modifyOrder",
+    "cancelOrder",
+    "orderBook",
+    "holding",
+    "rmsLimit",
+    "generateTokens",
+    "generateToken",
+    "generateSession",
+    "loginByPassword",
+    "logout",
+    "getFunds",
+    "getProfile",
+)
+ALLOWED_MARKET_ENDPOINTS = {
+    "https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote/",
+    "https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/searchScrip",
+}
+
 
 def _retryable_status_error_with_raw_cause() -> APIStatusError:
     try:
@@ -38,6 +60,56 @@ def _retryable_status_error_with_raw_cause() -> APIStatusError:
             ) from provider_cause
     except APIStatusError as error:
         return error
+
+
+def test_market_provider_contains_only_read_only_broker_endpoints() -> None:
+    provider_path = Path("src/fined/market_data/angel_one.py")
+    source = provider_path.read_text()
+    tree = ast.parse(source, filename=str(provider_path))
+
+    assert not any(
+        value.casefold() in source.casefold() for value in FORBIDDEN_BROKER_ENDPOINTS
+    )
+
+    endpoint_constants = {
+        node.value.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id.endswith("_ENDPOINT")
+            for target in node.targets
+        )
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    }
+    assert endpoint_constants == ALLOWED_MARKET_ENDPOINTS
+
+    http_client_names = {
+        item.optional_vars.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncWith)
+        for item in node.items
+        if isinstance(item.context_expr, ast.Call)
+        and isinstance(item.context_expr.func, ast.Attribute)
+        and isinstance(item.context_expr.func.value, ast.Name)
+        and item.context_expr.func.value.id == "httpx"
+        and item.context_expr.func.attr == "AsyncClient"
+        and isinstance(item.optional_vars, ast.Name)
+    }
+    assert http_client_names
+    http_calls = [
+        (node.func.attr, ast.unparse(node.args[0]))
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id in http_client_names
+        and node.func.attr in {"delete", "get", "patch", "post", "put", "request"}
+    ]
+    assert http_calls == [
+        ("post", "QUOTE_ENDPOINT"),
+        ("post", "SEARCH_SCRIP_ENDPOINT"),
+    ]
 
 
 class _FailingLLM(llm.LLM):
