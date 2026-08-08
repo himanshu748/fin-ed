@@ -9,6 +9,10 @@ import { OrderReview } from '@/components/paper-trading/order-review';
 import { usePaperTrading } from '@/components/paper-trading/paper-trading-provider';
 import { PortfolioSummary } from '@/components/paper-trading/portfolio-summary';
 
+const RESET_COMPLETE_STATUS = 'Practice portfolio reset.';
+const RESET_STORAGE_RECOVERY =
+  'Browser storage is unavailable. Close this dialog, restore site storage access, then reload.';
+
 export function PaperTradingDashboard() {
   const { readiness, portfolio, draft, error, closeDashboard, confirmDraft, resetPortfolio } =
     usePaperTrading();
@@ -22,12 +26,16 @@ export function PaperTradingDashboard() {
   }, []);
 
   async function handleReset() {
-    if (readiness !== 'ready' || isResetting) return;
+    if (isResetting) return;
+    if (readiness !== 'ready') {
+      setResetStatus(RESET_STORAGE_RECOVERY);
+      return;
+    }
     setIsResetting(true);
     const reset = await resetPortfolio();
     setResetStatus(
       reset
-        ? 'Practice portfolio reset.'
+        ? RESET_COMPLETE_STATUS
         : 'Practice portfolio could not be reset. Check browser storage access and try again.'
     );
     setIsResetting(false);
@@ -43,6 +51,8 @@ export function PaperTradingDashboard() {
   function preventPendingResetDismiss(event: { preventDefault(): void }) {
     if (isResetting) event.preventDefault();
   }
+
+  const resetDialogStatus = readiness === 'ready' ? resetStatus : RESET_STORAGE_RECOVERY;
 
   return (
     <main className="section-shell min-w-0 py-6 sm:py-8">
@@ -100,7 +110,7 @@ export function PaperTradingDashboard() {
       <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--ledger-rule)] pt-5">
         <div role="status" aria-live="polite" className="min-h-6 text-sm text-[var(--muted-ink)]">
           {error ??
-            (resetStatus === 'Practice portfolio reset.' ? resetStatus : null) ??
+            (resetStatus === RESET_COMPLETE_STATUS ? resetStatus : null) ??
             (readiness === 'ready' ? 'Paper ledger ready.' : 'Paper ledger unavailable.')}
         </div>
         <section aria-labelledby="paper-settings-heading" className="flex items-center gap-2">
@@ -158,12 +168,12 @@ export function PaperTradingDashboard() {
                   </Dialog.Close>
                 </div>
 
-                {resetStatus && resetStatus !== 'Practice portfolio reset.' ? (
+                {resetDialogStatus && resetDialogStatus !== RESET_COMPLETE_STATUS ? (
                   <p
                     role="alert"
                     className="mt-5 rounded-[8px] border border-[var(--risk-brick)] bg-[var(--risk-wash)] p-3 text-sm font-semibold text-[var(--risk-brick)]"
                   >
-                    {resetStatus}
+                    {resetDialogStatus}
                   </p>
                 ) : null}
 
@@ -179,7 +189,7 @@ export function PaperTradingDashboard() {
                   </Dialog.Close>
                   <button
                     type="button"
-                    aria-disabled={isResetting}
+                    aria-disabled={isResetting || readiness !== 'ready'}
                     onClick={handleReset}
                     className="min-h-11 min-w-11 rounded-[10px] bg-[var(--ledger-blue)] px-4 font-semibold text-white hover:bg-[var(--ledger-blue-hover)] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)] aria-disabled:cursor-not-allowed aria-disabled:bg-[var(--ledger-rule)] aria-disabled:text-[var(--muted-ink)]"
                   >

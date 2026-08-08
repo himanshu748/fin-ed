@@ -88,9 +88,10 @@ export function OrderReview({ draft, portfolio, readiness, onConfirm }: OrderRev
       const currentTime = Date.now();
       setNowMs(currentTime);
       if (document.hidden || currentTime >= expiresAtMs) return;
-      const untilNextSecond = 1_000 - (currentTime % 1_000);
       const untilExpiry = expiresAtMs - currentTime;
-      countdownTimer = setTimeout(refreshAndSchedule, Math.min(untilNextSecond, untilExpiry));
+      const remainingRemainder = untilExpiry % 1_000;
+      const untilNextLabel = remainingRemainder === 0 ? 1_000 : remainingRemainder;
+      countdownTimer = setTimeout(refreshAndSchedule, Math.min(untilNextLabel, untilExpiry));
     };
 
     document.addEventListener('visibilitychange', refreshAndSchedule);

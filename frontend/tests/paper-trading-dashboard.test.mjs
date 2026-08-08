@@ -508,7 +508,7 @@ test('calculates an honest paper quote countdown at the exact expiry boundary', 
   );
 });
 
-test('uses one scheduled timeout at a time and stops scheduling at expiry', () => {
+test('schedules each countdown update at the next displayed-label boundary', () => {
   const hooks = statefulReact();
   const { OrderReview } = loadOrderReview(hooks.react);
   const clock = fakeBrowserClock(Date.parse('2026-08-08T09:30:00.000Z'));
@@ -525,7 +525,7 @@ test('uses one scheduled timeout at a time and stops scheduling at expiry', () =
     assert.match(markup, /Expires in 00:03/);
     assert.equal(clock.intervalCallCount(), 0);
     assert.equal(clock.activeTimerCount(), 1);
-    assert.equal(clock.nextTimeoutDelay(), 1_000);
+    assert.equal(clock.nextTimeoutDelay(), 500);
 
     clock.runNextTimeout();
     markup = renderToStaticMarkup(hooks.render(OrderReview, props));
@@ -535,7 +535,7 @@ test('uses one scheduled timeout at a time and stops scheduling at expiry', () =
 
     clock.runNextTimeout();
     assert.equal(clock.activeTimerCount(), 1);
-    assert.equal(clock.nextTimeoutDelay(), 500);
+    assert.equal(clock.nextTimeoutDelay(), 1_000);
 
     clock.runNextTimeout();
     markup = renderToStaticMarkup(hooks.render(OrderReview, props));
@@ -690,6 +690,68 @@ test('keeps a rejected reset open with retry guidance inside the Radix dialog', 
   );
   assert.notEqual(retry?.props.disabled, true, 'failed reset must leave retry focusable');
   assert.notEqual(retry?.props['aria-disabled'], true, 'failed reset must leave retry enabled');
+});
+
+test('fails closed when reset persistence makes browser storage unavailable', async () => {
+  let resetCalls = 0;
+  const context = {
+    view: 'dashboard',
+    readiness: 'ready',
+    portfolio: portfolio(),
+    draft: null,
+    error: null,
+    openDashboard() {},
+    closeDashboard() {},
+    async confirmDraft() {
+      return true;
+    },
+    async resetPortfolio() {
+      resetCalls += 1;
+      context.readiness = 'unavailable';
+      return false;
+    },
+  };
+  const hooks = statefulReact();
+  const Dashboard = loadDashboardForInteraction(hooks.react, context);
+  let tree = hooks.render(Dashboard, {});
+  let root = findElement(tree, (element) => element.type === Dialog.Root);
+  root.props.onOpenChange(true);
+
+  tree = hooks.render(Dashboard, {});
+  root = findElement(tree, (element) => element.type === Dialog.Root);
+  let content = findElement(root, (element) => element.type === Dialog.Content);
+  let confirm = findElement(
+    content,
+    (element) => element.type === 'button' && textContent(element) === 'Confirm reset practice'
+  );
+  await confirm.props.onClick();
+
+  tree = hooks.render(Dashboard, {});
+  root = findElement(tree, (element) => element.type === Dialog.Root);
+  content = findElement(root, (element) => element.type === Dialog.Content);
+  const alert = findElement(content, (element) => element.props?.role === 'alert');
+  confirm = findElement(
+    content,
+    (element) => element.type === 'button' && textContent(element) === 'Confirm reset practice'
+  );
+
+  assert.equal(root.props.open, true, 'unavailable storage must leave recovery guidance visible');
+  assert.equal(resetCalls, 1);
+  assert.ok(alert, 'storage recovery guidance must be inside Dialog.Content');
+  assert.match(textContent(alert), /browser storage is unavailable/i);
+  assert.match(textContent(alert), /close.*restore site storage access.*reload/i);
+  assert.doesNotMatch(textContent(alert), /try again/i);
+  assert.equal(confirm?.props['aria-disabled'], true, 'reset must be visibly unavailable');
+
+  await confirm.props.onClick();
+  tree = hooks.render(Dashboard, {});
+  root = findElement(tree, (element) => element.type === Dialog.Root);
+  content = findElement(root, (element) => element.type === Dialog.Content);
+  assert.equal(resetCalls, 1, 'an unavailable provider must not be called again');
+  assert.match(
+    textContent(findElement(content, (element) => element.props?.role === 'alert')),
+    /browser storage is unavailable/i
+  );
 });
 
 test('blocks every Radix dismissal path while reset persistence is pending', async () => {
