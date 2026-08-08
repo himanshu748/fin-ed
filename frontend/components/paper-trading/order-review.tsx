@@ -73,13 +73,32 @@ export function OrderReview({ draft, portfolio, readiness, onConfirm }: OrderRev
 
   useEffect(() => {
     if (!draftExpiresAt) return;
-    const updateNow = () => setNowMs(Date.now());
-    updateNow();
-    const countdownTimer = setInterval(updateNow, 1_000);
-    const expiryTimer = setTimeout(updateNow, Math.max(0, Date.parse(draftExpiresAt) - Date.now()));
+    const expiresAtMs = Date.parse(draftExpiresAt);
+    let active = true;
+    let countdownTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const clearCountdownTimer = () => {
+      if (countdownTimer === null) return;
+      clearTimeout(countdownTimer);
+      countdownTimer = null;
+    };
+    const refreshAndSchedule = () => {
+      if (!active) return;
+      clearCountdownTimer();
+      const currentTime = Date.now();
+      setNowMs(currentTime);
+      if (document.hidden || currentTime >= expiresAtMs) return;
+      const untilNextSecond = 1_000 - (currentTime % 1_000);
+      const untilExpiry = expiresAtMs - currentTime;
+      countdownTimer = setTimeout(refreshAndSchedule, Math.min(untilNextSecond, untilExpiry));
+    };
+
+    document.addEventListener('visibilitychange', refreshAndSchedule);
+    refreshAndSchedule();
     return () => {
-      clearInterval(countdownTimer);
-      clearTimeout(expiryTimer);
+      active = false;
+      clearCountdownTimer();
+      document.removeEventListener('visibilitychange', refreshAndSchedule);
     };
   }, [draftExpiresAt]);
 

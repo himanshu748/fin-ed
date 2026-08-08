@@ -35,8 +35,13 @@ export function PaperTradingDashboard() {
   }
 
   function handleResetOpenChange(open: boolean) {
+    if (!open && isResetting) return;
     setIsResetOpen(open);
     if (open) setResetStatus(null);
+  }
+
+  function preventPendingResetDismiss(event: { preventDefault(): void }) {
+    if (isResetting) event.preventDefault();
   }
 
   return (
@@ -122,6 +127,9 @@ export function PaperTradingDashboard() {
               <Dialog.Content
                 role="dialog"
                 aria-modal="true"
+                onEscapeKeyDown={preventPendingResetDismiss}
+                onPointerDownOutside={preventPendingResetDismiss}
+                onInteractOutside={preventPendingResetDismiss}
                 className="fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-[12px] border border-[var(--ledger-rule)] bg-[var(--surface)] p-[18px] shadow-xl sm:p-6"
               >
                 <div className="flex items-start justify-between gap-4">
@@ -142,7 +150,8 @@ export function PaperTradingDashboard() {
                     <button
                       type="button"
                       aria-label="Close reset confirmation"
-                      className="grid min-h-11 min-w-11 shrink-0 place-items-center rounded-[10px] text-[var(--ledger-blue)] hover:bg-[var(--blue-wash)] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)]"
+                      disabled={isResetting}
+                      className="grid min-h-11 min-w-11 shrink-0 place-items-center rounded-[10px] text-[var(--ledger-blue)] hover:bg-[var(--blue-wash)] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)] disabled:cursor-not-allowed disabled:text-[var(--muted-ink)]"
                     >
                       <X aria-hidden="true" className="size-5" />
                     </button>
@@ -162,16 +171,17 @@ export function PaperTradingDashboard() {
                   <Dialog.Close asChild>
                     <button
                       type="button"
-                      className="min-h-11 min-w-11 rounded-[10px] border border-[var(--ledger-blue)] px-4 font-semibold text-[var(--ledger-blue)] hover:bg-[var(--blue-wash)] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)]"
+                      disabled={isResetting}
+                      className="min-h-11 min-w-11 rounded-[10px] border border-[var(--ledger-blue)] px-4 font-semibold text-[var(--ledger-blue)] hover:bg-[var(--blue-wash)] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)] disabled:cursor-not-allowed disabled:border-[var(--ledger-rule)] disabled:text-[var(--muted-ink)]"
                     >
                       Keep practice portfolio
                     </button>
                   </Dialog.Close>
                   <button
                     type="button"
-                    disabled={isResetting}
+                    aria-disabled={isResetting}
                     onClick={handleReset}
-                    className="min-h-11 min-w-11 rounded-[10px] bg-[var(--ledger-blue)] px-4 font-semibold text-white hover:bg-[var(--ledger-blue-hover)] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)] disabled:cursor-not-allowed disabled:bg-[var(--ledger-rule)] disabled:text-[var(--muted-ink)]"
+                    className="min-h-11 min-w-11 rounded-[10px] bg-[var(--ledger-blue)] px-4 font-semibold text-white hover:bg-[var(--ledger-blue-hover)] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)] aria-disabled:cursor-not-allowed aria-disabled:bg-[var(--ledger-rule)] aria-disabled:text-[var(--muted-ink)]"
                   >
                     {isResetting ? 'Resetting practice' : 'Confirm reset practice'}
                   </button>

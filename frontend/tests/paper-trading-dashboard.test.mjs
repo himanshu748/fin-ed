@@ -61,15 +61,40 @@ function loadOrderReview(react = React) {
 function statefulReact(refCurrents = []) {
   const states = [];
   const refs = [];
+  const effectRecords = [];
   let stateCursor = 0;
   let refCursor = 0;
-  let effects = [];
+  let effectCursor = 0;
+  let pendingEffects = [];
+
+  function dependenciesChanged(previous, next) {
+    if (previous === undefined || next === undefined || previous.length !== next.length)
+      return true;
+    return previous.some((value, index) => !Object.is(value, next[index]));
+  }
+
+  function flushEffects() {
+    for (const pending of pendingEffects) {
+      effectRecords[pending.index]?.cleanup?.();
+      const cleanup = pending.effect();
+      effectRecords[pending.index] = {
+        cleanup: typeof cleanup === 'function' ? cleanup : null,
+        dependencies: pending.dependencies,
+        effect: pending.effect,
+      };
+    }
+    pendingEffects = [];
+  }
 
   return {
     react: {
       ...React,
-      useEffect(effect) {
-        effects.push(effect);
+      useEffect(effect, dependencies) {
+        const index = effectCursor;
+        effectCursor += 1;
+        if (dependenciesChanged(effectRecords[index]?.dependencies, dependencies)) {
+          pendingEffects.push({ index, effect, dependencies });
+        }
       },
       useRef(initialValue) {
         const index = refCursor;
@@ -98,10 +123,115 @@ function statefulReact(refCurrents = []) {
     render(Component, props) {
       stateCursor = 0;
       refCursor = 0;
-      effects = [];
+      effectCursor = 0;
+      pendingEffects = [];
       const element = Component(props);
-      for (const effect of effects) effect();
+      flushEffects();
       return element;
+    },
+    strictModeReplayEffects() {
+      for (const record of effectRecords) record?.cleanup?.();
+      for (let index = 0; index < effectRecords.length; index += 1) {
+        const record = effectRecords[index];
+        if (!record) continue;
+        const cleanup = record.effect();
+        effectRecords[index] = {
+          ...record,
+          cleanup: typeof cleanup === 'function' ? cleanup : null,
+        };
+      }
+    },
+    unmount() {
+      for (const record of effectRecords) record?.cleanup?.();
+      effectRecords.length = 0;
+    },
+  };
+}
+
+function fakeBrowserClock(initialNow, initiallyHidden = false) {
+  const originalDateNow = Date.now;
+  const originalDocument = globalThis.document;
+  const hadDocument = 'document' in globalThis;
+  const originalSetInterval = globalThis.setInterval;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearInterval = globalThis.clearInterval;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const timeouts = new Map();
+  const intervals = new Map();
+  const visibilityListeners = new Set();
+  let nextTimerId = 1;
+  let now = initialNow;
+  let hidden = initiallyHidden;
+  let intervalCalls = 0;
+
+  Date.now = () => now;
+  globalThis.document = {
+    get hidden() {
+      return hidden;
+    },
+    addEventListener(name, listener) {
+      if (name === 'visibilitychange') visibilityListeners.add(listener);
+    },
+    removeEventListener(name, listener) {
+      if (name === 'visibilitychange') visibilityListeners.delete(listener);
+    },
+  };
+  globalThis.setTimeout = (callback, delay) => {
+    const id = nextTimerId;
+    nextTimerId += 1;
+    timeouts.set(id, { callback, delay });
+    return id;
+  };
+  globalThis.clearTimeout = (id) => {
+    timeouts.delete(id);
+  };
+  globalThis.setInterval = (callback, delay) => {
+    intervalCalls += 1;
+    const id = nextTimerId;
+    nextTimerId += 1;
+    intervals.set(id, { callback, delay });
+    return id;
+  };
+  globalThis.clearInterval = (id) => {
+    intervals.delete(id);
+  };
+
+  return {
+    activeTimerCount() {
+      return timeouts.size + intervals.size;
+    },
+    intervalCallCount() {
+      return intervalCalls;
+    },
+    nextTimeoutDelay() {
+      return timeouts.values().next().value?.delay ?? null;
+    },
+    runNextTimeout() {
+      const next = timeouts.entries().next().value;
+      assert.ok(next, 'an active timeout is required');
+      const [id, timer] = next;
+      timeouts.delete(id);
+      now += timer.delay;
+      timer.callback();
+    },
+    setNow(value) {
+      now = value;
+    },
+    setHidden(value) {
+      hidden = value;
+      for (const listener of [...visibilityListeners]) listener();
+    },
+    visibilityListenerCount() {
+      return visibilityListeners.size;
+    },
+    restore() {
+      Date.now = originalDateNow;
+      if (hadDocument) globalThis.document = originalDocument;
+      else delete globalThis.document;
+      globalThis.setInterval = originalSetInterval;
+      globalThis.setTimeout = originalSetTimeout;
+      globalThis.clearInterval = originalClearInterval;
+      globalThis.clearTimeout = originalClearTimeout;
     },
   };
 }
@@ -378,29 +508,10 @@ test('calculates an honest paper quote countdown at the exact expiry boundary', 
   );
 });
 
-test('updates the rendered countdown at one-second cadence and exactly at expiry', () => {
+test('uses one scheduled timeout at a time and stops scheduling at expiry', () => {
   const hooks = statefulReact();
   const { OrderReview } = loadOrderReview(hooks.react);
-  const originalDateNow = Date.now;
-  const originalSetInterval = globalThis.setInterval;
-  const originalSetTimeout = globalThis.setTimeout;
-  const originalClearInterval = globalThis.clearInterval;
-  const originalClearTimeout = globalThis.clearTimeout;
-  const intervals = [];
-  const timeouts = [];
-  let now = Date.parse('2026-08-08T09:30:00.000Z');
-
-  Date.now = () => now;
-  globalThis.setInterval = (callback, delay) => {
-    intervals.push({ callback, delay });
-    return 1;
-  };
-  globalThis.setTimeout = (callback, delay) => {
-    timeouts.push({ callback, delay });
-    return 2;
-  };
-  globalThis.clearInterval = () => undefined;
-  globalThis.clearTimeout = () => undefined;
+  const clock = fakeBrowserClock(Date.parse('2026-08-08T09:30:00.000Z'));
 
   const props = {
     draft: draft({ expiresAt: '2026-08-08T09:30:02.500Z' }),
@@ -412,20 +523,100 @@ test('updates the rendered countdown at one-second cadence and exactly at expiry
   try {
     let markup = renderToStaticMarkup(hooks.render(OrderReview, props));
     assert.match(markup, /Expires in 00:03/);
-    assert.equal(intervals[0]?.delay, 1_000);
-    assert.equal(timeouts[0]?.delay, 2_500);
+    assert.equal(clock.intervalCallCount(), 0);
+    assert.equal(clock.activeTimerCount(), 1);
+    assert.equal(clock.nextTimeoutDelay(), 1_000);
 
-    now = Date.parse('2026-08-08T09:30:02.500Z');
-    timeouts[0].callback();
+    clock.runNextTimeout();
+    markup = renderToStaticMarkup(hooks.render(OrderReview, props));
+    assert.match(markup, /Expires in 00:02/);
+    assert.equal(clock.activeTimerCount(), 1);
+    assert.equal(clock.nextTimeoutDelay(), 1_000);
+
+    clock.runNextTimeout();
+    assert.equal(clock.activeTimerCount(), 1);
+    assert.equal(clock.nextTimeoutDelay(), 500);
+
+    clock.runNextTimeout();
     markup = renderToStaticMarkup(hooks.render(OrderReview, props));
     assert.match(markup, /Expired/);
     assert.match(markup, /<button[^>]*disabled=""[^>]*>Confirm paper buy<\/button>/);
+    assert.equal(clock.activeTimerCount(), 0);
   } finally {
-    Date.now = originalDateNow;
-    globalThis.setInterval = originalSetInterval;
-    globalThis.setTimeout = originalSetTimeout;
-    globalThis.clearInterval = originalClearInterval;
-    globalThis.clearTimeout = originalClearTimeout;
+    hooks.unmount();
+    clock.restore();
+  }
+});
+
+test('suspends countdown scheduling while hidden and resumes from the wall clock', () => {
+  const hooks = statefulReact();
+  const { OrderReview } = loadOrderReview(hooks.react);
+  const start = Date.parse('2026-08-08T09:30:00.000Z');
+  const clock = fakeBrowserClock(start, true);
+  const props = {
+    draft: draft({ expiresAt: '2026-08-08T09:30:03.000Z' }),
+    portfolio: portfolio(),
+    readiness: 'ready',
+    onConfirm: async () => true,
+  };
+
+  try {
+    hooks.render(OrderReview, props);
+    assert.equal(clock.activeTimerCount(), 0);
+    assert.equal(clock.visibilityListenerCount(), 1);
+
+    clock.setNow(start + 1_500);
+    clock.setHidden(false);
+    let markup = renderToStaticMarkup(hooks.render(OrderReview, props));
+    assert.match(markup, /Expires in 00:02/);
+    assert.equal(clock.activeTimerCount(), 1);
+    assert.equal(clock.nextTimeoutDelay(), 500);
+
+    clock.setHidden(true);
+    assert.equal(clock.activeTimerCount(), 0);
+    clock.setNow(start + 3_500);
+    clock.setHidden(false);
+    markup = renderToStaticMarkup(hooks.render(OrderReview, props));
+    assert.match(markup, /Expired/);
+    assert.equal(clock.activeTimerCount(), 0);
+  } finally {
+    hooks.unmount();
+    clock.restore();
+  }
+});
+
+test('cleans and recreates one countdown scheduler across replacement, StrictMode, and unmount', () => {
+  const hooks = statefulReact();
+  const { OrderReview } = loadOrderReview(hooks.react);
+  const clock = fakeBrowserClock(Date.parse('2026-08-08T09:30:00.000Z'));
+  const props = {
+    draft: draft({ expiresAt: '2026-08-08T09:30:03.000Z' }),
+    portfolio: portfolio(),
+    readiness: 'ready',
+    onConfirm: async () => true,
+  };
+
+  try {
+    hooks.render(OrderReview, props);
+    assert.equal(clock.activeTimerCount(), 1);
+    assert.equal(clock.visibilityListenerCount(), 1);
+
+    hooks.render(OrderReview, {
+      ...props,
+      draft: draft({ draftId: 'draft-2', expiresAt: '2026-08-08T09:30:05.000Z' }),
+    });
+    assert.equal(clock.activeTimerCount(), 1);
+    assert.equal(clock.visibilityListenerCount(), 1);
+
+    hooks.strictModeReplayEffects();
+    assert.equal(clock.activeTimerCount(), 1);
+    assert.equal(clock.visibilityListenerCount(), 1);
+
+    hooks.unmount();
+    assert.equal(clock.activeTimerCount(), 0);
+    assert.equal(clock.visibilityListenerCount(), 0);
+  } finally {
+    clock.restore();
   }
 });
 
@@ -493,6 +684,104 @@ test('keeps a rejected reset open with retry guidance inside the Radix dialog', 
   assert.equal(resetCalls, 1);
   assert.ok(alert, 'failed reset guidance must be inside Dialog.Content');
   assert.match(textContent(alert), /could not be reset.*Try again/i);
+  const retry = findElement(
+    content,
+    (element) => element.type === 'button' && textContent(element) === 'Confirm reset practice'
+  );
+  assert.notEqual(retry?.props.disabled, true, 'failed reset must leave retry focusable');
+  assert.notEqual(retry?.props['aria-disabled'], true, 'failed reset must leave retry enabled');
+});
+
+test('blocks every Radix dismissal path while reset persistence is pending', async () => {
+  let settleReset;
+  let resetCalls = 0;
+  const context = {
+    view: 'dashboard',
+    readiness: 'ready',
+    portfolio: portfolio(),
+    draft: null,
+    error: null,
+    openDashboard() {},
+    closeDashboard() {},
+    async confirmDraft() {
+      return true;
+    },
+    resetPortfolio() {
+      resetCalls += 1;
+      return new Promise((resolve) => {
+        settleReset = resolve;
+      });
+    },
+  };
+  const hooks = statefulReact();
+  const Dashboard = loadDashboardForInteraction(hooks.react, context);
+  let tree = hooks.render(Dashboard, {});
+  let root = findElement(tree, (element) => element.type === Dialog.Root);
+  root.props.onOpenChange(true);
+
+  tree = hooks.render(Dashboard, {});
+  root = findElement(tree, (element) => element.type === Dialog.Root);
+  let content = findElement(root, (element) => element.type === Dialog.Content);
+  let confirm = findElement(
+    content,
+    (element) => element.type === 'button' && textContent(element) === 'Confirm reset practice'
+  );
+  const pendingReset = confirm.props.onClick();
+
+  tree = hooks.render(Dashboard, {});
+  root = findElement(tree, (element) => element.type === Dialog.Root);
+  content = findElement(root, (element) => element.type === Dialog.Content);
+  root.props.onOpenChange(false);
+  tree = hooks.render(Dashboard, {});
+  root = findElement(tree, (element) => element.type === Dialog.Root);
+  content = findElement(root, (element) => element.type === Dialog.Content);
+  assert.equal(root.props.open, true, 'controlled close must be ignored while pending');
+
+  for (const eventName of ['onEscapeKeyDown', 'onPointerDownOutside', 'onInteractOutside']) {
+    let prevented = false;
+    assert.equal(typeof content.props[eventName], 'function', `${eventName} guard is required`);
+    content.props[eventName]({
+      preventDefault() {
+        prevented = true;
+      },
+    });
+    assert.equal(prevented, true, `${eventName} must be prevented while pending`);
+  }
+
+  const close = findElement(
+    content,
+    (element) =>
+      element.type === 'button' && element.props['aria-label'] === 'Close reset confirmation'
+  );
+  const cancel = findElement(
+    content,
+    (element) => element.type === 'button' && textContent(element) === 'Keep practice portfolio'
+  );
+  confirm = findElement(
+    content,
+    (element) => element.type === 'button' && textContent(element) === 'Resetting practice'
+  );
+  assert.equal(close?.props.disabled, true);
+  assert.equal(cancel?.props.disabled, true);
+  assert.notEqual(confirm?.props.disabled, true, 'pending confirm must remain focusable');
+  assert.equal(confirm?.props['aria-disabled'], true);
+  await confirm.props.onClick();
+  assert.equal(resetCalls, 1, 'pending confirm must reject repeat activation');
+
+  settleReset(true);
+  await pendingReset;
+  tree = hooks.render(Dashboard, {});
+  root = findElement(tree, (element) => element.type === Dialog.Root);
+  const trigger = findElement(
+    root,
+    (element) => element.type === 'button' && textContent(element) === 'Reset practice'
+  );
+  assert.equal(root.props.open, false);
+  assert.equal(
+    trigger?.props.disabled,
+    false,
+    'successful close must restore to an enabled trigger'
+  );
 });
 
 test('puts order review before holdings in the mobile reading order', () => {
