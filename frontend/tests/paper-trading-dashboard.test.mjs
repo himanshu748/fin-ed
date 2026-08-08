@@ -155,6 +155,14 @@ function statefulReact(refCurrents = []) {
       flushEffects();
       return element;
     },
+    renderBeforeEffects(Component, props) {
+      stateCursor = 0;
+      refCursor = 0;
+      effectCursor = 0;
+      pendingEffects = [];
+      return Component(props);
+    },
+    flushEffects,
     strictModeReplayEffects() {
       for (const record of effectRecords) record?.cleanup?.();
       for (let index = 0; index < effectRecords.length; index += 1) {
@@ -508,12 +516,7 @@ test('summary keeps final cash and historical cost values accessible during inte
 });
 
 test('a provider-cleared fill draws one stroke-only confirmation and cancels it on cleanup', async () => {
-  const pathNode = {
-    style: {},
-    getTotalLength() {
-      return 42;
-    },
-  };
+  const pathNode = { style: {} };
   const hooks = statefulReact([pathNode]);
   const animations = [];
   const { OrderReview } = loadOrderReview(hooks.react, {
@@ -547,12 +550,18 @@ test('a provider-cleared fill draws one stroke-only confirmation and cancels it 
     );
     await confirm.props.onClick();
 
-    tree = hooks.render(OrderReview, { ...props, draft: null });
+    tree = hooks.renderBeforeEffects(OrderReview, { ...props, draft: null });
     assert.match(textContent(tree), /Paper order filled in your practice portfolio/);
     const confirmation = findElement(tree, (element) => element.type === 'svg');
     const confirmationPath = findElement(confirmation, (element) => element.type === 'path');
     assert.equal(confirmation?.props['aria-hidden'], 'true');
     assert.ok(confirmationPath, 'successful fill must render an SVG confirmation path');
+    assert.equal(confirmationPath.props.pathLength, 1);
+    assert.equal(confirmationPath.props.strokeDasharray, 1);
+    assert.equal(confirmationPath.props.strokeDashoffset, 1);
+    assert.equal(animations.length, 0, 'pre-effect render must already hide the path');
+
+    hooks.flushEffects();
     assert.equal(animations.length, 1);
     assert.equal(animations[0].target, pathNode);
     assert.deepEqual(Object.keys(animations[0].options).sort(), [
@@ -560,7 +569,7 @@ test('a provider-cleared fill draws one stroke-only confirmation and cancels it 
       'ease',
       'strokeDashoffset',
     ]);
-    assert.deepEqual(animations[0].options.strokeDashoffset, [42, 0]);
+    assert.deepEqual(animations[0].options.strokeDashoffset, [1, 0]);
 
     hooks.strictModeReplayEffects();
     assert.equal(animations.length, 1, 'Strict Mode replay must not redraw the confirmation');
@@ -573,12 +582,7 @@ test('a provider-cleared fill draws one stroke-only confirmation and cancels it 
 });
 
 test('reduced motion renders the successful confirmation in its final state', async () => {
-  const pathNode = {
-    style: {},
-    getTotalLength() {
-      return 42;
-    },
-  };
+  const pathNode = { style: {} };
   const hooks = statefulReact([pathNode]);
   let animateCalls = 0;
   const { OrderReview } = loadOrderReview(hooks.react, {
@@ -603,10 +607,15 @@ test('reduced motion renders the successful confirmation in its final state', as
       (element) => element.type === 'button' && textContent(element) === 'Confirm paper buy'
     );
     await confirm.props.onClick();
-    tree = hooks.render(OrderReview, props);
+    tree = hooks.renderBeforeEffects(OrderReview, props);
 
-    assert.ok(findElement(tree, (element) => element.type === 'path'));
+    const confirmationPath = findElement(tree, (element) => element.type === 'path');
+    assert.ok(confirmationPath);
+    assert.equal(confirmationPath.props.pathLength, 1);
+    assert.equal(confirmationPath.props.strokeDasharray, 1);
+    assert.equal(confirmationPath.props.strokeDashoffset, 0);
     assert.equal(animateCalls, 0);
+    hooks.flushEffects();
     assert.equal(pathNode.style.strokeDashoffset, '0');
   } finally {
     hooks.unmount();

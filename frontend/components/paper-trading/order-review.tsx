@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Image from 'next/image';
 import { animate } from 'animejs';
 import { useReducedMotion } from 'motion/react';
@@ -117,7 +117,7 @@ export function OrderReview({ draft, portfolio, readiness, onConfirm }: OrderRev
     confirmedDraftId !== null &&
     (!draft || confirmedDraftId === draft.draftId);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const path = confirmationPathRef.current;
     if (!showFillConfirmation || !confirmedDraftId || !path) return;
     if (shouldReduceMotion || animatedConfirmationIdRef.current === confirmedDraftId) {
@@ -126,11 +126,8 @@ export function OrderReview({ draft, portfolio, readiness, onConfirm }: OrderRev
     }
 
     animatedConfirmationIdRef.current = confirmedDraftId;
-    const pathLength = path.getTotalLength();
-    path.style.strokeDasharray = String(pathLength);
-    path.style.strokeDashoffset = String(pathLength);
     const animation = animate(path, {
-      strokeDashoffset: [pathLength, 0],
+      strokeDashoffset: [1, 0],
       duration: 220,
       ease: 'out(3)',
     });
@@ -158,7 +155,13 @@ export function OrderReview({ draft, portfolio, readiness, onConfirm }: OrderRev
           strokeLinecap="round"
           strokeLinejoin="round"
         >
-          <path ref={confirmationPathRef} d="M4.5 12.5 9 17l10.5-11" />
+          <path
+            ref={confirmationPathRef}
+            d="M4.5 12.5 9 17l10.5-11"
+            pathLength={1}
+            strokeDasharray={1}
+            strokeDashoffset={shouldReduceMotion ? 0 : 1}
+          />
         </svg>
       ) : null}
       <span>{confirmationStatus}</span>
