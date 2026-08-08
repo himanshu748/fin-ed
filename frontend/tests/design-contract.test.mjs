@@ -2,7 +2,7 @@ import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import * as jsxRuntime from 'react/jsx-runtime';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 import ts from 'typescript';
@@ -23,6 +23,36 @@ function includesAll(source, values, message) {
     assert.ok(source.includes(value), `${message}: ${value}`);
   }
 }
+
+test('publishes original FinEd editorial artwork and compact brand icons', () => {
+  for (const asset of [
+    'public/images/fin-ed-voice-ledger-v1.png',
+    'public/images/paper-practice-empty-v1.png',
+    'public/images/fined-saathi-logo-v1.png',
+  ]) {
+    const path = join(frontendRoot, asset);
+    assert.ok(existsSync(path), `missing generated artwork: ${asset}`);
+    assert.ok(statSync(path).size > 10_000, `${asset} must exceed 10,000 bytes`);
+  }
+
+  for (const asset of ['public/fined-saathi-mark.svg', 'app/favicon.ico']) {
+    const path = join(frontendRoot, asset);
+    assert.ok(existsSync(path), `missing brand icon: ${asset}`);
+    assert.ok(statSync(path).size > 0, `${asset} must not be empty`);
+  }
+
+  const mark = read('public/fined-saathi-mark.svg');
+  includesAll(
+    mark,
+    ['viewBox="0 0 64 64"', '#15233B', '#174EA6', '#1F6B4F', '#FFFCF5'],
+    'missing compact flat mark structure'
+  );
+  assert.ok(!/<(?:linearGradient|radialGradient|text)\b/i.test(mark), 'mark must stay flat');
+  const allowedColors = new Set(['#F6F2E8', '#FFFCF5', '#15233B', '#174EA6', '#1F6B4F', '#A13D35']);
+  for (const color of mark.match(/#[\dA-F]{6}/gi) ?? []) {
+    assert.ok(allowedColors.has(color.toUpperCase()), `mark uses non-project color: ${color}`);
+  }
+});
 
 function loadReveal({ react = React, useReducedMotion = () => false } = {}) {
   const output = ts.transpileModule(read('components/app/reveal.tsx'), {
