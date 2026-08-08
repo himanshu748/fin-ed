@@ -12,7 +12,7 @@ VoiceForBharat. It presents eight Indian-market learning modes:
 - Bonds
 - Ask Anything
 
-The UI includes the ₹6 stock charge illustration, mode-specific safety copy, a live transcript,
+The UI includes plain-language charge explanations, mode-specific safety copy, a live transcript,
 and browser voice controls.
 
 ## Run locally

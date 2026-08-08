@@ -58,7 +58,7 @@ export function AgentChatTranscript({
         {messages.length === 0 && (
           <ConversationEmptyState
             title="Ask your first market question"
-            description="Try: I bought and sold one share at ₹6. Why did I still lose ₹50?"
+            description="Try: What is an ETF, and how is it different from a mutual fund?"
             className="min-h-72 rounded-[12px] border border-dashed border-[var(--ledger-rule)] bg-[var(--paper)]"
           />
         )}

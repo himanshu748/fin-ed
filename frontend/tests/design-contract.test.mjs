@@ -353,9 +353,13 @@ test('keeps the connected experience educational, transparent, and single-discon
     [
       "const locale = 'en-IN'",
       'Ask your first market question',
-      'I bought and sold one share at ₹6. Why did I still lose ₹50?',
+      'What is an ETF, and how is it different from a mutual fund?',
     ],
     'missing connected empty state'
+  );
+  assert.ok(
+    !transcript.includes('₹6') && !transcript.includes('₹50'),
+    'connected empty state must not reuse the old personal loss story'
   );
   includesAll(
     controls,
