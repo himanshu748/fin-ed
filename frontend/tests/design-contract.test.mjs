@@ -378,6 +378,16 @@ test('keeps voice controls mounted while the paper workspace replaces only sessi
       'paperTrading.view ===',
       'paperTradingTriggerRef',
       'previousPaperViewRef',
+      'Nikhil',
+      'Murf Falcon 2',
+      'India voice',
+      'English & Hindi',
+      'Paper trading only',
+      'Ready',
+      'Connecting',
+      'Listening',
+      'Speaking',
+      'Ended',
     ],
     'missing connected paper view integration'
   );
@@ -386,6 +396,39 @@ test('keeps voice controls mounted while the paper workspace replaces only sessi
     'AgentControlBar must remain outside the conditional paper workspace'
   );
   assert.ok(!session.includes('session.end()'), 'opening paper trading must not end the session');
+  for (const retiredControl of [
+    'Select model',
+    'Mobile verification',
+    'Connect broker',
+    'finance track',
+  ]) {
+    assert.ok(
+      !session.includes(retiredControl),
+      `session contains retired control: ${retiredControl}`
+    );
+  }
+  assert.ok(!/type=["']password["']/i.test(session), 'session must not render credential fields');
+});
+
+test('scopes the paper workspace transition and restores keyboard focus', () => {
+  const session = read('components/app/fin-ed-session-view.tsx');
+
+  includesAll(
+    session,
+    [
+      'gsap.context',
+      'gsap.timeline',
+      'autoAlpha',
+      '? 18 : -18',
+      'duration: 0.26',
+      'timeline?.kill()',
+      'context?.revert()',
+      'workspaceRef',
+      'sessionHeadingRef',
+      'paperTradingTriggerRef.current?.focus()',
+    ],
+    'missing scoped workspace transition or focus lifecycle'
+  );
 });
 
 test('keeps the paper workspace simulated, browser-owned, and quote-gated', () => {

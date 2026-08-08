@@ -14,6 +14,23 @@ interface ViewControllerProps {
   onLearningModeChange: (mode: LearningMode) => void;
 }
 
+const MICROPHONE_PERMISSION_ERROR =
+  'Microphone access is required for a voice call. Allow microphone access in your browser settings, then try connecting again.';
+const VOICE_CONNECTION_ERROR = 'Voice connection failed. Check your network and try again.';
+
+export function connectionErrorMessageFor(error: unknown): string {
+  const name = error instanceof Error ? error.name : '';
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  const permissionFailure =
+    name === 'NotAllowedError' ||
+    name === 'PermissionDeniedError' ||
+    /(?:microphone|media device).*(?:permission|denied|not allowed)|(?:permission|denied|not allowed).*(?:microphone|media device)/i.test(
+      message
+    );
+
+  return permissionFailure ? MICROPHONE_PERMISSION_ERROR : VOICE_CONNECTION_ERROR;
+}
+
 export function ViewController({
   appConfig,
   learningMode,
@@ -23,7 +40,7 @@ export function ViewController({
   const agent = useAgent();
   const shouldReduceMotion = useReducedMotion();
   const [isStarting, setIsStarting] = useState(false);
-  const [connectionError, setConnectionError] = useState(false);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
   const handlingFailure = useRef(false);
 
   useEffect(() => {
@@ -34,19 +51,19 @@ export function ViewController({
 
     if (handlingFailure.current) return;
     handlingFailure.current = true;
-    setConnectionError(true);
+    setConnectionError(VOICE_CONNECTION_ERROR);
     void session.end().catch(() => undefined);
   }, [agent.state, session]);
 
   const handleStart = async () => {
     if (isStarting) return;
 
-    setConnectionError(false);
+    setConnectionError(null);
     setIsStarting(true);
     try {
       await session.start();
-    } catch {
-      setConnectionError(true);
+    } catch (error) {
+      setConnectionError(connectionErrorMessageFor(error));
       await session.end().catch(() => undefined);
     } finally {
       setIsStarting(false);
@@ -64,12 +81,20 @@ export function ViewController({
     <AnimatePresence mode="wait" initial={false}>
       {!session.isConnected && (
         <motion.div key="welcome" {...motionProps}>
+          {connectionError && (
+            <div
+              role="alert"
+              className="fixed top-20 right-4 left-4 z-50 mx-auto max-w-2xl rounded-[12px] border border-[var(--risk-brick)] bg-[var(--risk-wash)] p-[18px] font-semibold text-[var(--risk-brick)] shadow-lg sm:left-auto sm:max-w-md"
+            >
+              {connectionError}
+            </div>
+          )}
           <WelcomeView
             learningMode={learningMode}
             onLearningModeChange={onLearningModeChange}
             onStartCall={handleStart}
             isConnecting={isStarting}
-            connectionError={connectionError}
+            connectionError={false}
           />
         </motion.div>
       )}
