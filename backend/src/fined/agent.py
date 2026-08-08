@@ -176,7 +176,7 @@ def build_greeting(profile: ParticipantProfile) -> str:
     """Return a brief, mode-aware greeting for the post-start speech turn."""
     topic = _TOPIC_NAMES[profile.learning_mode]
     greeting = (
-        "Hello, I'm FinEd Saathi from the Financial Services track. "
+        "Hello, I'm FinEd Saathi, your Indian markets learning companion. "
         f"I can help you learn about {topic} in English, Hindi, or both. "
         "I provide education, not investment advice. "
         "What would you like to understand today?"

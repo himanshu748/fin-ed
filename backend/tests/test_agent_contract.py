@@ -251,13 +251,17 @@ def test_greeting_names_track_topic_and_adds_fno_risk_line() -> None:
     stocks = build_greeting(ParticipantProfile(LearningMode.STOCKS))
     fno = build_greeting(ParticipantProfile(LearningMode.FNO))
 
-    assert "Financial Services" in stocks
+    assert "Indian markets learning companion" in stocks
+    assert "Financial Services" not in stocks
+    assert "track" not in stocks.casefold()
     assert "FinEd Saathi" in stocks
     assert "Stocks" in stocks
     assert "English, Hindi, or both" in stocks
     assert "education, not investment advice" in stocks
     assert len(stocks) < 320
-    assert "Financial Services" in fno
+    assert "Indian markets learning companion" in fno
+    assert "Financial Services" not in fno
+    assert "track" not in fno.casefold()
     assert "F&O" in fno
     assert "high risk" in fno.casefold()
     assert "education and simulation" in fno.casefold()

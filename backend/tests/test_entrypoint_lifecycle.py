@@ -74,7 +74,8 @@ class FakeSession:
         self.events.append("say")
         if self.fail_at == "say":
             raise LifecycleAbort("say")
-        assert "Financial Services" in greeting
+        assert "Indian markets learning companion" in greeting
+        assert "track" not in greeting.casefold()
 
 
 class FakeContext:
