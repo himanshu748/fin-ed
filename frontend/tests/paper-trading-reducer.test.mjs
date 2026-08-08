@@ -74,6 +74,39 @@ test('starts with exactly one lakh rupees', () => {
   assert.deepEqual(state.holdings, []);
 });
 
+test('accepts backend-shaped microsecond timestamps with offsets', () => {
+  const timestamp = '2026-08-08T05:30:00.123456+05:30';
+  const order = draft({
+    quote_time: timestamp,
+    expires_at: '2026-08-08T05:30:30.123456+05:30',
+  });
+
+  const next = confirm(createPaperPortfolio(timestamp, 'portfolio-1'), order, timestamp);
+
+  assert.equal(next.cashPaise, 9_499_900);
+  assert.equal(next.fills[0].filledAt, timestamp);
+  assert.throws(
+    () =>
+      draft({
+        quote_time: timestamp,
+        expires_at: '2026-08-08T05:30:30.123457+05:30',
+      }),
+    /expiry/
+  );
+});
+
+test('rejects impossible calendar dates in drafts and reducer actions', () => {
+  assert.throws(
+    () =>
+      draft({
+        quote_time: '2026-02-30T05:30:00.123456+05:30',
+        expires_at: '2026-02-30T05:30:30.123456+05:30',
+      }),
+    /timestamp/
+  );
+  assert.throws(() => createPaperPortfolio('2026-02-30T00:00:00.000Z', 'portfolio-1'), /timestamp/);
+});
+
 test('records a confirmed paper buy once without mutating the prior portfolio', () => {
   const initial = createPaperPortfolio(NOW, 'portfolio-1');
   const order = draft();

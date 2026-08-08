@@ -1,4 +1,4 @@
-import { assertPaperOrderDraft, decodePaperPortfolio } from './schema';
+import { assertPaperOrderDraft, decodePaperPortfolio, isPaperTimestamp } from './schema';
 import {
   PAPER_PORTFOLIO_SCHEMA_VERSION,
   PAPER_STARTING_CASH_PAISE,
@@ -9,11 +9,7 @@ import {
 } from './types';
 
 function assertTimestamp(value: unknown): string {
-  if (
-    typeof value !== 'string' ||
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(value) ||
-    !Number.isFinite(Date.parse(value))
-  ) {
+  if (!isPaperTimestamp(value)) {
     throw new Error('Invalid paper portfolio timestamp');
   }
   return value;

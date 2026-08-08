@@ -21,8 +21,7 @@ export function loadPaperPortfolio(storage: PaperPortfolioStorage | null | undef
 }
 
 function existingWins(existing: PaperPortfolio, candidate: PaperPortfolio): boolean {
-  if (existing.revision !== candidate.revision) return existing.revision > candidate.revision;
-  return Date.parse(existing.updatedAt) >= Date.parse(candidate.updatedAt);
+  return existing.revision >= candidate.revision;
 }
 
 export function savePaperPortfolio(

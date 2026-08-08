@@ -75,6 +75,8 @@ const FILL_KEYS = [
   'realizedPnlPaise',
   'filledAt',
 ] as const;
+const PAPER_TIMESTAMP =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z|[+-](\d{2}):(\d{2}))$/;
 
 function fail(message: string): never {
   throw new Error(`Invalid paper portfolio data: ${message}`);
@@ -103,12 +105,54 @@ function requireSafeInteger(value: unknown, field: string, minimum = 0): number 
   return value as number;
 }
 
+export function isPaperTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const match = PAPER_TIMESTAMP.exec(value);
+  if (!match) return false;
+  const [
+    ,
+    yearText,
+    monthText,
+    dayText,
+    hourText,
+    minuteText,
+    secondText,
+    ,
+    zone,
+    offsetHourText,
+    offsetMinuteText,
+  ] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  const offsetHour = offsetHourText === undefined ? 0 : Number(offsetHourText);
+  const offsetMinute = offsetMinuteText === undefined ? 0 : Number(offsetMinuteText);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return (
+    month >= 1 &&
+    month <= 12 &&
+    day >= 1 &&
+    day <= daysInMonth[month - 1] &&
+    hour <= 23 &&
+    minute <= 59 &&
+    second <= 59 &&
+    (zone === 'Z' || (offsetHour <= 23 && offsetMinute <= 59)) &&
+    Number.isFinite(Date.parse(value))
+  );
+}
+
+function timestampFractionMicros(value: string): number {
+  const match = PAPER_TIMESTAMP.exec(value);
+  if (!match) fail('timestamp must be an ISO timestamp');
+  return Number((match[7] ?? '').padEnd(6, '0'));
+}
+
 function requireTimestamp(value: unknown, field: string): string {
-  if (
-    typeof value !== 'string' ||
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(value) ||
-    !Number.isFinite(Date.parse(value))
-  ) {
+  if (!isPaperTimestamp(value)) {
     fail(`${field} must be an ISO timestamp`);
   }
   return value;
@@ -137,6 +181,12 @@ function safeProduct(left: number, right: number, field: string): number {
   return product;
 }
 
+function safeSum(left: number, right: number, field: string): number {
+  const sum = left + right;
+  if (!Number.isSafeInteger(sum)) fail(`${field} must be a safe integer`);
+  return sum;
+}
+
 function averageCost(costBasisPaise: number, quantity: number): number {
   const roundedNumerator = costBasisPaise + Math.floor(quantity / 2);
   if (!Number.isSafeInteger(roundedNumerator)) fail('average cost must be a safe integer');
@@ -158,7 +208,10 @@ function decodeDraftFields(value: unknown, keys: readonly string[]): PaperOrderD
   const quoteProvider = requireText(value.quoteProvider, 'quote provider');
   const quoteTime = requireTimestamp(value.quoteTime, 'quote time');
   const expiresAt = requireTimestamp(value.expiresAt, 'expiry time');
-  if (Date.parse(expiresAt) - Date.parse(quoteTime) !== 30_000)
+  if (
+    Date.parse(expiresAt) - Date.parse(quoteTime) !== 30_000 ||
+    timestampFractionMicros(expiresAt) !== timestampFractionMicros(quoteTime)
+  )
     fail('draft expiry must be 30 seconds');
   const notionalPaise = requireSafeInteger(value.notionalPaise, 'notional paise');
   if (notionalPaise !== safeProduct(quantity, pricePaise, 'notional paise')) {
@@ -309,6 +362,87 @@ function decodeFill(value: unknown): PaperFill {
   };
 }
 
+function holdingIndex(
+  holdings: readonly PaperHolding[],
+  exchange: string,
+  symbolToken: string
+): number {
+  return holdings.findIndex(
+    (holding) => holding.exchange === exchange && holding.symbolToken === symbolToken
+  );
+}
+
+function holdingsMatch(left: readonly PaperHolding[], right: readonly PaperHolding[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (holding, index) =>
+        holding.exchange === right[index].exchange &&
+        holding.symbolToken === right[index].symbolToken &&
+        holding.tradingSymbol === right[index].tradingSymbol &&
+        holding.quantity === right[index].quantity &&
+        holding.costBasisPaise === right[index].costBasisPaise &&
+        holding.averageCostPaise === right[index].averageCostPaise
+    )
+  );
+}
+
+function replayFills(fills: readonly PaperFill[]): {
+  cashPaise: number;
+  holdings: PaperHolding[];
+} {
+  let cashPaise: number = PAPER_STARTING_CASH_PAISE;
+  let holdings: PaperHolding[] = [];
+  for (const fill of fills) {
+    if (fill.exchange !== 'NSE') fail('paper fills are limited to NSE');
+    cashPaise = safeSum(cashPaise, fill.cashEffectPaise, 'cash paise');
+    if (cashPaise < 0) fail('fill requires unavailable cash');
+    const index = holdingIndex(holdings, fill.exchange, fill.symbolToken);
+    const current = index < 0 ? undefined : holdings[index];
+    if (fill.side === 'buy') {
+      const quantity = safeSum(current?.quantity ?? 0, fill.quantity, 'holding quantity');
+      const costBasisPaise = safeSum(
+        safeSum(current?.costBasisPaise ?? 0, fill.notionalPaise, 'cost basis paise'),
+        fill.chargesPaise,
+        'cost basis paise'
+      );
+      const next: PaperHolding = {
+        exchange: fill.exchange,
+        symbolToken: fill.symbolToken,
+        tradingSymbol: fill.tradingSymbol,
+        quantity,
+        costBasisPaise,
+        averageCostPaise: averageCost(costBasisPaise, quantity),
+      };
+      holdings = current
+        ? holdings.map((holding, holdingIndex) => (holdingIndex === index ? next : holding))
+        : [...holdings, next];
+      continue;
+    }
+    if (!current || current.quantity < fill.quantity) fail('sell requires unavailable holdings');
+    const costSoldPaise = Math.floor(
+      safeProduct(current.costBasisPaise, fill.quantity, 'sold cost basis paise') / current.quantity
+    );
+    if (!Number.isSafeInteger(costSoldPaise)) fail('sold cost basis paise must be a safe integer');
+    const realizedPnlPaise = safeSum(fill.cashEffectPaise, -costSoldPaise, 'realized P&L paise');
+    if (fill.realizedPnlPaise !== realizedPnlPaise) fail('recorded realized P&L is inconsistent');
+    const quantity = current.quantity - fill.quantity;
+    if (quantity === 0) {
+      holdings = holdings.filter((_, holdingIndex) => holdingIndex !== index);
+      continue;
+    }
+    const costBasisPaise = safeSum(current.costBasisPaise, -costSoldPaise, 'cost basis paise');
+    const next: PaperHolding = {
+      ...current,
+      quantity,
+      costBasisPaise,
+      averageCostPaise: averageCost(costBasisPaise, quantity),
+    };
+    holdings = holdings.map((holding, holdingIndex) => (holdingIndex === index ? next : holding));
+  }
+  return { cashPaise, holdings };
+}
+
 export function decodePaperPortfolio(value: unknown): PaperPortfolio {
   if (!isRecord(value)) fail('portfolio must be an object');
   requireExactKeys(value, PORTFOLIO_KEYS);
@@ -340,10 +474,13 @@ export function decodePaperPortfolio(value: unknown): PaperPortfolio {
     fail('applied draft ids must be unique');
   if (
     appliedDraftIds.length !== fillIds.length ||
-    appliedDraftIds.some((draftId) => !fillIds.includes(draftId))
+    appliedDraftIds.some((draftId, index) => draftId !== fillIds[index])
   ) {
     fail('applied draft ids must match fills');
   }
+  const replayed = replayFills(fills);
+  if (cashPaise !== replayed.cashPaise) fail('cash paise is inconsistent with fills');
+  if (!holdingsMatch(holdings, replayed.holdings)) fail('holdings are inconsistent with fills');
   const createdAt = requireTimestamp(value.createdAt, 'created time');
   const updatedAt = requireTimestamp(value.updatedAt, 'updated time');
   return {
