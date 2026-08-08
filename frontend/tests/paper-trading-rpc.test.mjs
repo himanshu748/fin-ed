@@ -1,0 +1,520 @@
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import test from 'node:test';
+import ts from 'typescript';
+
+const require = createRequire(import.meta.url);
+require.extensions['.ts'] = (module, filename) => {
+  const source = require('node:fs').readFileSync(filename, 'utf8');
+  const output = ts
+    .transpileModule(source, {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+      fileName: filename,
+    })
+    .outputText.replace(/require\((['"])(\.{1,2}\/[^'"]+)\1\)/g, 'require($1$2.ts$1)');
+  module._compile(output, filename);
+};
+
+function loadProviderModule() {
+  const filename = require.resolve('../components/paper-trading/paper-trading-provider.tsx');
+  const source = require('node:fs').readFileSync(filename, 'utf8');
+  const output = ts.transpileModule(source, {
+    compilerOptions: {
+      jsx: ts.JsxEmit.ReactJSX,
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+    },
+    fileName: filename,
+  }).outputText;
+  const compiledModule = { exports: {} };
+  const dependencies = new Map([
+    ['react', require('react')],
+    ['react/jsx-runtime', require('react/jsx-runtime')],
+    [
+      '@livekit/components-react',
+      { useAgent: () => ({ internal: { agentParticipant: null } }), useSessionContext: () => ({}) },
+    ],
+    ['@/lib/paper-trading/reducer', require('../lib/paper-trading/reducer.ts')],
+    ['@/lib/paper-trading/schema', require('../lib/paper-trading/schema.ts')],
+    ['@/lib/paper-trading/storage', require('../lib/paper-trading/storage.ts')],
+  ]);
+
+  new Function('require', 'module', 'exports', output)(
+    (specifier) => {
+      const dependency = dependencies.get(specifier);
+      if (!dependency) throw new Error(`Unexpected provider dependency: ${specifier}`);
+      return dependency;
+    },
+    compiledModule,
+    compiledModule.exports
+  );
+  return compiledModule.exports;
+}
+
+const {
+  confirmPaperDraft,
+  connectedAgentIdentity,
+  createPaperRpcHandlers,
+  registerPaperRpcHandlers,
+  sendPaperOrderResult,
+} = loadProviderModule();
+const { createPaperPortfolio, reducePaperPortfolio } = require('../lib/paper-trading/reducer.ts');
+const { decodePaperOrderDraft } = require('../lib/paper-trading/schema.ts');
+const { PAPER_PORTFOLIO_STORAGE_KEY } = require('../lib/paper-trading/storage.ts');
+
+const NOW = '2026-08-08T00:00:10.000Z';
+const OPEN_REQUEST = '{"version":1,"paper":true}';
+
+function draftPayload(overrides = {}) {
+  return JSON.stringify({
+    version: 1,
+    paper: true,
+    draft_id: 'draft-1',
+    side: 'buy',
+    exchange: 'NSE',
+    symbol_token: '2885',
+    trading_symbol: 'RELIANCE-EQ',
+    quantity: 1,
+    price_paise: 250_000,
+    quote_provider: 'Angel One SmartAPI',
+    quote_time: '2026-08-08T00:00:00.000Z',
+    expires_at: '2026-08-08T00:00:30.000Z',
+    notional_paise: 250_000,
+    charge_paise: 100,
+    cash_effect_paise: -250_100,
+    charge_status: 'estimated',
+    ...overrides,
+  });
+}
+
+function harness(overrides = {}) {
+  let opened = false;
+  let prepared = null;
+  let portfolio = createPaperPortfolio('2026-08-08T00:00:00.000Z', 'portfolio-1');
+  const handlers = createPaperRpcHandlers({
+    expectedAgentIdentity: 'agent-1',
+    getPortfolio: () => portfolio,
+    getDraft: () => prepared,
+    now: () => NOW,
+    openDashboard: () => {
+      opened = true;
+    },
+    prepareDraft: (draft) => {
+      prepared = draft;
+    },
+    ...overrides,
+  });
+  return {
+    handlers,
+    get opened() {
+      return opened;
+    },
+    get prepared() {
+      return prepared;
+    },
+    setPortfolio(value) {
+      portfolio = value;
+    },
+  };
+}
+
+function invocation(payload, callerIdentity = 'agent-1') {
+  return { callerIdentity, payload };
+}
+
+function memoryStorage(entries = {}) {
+  const values = new Map(Object.entries(entries));
+  return {
+    getItem(key) {
+      return values.get(key) ?? null;
+    },
+    setItem(key, value) {
+      values.set(key, value);
+    },
+  };
+}
+
+function locks() {
+  return {
+    async request(name, options, callback) {
+      assert.equal(name, PAPER_PORTFOLIO_STORAGE_KEY);
+      assert.deepEqual(options, { mode: 'exclusive' });
+      return callback();
+    },
+  };
+}
+
+test('open dashboard accepts only an exact request from the connected agent', async () => {
+  const state = harness();
+
+  assert.deepEqual(JSON.parse(await state.handlers.openDashboard(invocation(OPEN_REQUEST))), {
+    version: 1,
+    paper: true,
+    opened: true,
+  });
+  assert.equal(state.opened, true);
+  await assert.rejects(
+    () => state.handlers.openDashboard(invocation(OPEN_REQUEST, 'other')),
+    /authorized/
+  );
+  await assert.rejects(
+    () => state.handlers.openDashboard(invocation('{"version":1,"paper":true,"secret":"x"}')),
+    /shape/
+  );
+});
+
+test('agent identity is available only from a connected LiveKit agent participant', () => {
+  const participant = { identity: 'agent-1' };
+
+  assert.equal(
+    connectedAgentIdentity({ isConnected: true, internal: { agentParticipant: participant } }),
+    'agent-1'
+  );
+  assert.equal(
+    connectedAgentIdentity({ isConnected: false, internal: { agentParticipant: participant } }),
+    null
+  );
+  assert.equal(
+    connectedAgentIdentity({ isConnected: true, internal: { agentParticipant: null } }),
+    null
+  );
+});
+
+test('all handlers reject malformed, oversized, and lexically non-integer versions', async () => {
+  const { handlers } = harness();
+  const cases = [
+    '{',
+    '[]',
+    '{"version":true,"paper":true}',
+    '{"version":"1","paper":true}',
+    '{"version":1.0,"paper":true}',
+    '{"version":1e0,"paper":true}',
+    '{"version":2,"paper":true}',
+    JSON.stringify({ version: 1, paper: true, padding: '😀'.repeat(4_000) }),
+  ];
+
+  for (const payload of cases) {
+    await assert.rejects(() => handlers.openDashboard(invocation(payload)));
+    await assert.rejects(() => handlers.getPortfolioSummary(invocation(payload)));
+  }
+});
+
+test('prepare order enforces the UTF-8 payload cap before accepting an exact draft shape', async () => {
+  const { handlers } = harness();
+  const oversized = draftPayload({ quote_provider: '😀'.repeat(4_000) });
+
+  await assert.rejects(
+    () => handlers.prepareOrder(invocation(oversized)),
+    /exceeds the maximum size/
+  );
+});
+
+test('prepare order rejects unexpected callers and unknown fields before changing the draft', async () => {
+  const state = harness();
+  const withSecret = JSON.parse(draftPayload());
+  withSecret.secret = 'do-not-trust';
+
+  await assert.rejects(
+    () => state.handlers.prepareOrder(invocation(draftPayload(), 'other')),
+    /authorized/
+  );
+  await assert.rejects(
+    () => state.handlers.prepareOrder(invocation(JSON.stringify(withSecret))),
+    /unknown or missing fields/
+  );
+  assert.equal(state.prepared, null);
+});
+
+test('prepare order rejects malformed values, duplicates, and expired drafts', async () => {
+  const state = harness();
+  const malformedCases = [
+    draftPayload({ version: false }),
+    draftPayload({ version: '1' }),
+    draftPayload({ quantity: 1.5, notional_paise: 375_000, cash_effect_paise: -375_100 }),
+    draftPayload({ paper: false }),
+  ];
+
+  for (const payload of malformedCases) {
+    await assert.rejects(() => state.handlers.prepareOrder(invocation(payload)));
+  }
+  await assert.rejects(
+    () =>
+      state.handlers.prepareOrder(
+        invocation(
+          draftPayload({
+            quote_time: '2026-08-07T23:59:40.000Z',
+            expires_at: NOW,
+          })
+        )
+      ),
+    /expired/
+  );
+
+  const applied = reducePaperPortfolio(
+    createPaperPortfolio('2026-08-08T00:00:00.000Z', 'portfolio-1'),
+    {
+      type: 'confirmDraft',
+      draft: decodePaperOrderDraft(JSON.parse(draftPayload())),
+      now: NOW,
+    }
+  );
+  state.setPortfolio(applied);
+  await assert.rejects(
+    () => state.handlers.prepareOrder(invocation(draftPayload())),
+    /already applied/
+  );
+});
+
+test('prepare order opens the dashboard and returns only the strict draft acknowledgement', async () => {
+  const state = harness();
+
+  assert.deepEqual(JSON.parse(await state.handlers.prepareOrder(invocation(draftPayload()))), {
+    version: 1,
+    paper: true,
+    prepared: true,
+    draft_id: 'draft-1',
+  });
+  assert.equal(state.opened, true);
+  assert.equal(state.prepared.draftId, 'draft-1');
+
+  await assert.rejects(
+    () => state.handlers.prepareOrder(invocation(draftPayload())),
+    /already prepared/
+  );
+});
+
+test('portfolio summary uses the persisted ledger and an exact flat response', async () => {
+  const state = harness();
+  const bought = reducePaperPortfolio(
+    createPaperPortfolio('2026-08-08T00:00:00.000Z', 'portfolio-1'),
+    { type: 'confirmDraft', draft: decodePaperOrderDraft(JSON.parse(draftPayload())), now: NOW }
+  );
+  state.setPortfolio(bought);
+
+  assert.deepEqual(JSON.parse(await state.handlers.getPortfolioSummary(invocation(OPEN_REQUEST))), {
+    version: 1,
+    paper: true,
+    cash_paise: 9_749_900,
+    holdings_value_paise: 250_100,
+    total_value_paise: 10_000_000,
+  });
+});
+
+test('RPC registration installs and cleans up all three methods exactly once', () => {
+  const registered = [];
+  const unregistered = [];
+  const room = {
+    registerRpcMethod(method, handler) {
+      registered.push({ method, handler });
+    },
+    unregisterRpcMethod(method) {
+      unregistered.push(method);
+    },
+  };
+  const handlers = harness().handlers;
+
+  const cleanup = registerPaperRpcHandlers(room, handlers);
+  assert.deepEqual(
+    registered.map(({ method }) => method),
+    [
+      'fined.paper.v1.open_dashboard',
+      'fined.paper.v1.prepare_order',
+      'fined.paper.v1.get_portfolio_summary',
+    ]
+  );
+  cleanup();
+  cleanup();
+  assert.deepEqual(unregistered, [
+    'fined.paper.v1.get_portfolio_summary',
+    'fined.paper.v1.prepare_order',
+    'fined.paper.v1.open_dashboard',
+  ]);
+});
+
+test('partial RPC registration failure unregisters every installed method once', () => {
+  const unregistered = [];
+  const room = {
+    registerRpcMethod(method) {
+      if (method === 'fined.paper.v1.get_portfolio_summary') throw new Error('registration failed');
+    },
+    unregisterRpcMethod(method) {
+      unregistered.push(method);
+    },
+  };
+
+  assert.throws(() => registerPaperRpcHandlers(room, harness().handlers), /registration failed/);
+  assert.deepEqual(unregistered, ['fined.paper.v1.prepare_order', 'fined.paper.v1.open_dashboard']);
+});
+
+test('confirmed fill persists through the lock and sends an exact result without awaiting voice ack', async () => {
+  const portfolio = createPaperPortfolio('2026-08-08T00:00:00.000Z', 'portfolio-1');
+  const draft = decodePaperOrderDraft(JSON.parse(draftPayload()));
+  const storage = memoryStorage();
+  let rpcPayload;
+  let resolveAck;
+  const ack = new Promise((resolve) => {
+    resolveAck = resolve;
+  });
+
+  const result = await confirmPaperDraft({
+    portfolio,
+    draft,
+    now: NOW,
+    storage,
+    coordinator: locks(),
+    sendOrderResult(payload) {
+      rpcPayload = payload;
+      return ack;
+    },
+  });
+
+  assert.equal(result.status, 'saved');
+  assert.equal(result.portfolio.revision, 1);
+  assert.deepEqual(rpcPayload, {
+    version: 1,
+    paper: true,
+    draft_id: 'draft-1',
+    side: 'buy',
+    trading_symbol: 'RELIANCE-EQ',
+    quantity: 1,
+    fill_price_paise: 250_000,
+    simulated_at: NOW,
+    cash_paise: 9_749_900,
+  });
+  resolveAck('{"version":1,"paper":true,"acknowledged":true}');
+});
+
+test('result RPC targets only the connected agent with the backend-compatible flat payload', async () => {
+  const calls = [];
+  const localParticipant = {
+    performRpc(options) {
+      calls.push(options);
+      return Promise.resolve('ack');
+    },
+  };
+  const payload = {
+    version: 1,
+    paper: true,
+    draft_id: 'draft-1',
+    side: 'buy',
+    trading_symbol: 'RELIANCE-EQ',
+    quantity: 1,
+    fill_price_paise: 250_000,
+    simulated_at: NOW,
+    cash_paise: 9_749_900,
+  };
+
+  await sendPaperOrderResult(localParticipant, 'agent-1', payload);
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], {
+    destinationIdentity: 'agent-1',
+    method: 'fined.paper.v1.order_result',
+    payload: JSON.stringify(payload),
+    responseTimeout: 10_000,
+  });
+});
+
+test('a stale save returns the winning portfolio and never reports the losing draft', async () => {
+  const initial = createPaperPortfolio('2026-08-08T00:00:00.000Z', 'portfolio-1');
+  const winner = reducePaperPortfolio(initial, {
+    type: 'reset',
+    now: '2026-08-08T00:00:05.000Z',
+  });
+  const storage = memoryStorage({
+    [PAPER_PORTFOLIO_STORAGE_KEY]: JSON.stringify(winner),
+  });
+  let resultCalls = 0;
+
+  const result = await confirmPaperDraft({
+    portfolio: initial,
+    draft: decodePaperOrderDraft(JSON.parse(draftPayload())),
+    now: NOW,
+    storage,
+    coordinator: locks(),
+    sendOrderResult() {
+      resultCalls += 1;
+      return Promise.resolve('ack');
+    },
+  });
+
+  assert.deepEqual(result, { status: 'stale', portfolio: winner });
+  assert.equal(resultCalls, 0);
+});
+
+test('unavailable persistence fails safely without applying or reporting a fill', async () => {
+  const portfolio = createPaperPortfolio('2026-08-08T00:00:00.000Z', 'portfolio-1');
+  let resultCalls = 0;
+
+  const result = await confirmPaperDraft({
+    portfolio,
+    draft: decodePaperOrderDraft(JSON.parse(draftPayload())),
+    now: NOW,
+    storage: memoryStorage(),
+    coordinator: null,
+    sendOrderResult() {
+      resultCalls += 1;
+      return Promise.resolve('ack');
+    },
+  });
+
+  assert.deepEqual(result, { status: 'unavailable' });
+  assert.equal(portfolio.revision, 0);
+  assert.equal(resultCalls, 0);
+});
+
+test('App places PaperTradingProvider inside AgentSessionProvider around the session UI', () => {
+  const filename = require.resolve('../components/app/app.tsx');
+  const source = require('node:fs').readFileSync(filename, 'utf8');
+  const output = ts.transpileModule(source, {
+    compilerOptions: {
+      jsx: ts.JsxEmit.ReactJSX,
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+    },
+    fileName: filename,
+  }).outputText;
+  const compiledModule = { exports: {} };
+  const AgentSessionProvider = Symbol('AgentSessionProvider');
+  const PaperTradingProvider = Symbol('PaperTradingProvider');
+  const ViewController = Symbol('ViewController');
+  const jsxRuntime = {
+    Fragment: Symbol('Fragment'),
+    jsx: (type, props) => ({ type, props }),
+    jsxs: (type, props) => ({ type, props }),
+  };
+  const dependencies = new Map([
+    [
+      'react',
+      {
+        useMemo: (factory) => factory(),
+        useState: (initial) => [initial, () => undefined],
+      },
+    ],
+    ['react/jsx-runtime', jsxRuntime],
+    ['@livekit/components-react', { useSession: () => ({ room: {} }) }],
+    ['@/components/agents-ui/agent-session-provider', { AgentSessionProvider }],
+    ['@/components/agents-ui/start-audio-button', { StartAudioButton: Symbol('StartAudioButton') }],
+    ['@/components/app/view-controller', { ViewController }],
+    ['@/components/paper-trading/paper-trading-provider', { PaperTradingProvider }],
+    ['@/hooks/useDebug', { useDebugMode: () => undefined }],
+    ['@/lib/learning-modes', { participantMetadataForLearningMode: () => 'metadata' }],
+    ['@/lib/utils', { createModeScopedTokenSource: () => 'token-source' }],
+  ]);
+
+  new Function('require', 'module', 'exports', output)(
+    (specifier) => {
+      const dependency = dependencies.get(specifier);
+      if (!dependency) throw new Error(`Unexpected App dependency: ${specifier}`);
+      return dependency;
+    },
+    compiledModule,
+    compiledModule.exports
+  );
+  const tree = compiledModule.exports.App({ appConfig: {} });
+
+  assert.equal(tree.type, AgentSessionProvider);
+  assert.equal(tree.props.children.type, PaperTradingProvider);
+  const paperChildren = tree.props.children.props.children;
+  assert.ok(paperChildren.some((child) => child?.props?.children?.type === ViewController));
+});
