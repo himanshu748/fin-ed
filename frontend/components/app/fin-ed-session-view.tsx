@@ -81,7 +81,10 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
   const shouldReduceMotion = useReducedMotion();
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(true);
   const paperTradingTriggerRef = useRef<HTMLButtonElement>(null);
-  const committedPaperViewRef = useRef<PaperTradingView | null>(null);
+  const committedPaperViewRef = useRef<{
+    view: PaperTradingView | null;
+    interrupted: boolean;
+  }>({ view: null, interrupted: false });
   const workspaceRef = useRef<HTMLDivElement>(null);
   const activeMode = LEARNING_MODES.find((mode) => mode.value === learningMode);
   const status = statusFor(session.connectionState, agent.state);
@@ -90,16 +93,8 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
 
   useLayoutEffect(() => {
     const targetView = paperTrading.view;
-    const committedView = committedPaperViewRef.current;
-
-    if (committedView === targetView) {
-      return;
-    }
-
-    if (committedView === null && targetView === 'session') {
-      committedPaperViewRef.current = targetView;
-      return;
-    }
+    const transitionState = committedPaperViewRef.current;
+    const committedView = transitionState.view;
 
     const moveFocus = (view: PaperTradingView) => {
       if (view === 'dashboard') {
@@ -109,8 +104,23 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
       }
     };
 
+    if (committedView === targetView) {
+      if (transitionState.interrupted) {
+        transitionState.interrupted = false;
+        moveFocus(targetView);
+      }
+      return;
+    }
+
+    if (committedView === null && targetView === 'session') {
+      transitionState.view = targetView;
+      transitionState.interrupted = false;
+      return;
+    }
+
     if (shouldReduceMotion) {
-      committedPaperViewRef.current = targetView;
+      transitionState.view = targetView;
+      transitionState.interrupted = false;
       moveFocus(targetView);
       return;
     }
@@ -118,12 +128,16 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
     const workspace = workspaceRef.current;
     if (!workspace) return;
 
+    transitionState.interrupted = false;
+    let didComplete = false;
     let timeline: gsap.core.Timeline | undefined;
     const context = gsap.context(() => {
       timeline = gsap
         .timeline({
           onComplete: () => {
-            committedPaperViewRef.current = targetView;
+            didComplete = true;
+            transitionState.view = targetView;
+            transitionState.interrupted = false;
             moveFocus(targetView);
           },
         })
@@ -141,6 +155,7 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
     }, workspace);
 
     return () => {
+      if (!didComplete) transitionState.interrupted = true;
       timeline?.kill();
       context.revert();
     };

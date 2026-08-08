@@ -570,7 +570,7 @@ test('Strict Mode replay replaces the initial dashboard timeline before focusing
   assert.equal(harness.focusCalls().triggerFocusCalls, 0);
 });
 
-test('an interrupted view switch keeps the last completed view and can restart safely', () => {
+test('an interrupted dashboard entrance returns focus to the committed session trigger', () => {
   const harness = createSessionHarness({ initialView: 'session' });
   harness.render();
 
@@ -582,11 +582,14 @@ test('an interrupted view switch keeps the last completed view and can restart s
   harness.render();
   assert.equal(harness.timelines.length, 1, 'return to the committed view needs no animation');
   assert.equal(harness.timelines[0].killed, true);
+  assert.deepEqual(harness.cleanupCalls(), { contextReverts: 1, timelineKills: 1 });
   assert.deepEqual(harness.focusCalls(), {
-    triggerFocusCalls: 0,
+    triggerFocusCalls: 1,
     dashboardFocusCalls: 0,
     sessionHeadingFocusCalls: 0,
   });
+  harness.render();
+  assert.equal(harness.focusCalls().triggerFocusCalls, 1, 'stable session must not refocus');
 
   harness.paperTrading.view = 'dashboard';
   harness.render();
@@ -594,6 +597,28 @@ test('an interrupted view switch keeps the last completed view and can restart s
   assert.equal(harness.timelines.filter((timeline) => !timeline.killed).length, 1);
   harness.timelines[1].options.onComplete();
   assert.equal(harness.focusCalls().dashboardFocusCalls, 1);
+});
+
+test('an interrupted session return restores focus to the committed dashboard heading', () => {
+  const harness = createSessionHarness({ initialView: 'dashboard' });
+  harness.render();
+  harness.timelines[0].options.onComplete();
+  assert.equal(harness.focusCalls().dashboardFocusCalls, 1);
+
+  harness.paperTrading.view = 'session';
+  harness.render();
+  assert.equal(harness.timelines.length, 2);
+  assert.equal(harness.focusCalls().triggerFocusCalls, 0);
+
+  harness.paperTrading.view = 'dashboard';
+  harness.render();
+  assert.equal(harness.timelines.length, 2, 'return to committed dashboard needs no animation');
+  assert.equal(harness.timelines[1].killed, true);
+  assert.equal(harness.focusCalls().dashboardFocusCalls, 2);
+  assert.equal(harness.focusCalls().triggerFocusCalls, 0);
+
+  harness.render();
+  assert.equal(harness.focusCalls().dashboardFocusCalls, 2, 'stable dashboard must not refocus');
 });
 
 test('paper dashboard autofocus can be disabled without changing its standalone default', () => {
