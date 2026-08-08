@@ -17,6 +17,25 @@ interface ViewControllerProps {
 const MICROPHONE_PERMISSION_ERROR =
   'Microphone access is required for a voice call. Allow microphone access in your browser settings, then try connecting again.';
 const VOICE_CONNECTION_ERROR = 'Voice connection failed. Check your network and try again.';
+const CONNECTION_START_TIMEOUT_MS = 25_000;
+
+async function startSessionWithTimeout(start: () => Promise<void>): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    await Promise.race([
+      start(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error('Voice connection timed out.')),
+          CONNECTION_START_TIMEOUT_MS
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
 
 export function connectionErrorMessageFor(error: unknown): string {
   const name = error instanceof Error ? error.name : '';
@@ -61,7 +80,7 @@ export function ViewController({
     setConnectionError(null);
     setIsStarting(true);
     try {
-      await session.start();
+      await startSessionWithTimeout(() => session.start());
     } catch (error) {
       setConnectionError(connectionErrorMessageFor(error));
       await session.end().catch(() => undefined);

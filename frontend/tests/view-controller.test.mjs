@@ -262,7 +262,7 @@ function createSessionHarness({ initialView = 'session', reduceMotion = false } 
   };
 }
 
-function loadViewController({ agentState, isConnected, startError }) {
+function loadViewController({ agentState, isConnected, startError, startPromise }) {
   const stateWrites = [];
   let stateIndex = 0;
   let endCalls = 0;
@@ -270,6 +270,7 @@ function loadViewController({ agentState, isConnected, startError }) {
     isConnected,
     start: async () => {
       if (startError) throw startError;
+      if (startPromise) return startPromise;
     },
     end: async () => {
       endCalls += 1;
@@ -333,7 +334,14 @@ function loadViewController({ agentState, isConnected, startError }) {
     onLearningModeChange: () => undefined,
   });
 
-  return { endCalls, stateWrites, view, exports: compiledModule.exports };
+  return {
+    get endCalls() {
+      return endCalls;
+    },
+    stateWrites,
+    view,
+    exports: compiledModule.exports,
+  };
 }
 
 test('a failed agent state after the room disconnected is not reported as a connection failure', () => {
@@ -377,6 +385,52 @@ test('generic startup failures report a voice connection failure', () => {
   assert.equal(
     result.exports.connectionErrorMessageFor(new Error('signalling timed out')),
     'Voice connection failed. Check your network and try again.'
+  );
+});
+
+test('a stalled LiveKit start times out, ends the room, and unlocks retry', async () => {
+  const neverSettles = new Promise(() => undefined);
+  const result = loadViewController({
+    agentState: 'idle',
+    isConnected: false,
+    startPromise: neverSettles,
+  });
+  const welcome = findElement(
+    result.view,
+    (element) => typeof element.props?.onStartCall === 'function'
+  );
+  assert.ok(welcome, 'welcome view must expose the start action');
+
+  const nativeSetTimeout = globalThis.setTimeout;
+  const nativeClearTimeout = globalThis.clearTimeout;
+  globalThis.setTimeout = (callback) => {
+    queueMicrotask(callback);
+    return 1;
+  };
+  globalThis.clearTimeout = () => undefined;
+
+  try {
+    const outcome = await Promise.race([
+      welcome.props.onStartCall().then(() => 'settled'),
+      new Promise((resolve) => nativeSetTimeout(() => resolve('hung'), 20)),
+    ]);
+    assert.equal(outcome, 'settled', 'the start action must not stay pending forever');
+  } finally {
+    globalThis.setTimeout = nativeSetTimeout;
+    globalThis.clearTimeout = nativeClearTimeout;
+  }
+
+  assert.equal(result.endCalls, 1);
+  assert.ok(
+    result.stateWrites.some(
+      (write) =>
+        write.index === 1 &&
+        write.value === 'Voice connection failed. Check your network and try again.'
+    )
+  );
+  assert.ok(
+    result.stateWrites.some((write) => write.index === 0 && write.value === false),
+    'the connecting state must be cleared so retry is enabled'
   );
 });
 
