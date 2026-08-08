@@ -7,9 +7,10 @@ import { cn } from '@/lib/shadcn/utils';
 
 const NAV_ITEMS = [
   { href: '#how-it-works', label: 'How it works' },
-  { href: '#topics', label: 'Topics' },
-  { href: '#why-the-loss', label: 'Why the loss' },
+  { href: '#topics', label: 'Learning topics' },
+  { href: '#paper-practice', label: 'Paper practice' },
   { href: '#sources', label: 'Sources' },
+  { href: '#safety', label: 'Safety & FAQ' },
 ] as const;
 
 interface SiteNavProps {
@@ -20,27 +21,13 @@ interface SiteNavProps {
 
 function LedgerMark() {
   return (
-    <svg
+    <img
       aria-hidden="true"
-      className="size-8 shrink-0"
-      viewBox="0 0 32 32"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <rect x="3.5" y="3.5" width="25" height="25" rx="5.5" fill="#EAF1FD" stroke="#174EA6" />
-      <path
-        d="M10 9.5V22.5M14 9.5H23M14 14H21M14 18.5H23M14 23H19"
-        stroke="#174EA6"
-        strokeWidth="1.7"
-        strokeLinecap="round"
-      />
-      <path
-        d="M8 9.5H10M8 14H10M8 18.5H10M8 23H10"
-        stroke="#1F6B4F"
-        strokeWidth="1.7"
-        strokeLinecap="round"
-      />
-    </svg>
+      src="/fined-saathi-mark.svg"
+      width="36"
+      height="36"
+      className="size-9 shrink-0"
+    />
   );
 }
 
@@ -121,10 +108,7 @@ export function SiteNav({ connectLabel, isConnecting, onConnect }: SiteNavProps)
           </span>
         </a>
 
-        <div className="hidden items-center gap-6 lg:flex">
-          <span className="font-data text-[0.68rem] tracking-[0.08em] text-[var(--muted-ink)] uppercase">
-            Financial Services · Murf Falcon 2
-          </span>
+        <div className="hidden items-center gap-4 lg:flex">
           {NAV_ITEMS.map((item) => (
             <a
               key={item.href}
@@ -165,9 +149,6 @@ export function SiteNav({ connectLabel, isConnecting, onConnect }: SiteNavProps)
           aria-label="Site navigation"
           className="section-shell border-t border-[var(--soft-rule)] py-4 lg:hidden"
         >
-          <p className="font-data mb-3 text-[0.68rem] tracking-[0.08em] text-[var(--muted-ink)] uppercase">
-            Financial Services · Murf Falcon 2
-          </p>
           <div className="grid gap-1">
             {NAV_ITEMS.map((item) => (
               <a

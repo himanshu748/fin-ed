@@ -192,28 +192,71 @@ test('publishes the FinEd Saathi identity, viewport, and Ledger typography', () 
   );
 });
 
-test('renders the complete Day 1 landing narrative and safety boundary', () => {
+test('renders the voice-learning and paper-practice landing narrative', () => {
   const welcome = read('components/app/welcome-view.tsx');
+  const hero = read('components/app/hero-market-ledger.tsx');
+  const nav = read('components/app/site-nav.tsx');
 
   includesAll(
     welcome,
     [
       'VOICE-FIRST FINANCIAL LITERACY FOR INDIA',
-      'Same price. Why did I still lose money?',
+      'Learn the market before risking money.',
       'Talk to FinEd Saathi',
-      'See the ₹6 breakdown',
-      'Education only. FinEd does not recommend or execute trades and never asks for your broker password, PIN or OTP.',
+      'href="#paper-practice"',
+      'Explore paper trading',
+      'Practise with ₹1,00,000 virtual cash',
+      'Paper trading only',
+      'Education only. FinEd explains concepts and paper practice; it does not recommend or execute trades.',
       'How it works',
-      'The price loss was zero. The transaction cost was not.',
-      'It listens. Then it explains.',
+      'Official sources, shown with dates',
       'A broker answer is not the only final authority.',
       'Learn the next concept, not the next trade.',
     ],
     'missing required landing copy'
   );
+
+  assert.match(
+    welcome,
+    /<Button[\s\S]*?type="button"[\s\S]*?onClick=\{onStartCall\}[\s\S]*?>[\s\S]*?\{connectLabel\}[\s\S]*?<\/Button>/,
+    'primary hero action must remain a real button wired to onStartCall'
+  );
+  includesAll(
+    hero,
+    [
+      "import Image from 'next/image'",
+      'src="/images/fin-ed-voice-ledger-v1.png"',
+      'width=',
+      'height=',
+      'alt="Voice-led learning ledger for Indian market concepts and paper practice"',
+    ],
+    'missing accessible reserved hero artwork'
+  );
+  includesAll(
+    nav,
+    ['#how-it-works', '#topics', '#paper-practice', '#sources', '#safety'],
+    'missing landing navigation anchors'
+  );
+  includesAll(`${welcome}\n${nav}`, ['data-gsap-reveal'], 'missing intentional reveal targets');
+
+  for (const removedCopy of [
+    'Same price. Why did I still lose money?',
+    'See the ₹6 breakdown',
+    '₹50',
+    'why-the-loss',
+    'Mobile verification',
+    'Connect broker',
+    'Select model',
+    'Financial Services',
+  ]) {
+    assert.ok(
+      !`${welcome}\n${nav}`.includes(removedCopy),
+      `landing contains retired copy: ${removedCopy}`
+    );
+  }
 });
 
-test('moves the existing hero upward and publishes the Day 2 language contract', () => {
+test('keeps the compact hero and publishes the Day 2 language contract', () => {
   const welcome = read('components/app/welcome-view.tsx');
   const session = read('components/app/fin-ed-session-view.tsx');
 
@@ -223,8 +266,8 @@ test('moves the existing hero upward and publishes the Day 2 language contract',
       'items-start',
       'pt-4',
       'English, Hindi, or both',
-      'It provides education,',
-      'investment advice.',
+      'Education only.',
+      'SEBI-registered investment adviser.',
     ],
     'missing Day 2 hero contract'
   );
@@ -237,6 +280,10 @@ test('moves the existing hero upward and publishes the Day 2 language contract',
   assert.ok(
     !session.includes('Languages are not mixed'),
     'session must allow user-led code-mixing'
+  );
+  assert.ok(
+    !welcome.includes('min-h-[calc(100svh-4.5rem)]'),
+    'landing hero must not reserve a full-screen empty spacer'
   );
 });
 
@@ -429,10 +476,9 @@ test('does not leak starter branding, pill actions, or prohibited punctuation', 
   }
 });
 
-test('keeps the ₹6 illustration auditable and the remembered ₹50 unresolved', () => {
+test('keeps the delivery illustration auditable outside the public landing story', () => {
   const fixture = JSON.parse(read('data/six-rupee-delivery.json'));
   const receipt = read('components/app/fee-receipt.tsx');
-  const welcome = read('components/app/welcome-view.tsx');
 
   assert.deepEqual(fixture.assumptions, {
     broker: 'Angel One',
@@ -464,7 +510,7 @@ test('keeps the ₹6 illustration auditable and the remembered ₹50 unresolved'
   assert.equal(fixture.historical_loss_status, 'unresolved');
 
   includesAll(
-    `${receipt}\n${welcome}`,
+    receipt,
     [
       'sixRupeeFixture',
       'executed_buy_orders',
@@ -472,25 +518,11 @@ test('keeps the ₹6 illustration auditable and the remembered ₹50 unresolved'
       'demat_debits',
       'brokerage_buy',
       'brokerage_sell',
-      'fee_to_investment_percent',
-      'break_even_sell_price',
-      'Contract-note or Trades & Charges rows outrank this generic estimate.',
-      'contract-note total charges, ledger or available funds, or P&L',
+      'total_charges',
     ],
     'missing auditable reconciliation data'
   );
-  for (const field of [
-    'sixRupeeRules.brokerage',
-    'sixRupeeAssumptions.executed_buy_orders',
-    'sixRupeeAssumptions.executed_sell_orders',
-    'sixRupeeAssumptions.demat_debits',
-  ]) {
-    assert.ok(
-      (welcome.match(new RegExp(field.replace('.', '\\.'), 'g')) ?? []).length >= 3,
-      `${field} must appear in the breakdown, FAQ, and transcript`
-    );
-  }
-  assert.ok(!welcome.includes('590.17%'), 'UI contains the stale displayed-total ratio');
+  assert.ok(!receipt.includes('590.17%'), 'UI contains the stale displayed-total ratio');
 });
 
 test('labels both SEBI sources truthfully in the UI and packaged schedule', () => {
