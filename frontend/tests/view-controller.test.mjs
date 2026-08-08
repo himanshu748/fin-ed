@@ -504,6 +504,38 @@ test('workspace transitions start in the layout phase and transfer focus once af
   assert.deepEqual(harness.cleanupCalls(), { contextReverts: 2, timelineKills: 2 });
 });
 
+test('a dashboard remount coordinates one entrance while a session remount stays still', () => {
+  const dashboardHarness = createSessionHarness({ initialView: 'dashboard' });
+  const dashboardView = dashboardHarness.render();
+  const dashboard = findElement(
+    dashboardView,
+    (element) => element.type === dashboardHarness.PaperTradingDashboard
+  );
+
+  assert.equal(dashboard?.props.focusHeadingOnMount, false);
+  assert.equal(dashboardHarness.timelines.length, 1, 'dashboard remount must animate before paint');
+  assert.deepEqual(dashboardHarness.focusCalls(), {
+    triggerFocusCalls: 0,
+    dashboardFocusCalls: 0,
+    sessionHeadingFocusCalls: 0,
+  });
+
+  dashboardHarness.timelines[0].options.onComplete();
+  assert.equal(dashboardHarness.focusCalls().dashboardFocusCalls, 1);
+  dashboardHarness.render();
+  assert.equal(dashboardHarness.timelines.length, 1, 'stable dashboard must not animate again');
+  assert.equal(dashboardHarness.focusCalls().dashboardFocusCalls, 1);
+
+  const sessionHarness = createSessionHarness({ initialView: 'session' });
+  sessionHarness.render();
+  assert.equal(sessionHarness.timelines.length, 0, 'initial session must not animate');
+  assert.deepEqual(sessionHarness.focusCalls(), {
+    triggerFocusCalls: 0,
+    dashboardFocusCalls: 0,
+    sessionHeadingFocusCalls: 0,
+  });
+});
+
 test('paper dashboard autofocus can be disabled without changing its standalone default', () => {
   function renderDashboard(props) {
     let focusCalls = 0;

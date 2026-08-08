@@ -81,7 +81,7 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
   const shouldReduceMotion = useReducedMotion();
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(true);
   const paperTradingTriggerRef = useRef<HTMLButtonElement>(null);
-  const previousPaperViewRef = useRef<PaperTradingView>(paperTrading.view);
+  const previousPaperViewRef = useRef<PaperTradingView | null>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const activeMode = LEARNING_MODES.find((mode) => mode.value === learningMode);
   const status = statusFor(session.connectionState, agent.state);
@@ -92,7 +92,12 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
     const previousView = previousPaperViewRef.current;
     previousPaperViewRef.current = paperTrading.view;
 
-    if (previousView === paperTrading.view) return;
+    if (
+      previousView === paperTrading.view ||
+      (previousView === null && paperTrading.view === 'session')
+    ) {
+      return;
+    }
 
     const moveFocus = () => {
       if (paperTrading.view === 'dashboard') {
