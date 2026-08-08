@@ -237,6 +237,15 @@ test('renders the voice-learning and paper-practice landing narrative', () => {
     ['#how-it-works', '#topics', '#paper-practice', '#sources', '#safety'],
     'missing landing navigation anchors'
   );
+  const navTargets = [...nav.matchAll(/<(a|button|Button)\b([\s\S]*?)\n\s*>/g)];
+  assert.equal(navTargets.length, 6, 'navigation target inventory changed');
+  for (const [, element, attributes] of navTargets) {
+    assert.match(
+      attributes,
+      /(?:min-h-11|size-11|size="lg")/,
+      `${element} navigation target must be at least 44px tall`
+    );
+  }
   includesAll(`${welcome}\n${nav}`, ['data-gsap-reveal'], 'missing intentional reveal targets');
 
   for (const removedCopy of [

@@ -113,12 +113,18 @@ export function SiteNav({ connectLabel, isConnecting, onConnect }: SiteNavProps)
             <a
               key={item.href}
               href={item.href}
-              className="flex min-h-10 items-center text-sm font-semibold text-[var(--muted-ink)] transition-colors duration-200 ease-out hover:text-[var(--ledger-blue)]"
+              className="flex min-h-11 items-center text-sm font-semibold text-[var(--muted-ink)] transition-colors duration-200 ease-out hover:text-[var(--ledger-blue)]"
             >
               {item.label}
             </a>
           ))}
-          <Button type="button" disabled={isConnecting} onClick={onConnect} className="min-w-48">
+          <Button
+            type="button"
+            size="lg"
+            disabled={isConnecting}
+            onClick={onConnect}
+            className="min-w-48"
+          >
             {connectLabel}
           </Button>
         </div>
@@ -162,6 +168,7 @@ export function SiteNav({ connectLabel, isConnecting, onConnect }: SiteNavProps)
             ))}
             <Button
               type="button"
+              size="lg"
               disabled={isConnecting}
               onClick={connect}
               className="mt-2 min-w-48"
