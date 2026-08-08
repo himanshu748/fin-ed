@@ -204,17 +204,21 @@ class PaperOrderDraft:
 @dataclass(frozen=True)
 class PaperPortfolioSummary:
     cash_paise: int
-    holdings_value_paise: int
-    total_value_paise: int
+    holdings_cost_basis_paise: int
+    cash_plus_cost_basis_paise: int
 
     def __post_init__(self) -> None:
         cash = _require_non_negative_paise(self.cash_paise, "cash paise")
-        holdings = _require_non_negative_paise(
-            self.holdings_value_paise, "holdings value paise"
+        holdings_cost_basis = _require_non_negative_paise(
+            self.holdings_cost_basis_paise, "holdings cost basis paise"
         )
-        total = _require_non_negative_paise(self.total_value_paise, "total value paise")
-        if total != cash + holdings:
-            raise ValueError("total value paise must equal cash plus holdings value")
+        cash_plus_cost_basis = _require_non_negative_paise(
+            self.cash_plus_cost_basis_paise, "cash plus cost basis paise"
+        )
+        if cash_plus_cost_basis != cash + holdings_cost_basis:
+            raise ValueError(
+                "cash plus cost basis paise must equal cash plus holdings cost basis"
+            )
 
     def to_rpc_payload(self) -> dict[str, object]:
         return _encode_payload(
@@ -222,8 +226,8 @@ class PaperPortfolioSummary:
                 "version": RPC_VERSION,
                 "paper": True,
                 "cash_paise": self.cash_paise,
-                "holdings_value_paise": self.holdings_value_paise,
-                "total_value_paise": self.total_value_paise,
+                "holdings_cost_basis_paise": self.holdings_cost_basis_paise,
+                "cash_plus_cost_basis_paise": self.cash_plus_cost_basis_paise,
             }
         )
 
@@ -313,16 +317,16 @@ def decode_paper_portfolio_summary(payload: str) -> PaperPortfolioSummary:
                 "version",
                 "paper",
                 "cash_paise",
-                "holdings_value_paise",
-                "total_value_paise",
+                "holdings_cost_basis_paise",
+                "cash_plus_cost_basis_paise",
             }
         ),
     )
     _require_paper_envelope(decoded)
     return PaperPortfolioSummary(
         cash_paise=decoded["cash_paise"],
-        holdings_value_paise=decoded["holdings_value_paise"],
-        total_value_paise=decoded["total_value_paise"],
+        holdings_cost_basis_paise=decoded["holdings_cost_basis_paise"],
+        cash_plus_cost_basis_paise=decoded["cash_plus_cost_basis_paise"],
     )
 
 

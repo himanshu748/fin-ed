@@ -102,7 +102,7 @@ async def test_prepare_order_sends_only_the_public_draft_payload() -> None:
         '{"version":2,"paper":true,"opened":true}',
         '{"version":1,"paper":true,"opened":true,"access_token":"secret"}',
         "x" * (MAX_RPC_PAYLOAD_BYTES + 1),
-        '{"version":1,"paper":true,"cash_paise":-1,"holdings_value_paise":0,"total_value_paise":0}',
+        '{"version":1,"paper":true,"cash_paise":-1,"holdings_cost_basis_paise":0,"cash_plus_cost_basis_paise":0}',
     ],
 )
 async def test_bridge_sanitizes_invalid_or_oversized_responses(response: str) -> None:
@@ -132,9 +132,23 @@ async def test_bridge_sanitizes_livekit_timeouts() -> None:
 @pytest.mark.asyncio
 async def test_summary_sanitizes_negative_portfolio_values() -> None:
     fake = FakeLocalParticipant(
-        '{"version":1,"paper":true,"cash_paise":-1,"holdings_value_paise":0,"total_value_paise":0}'
+        '{"version":1,"paper":true,"cash_paise":-1,"holdings_cost_basis_paise":0,"cash_plus_cost_basis_paise":0}'
     )
     bridge = LiveKitPaperTradingBridge(fake, "learner-1")
 
     with pytest.raises(PaperTradingUIUnavailableError):
         await bridge.get_portfolio_summary()
+
+
+@pytest.mark.asyncio
+async def test_summary_preserves_only_historical_cost_basis_fields() -> None:
+    fake = FakeLocalParticipant(
+        '{"version":1,"paper":true,"cash_paise":9500000,'
+        '"holdings_cost_basis_paise":500000,"cash_plus_cost_basis_paise":10000000}'
+    )
+    bridge = LiveKitPaperTradingBridge(fake, "learner-1")
+
+    summary = await bridge.get_portfolio_summary()
+
+    assert summary.holdings_cost_basis_paise == 500_000
+    assert summary.cash_plus_cost_basis_paise == 10_000_000

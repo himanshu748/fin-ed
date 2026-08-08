@@ -55,6 +55,7 @@ const {
   confirmPaperDraft,
   connectedAgentIdentity,
   createPaperRpcHandlers,
+  initializePaperLedger,
   registerPaperRpcHandlers,
   sendPaperOrderResult,
 } = loadProviderModule();
@@ -95,6 +96,7 @@ function harness(overrides = {}) {
     expectedAgentIdentity: 'agent-1',
     getPortfolio: () => portfolio,
     getDraft: () => prepared,
+    getReadiness: () => 'ready',
     now: () => NOW,
     openDashboard: () => {
       opened = true;
@@ -110,7 +112,7 @@ function harness(overrides = {}) {
       return opened;
     },
     get prepared() {
-      return prepared;
+      return prepared?.draft ?? null;
     },
     setPortfolio(value) {
       portfolio = value;
@@ -283,7 +285,21 @@ test('prepare order opens the dashboard and returns only the strict draft acknow
   );
 });
 
-test('portfolio summary uses the persisted ledger and an exact flat response', async () => {
+test('prepare order binds the draft to the authorized agent session', async () => {
+  let preparedBinding = null;
+  const state = harness({
+    prepareDraft(binding) {
+      preparedBinding = binding;
+    },
+  });
+
+  await state.handlers.prepareOrder(invocation(draftPayload(), 'agent-1'));
+
+  assert.equal(preparedBinding.agentIdentity, 'agent-1');
+  assert.equal(preparedBinding.draft.draftId, 'draft-1');
+});
+
+test('portfolio summary labels persisted holdings only as historical cost basis', async () => {
   const state = harness();
   const bought = reducePaperPortfolio(
     createPaperPortfolio('2026-08-08T00:00:00.000Z', 'portfolio-1'),
@@ -295,9 +311,55 @@ test('portfolio summary uses the persisted ledger and an exact flat response', a
     version: 1,
     paper: true,
     cash_paise: 9_749_900,
-    holdings_value_paise: 250_100,
-    total_value_paise: 10_000_000,
+    holdings_cost_basis_paise: 250_100,
+    cash_plus_cost_basis_paise: 10_000_000,
   });
+});
+
+test('prepare and summary RPCs reject initializing, corrupt, and unavailable ledgers', async () => {
+  for (const readiness of ['initializing', 'corrupt', 'unavailable']) {
+    const state = harness({ getReadiness: () => readiness });
+
+    await assert.rejects(
+      () => state.handlers.prepareOrder(invocation(draftPayload())),
+      /not ready/
+    );
+    await assert.rejects(
+      () => state.handlers.getPortfolioSummary(invocation(OPEN_REQUEST)),
+      /not ready/
+    );
+    assert.equal(state.prepared, null);
+  }
+});
+
+test('ledger initialization is ready only with readable storage and lock coordination', () => {
+  const missing = initializePaperLedger(memoryStorage(), locks(), NOW);
+  assert.equal(missing.readiness, 'ready');
+  assert.equal(missing.portfolio.cashPaise, 10_000_000);
+
+  const noLocks = initializePaperLedger(memoryStorage(), null, NOW);
+  assert.equal(noLocks.readiness, 'unavailable');
+
+  const throwing = initializePaperLedger(
+    {
+      getItem() {
+        throw new Error('private storage failure');
+      },
+      setItem() {
+        throw new Error('private storage failure');
+      },
+    },
+    locks(),
+    NOW
+  );
+  assert.equal(throwing.readiness, 'unavailable');
+
+  const corrupt = initializePaperLedger(
+    memoryStorage({ [PAPER_PORTFOLIO_STORAGE_KEY]: '{' }),
+    locks(),
+    NOW
+  );
+  assert.equal(corrupt.readiness, 'corrupt');
 });
 
 test('RPC registration installs and cleans up all three methods exactly once', () => {
@@ -359,6 +421,8 @@ test('confirmed fill persists through the lock and sends an exact result without
   const result = await confirmPaperDraft({
     portfolio,
     draft,
+    preparedAgentIdentity: 'agent-1',
+    currentAgentIdentity: 'agent-1',
     now: NOW,
     storage,
     coordinator: locks(),
@@ -378,10 +442,38 @@ test('confirmed fill persists through the lock and sends an exact result without
     trading_symbol: 'RELIANCE-EQ',
     quantity: 1,
     fill_price_paise: 250_000,
-    simulated_at: NOW,
+    simulated_at: '2026-08-08T00:00:10.000+00:00',
     cash_paise: 9_749_900,
   });
   resolveAck('{"version":1,"paper":true,"acknowledged":true}');
+});
+
+test('a replacement agent cannot confirm or receive a draft prepared by the prior session', async () => {
+  const portfolio = createPaperPortfolio('2026-08-08T00:00:00.000Z', 'portfolio-1');
+  const storage = memoryStorage();
+  let resultCalls = 0;
+
+  await assert.rejects(
+    () =>
+      confirmPaperDraft({
+        portfolio,
+        draft: decodePaperOrderDraft(JSON.parse(draftPayload())),
+        preparedAgentIdentity: 'agent-1',
+        currentAgentIdentity: 'agent-2',
+        now: NOW,
+        storage,
+        coordinator: locks(),
+        sendOrderResult() {
+          resultCalls += 1;
+          return Promise.resolve('ack');
+        },
+      }),
+    /different agent session/
+  );
+
+  assert.equal(storage.getItem(PAPER_PORTFOLIO_STORAGE_KEY), null);
+  assert.equal(portfolio.revision, 0);
+  assert.equal(resultCalls, 0);
 });
 
 test('result RPC targets only the connected agent with the backend-compatible flat payload', async () => {
@@ -400,7 +492,7 @@ test('result RPC targets only the connected agent with the backend-compatible fl
     trading_symbol: 'RELIANCE-EQ',
     quantity: 1,
     fill_price_paise: 250_000,
-    simulated_at: NOW,
+    simulated_at: '2026-08-08T00:00:10.000+00:00',
     cash_paise: 9_749_900,
   };
 
@@ -429,6 +521,8 @@ test('a stale save returns the winning portfolio and never reports the losing dr
   const result = await confirmPaperDraft({
     portfolio: initial,
     draft: decodePaperOrderDraft(JSON.parse(draftPayload())),
+    preparedAgentIdentity: 'agent-1',
+    currentAgentIdentity: 'agent-1',
     now: NOW,
     storage,
     coordinator: locks(),
@@ -449,6 +543,8 @@ test('unavailable persistence fails safely without applying or reporting a fill'
   const result = await confirmPaperDraft({
     portfolio,
     draft: decodePaperOrderDraft(JSON.parse(draftPayload())),
+    preparedAgentIdentity: 'agent-1',
+    currentAgentIdentity: 'agent-1',
     now: NOW,
     storage: memoryStorage(),
     coordinator: null,

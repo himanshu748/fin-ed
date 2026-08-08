@@ -108,8 +108,8 @@ class FakePaperTradingBridge:
             raise PaperTradingUIUnavailableError()
         return PaperPortfolioSummary(
             cash_paise=9_500_000,
-            holdings_value_paise=500_000,
-            total_value_paise=10_000_000,
+            holdings_cost_basis_paise=500_000,
+            cash_plus_cost_basis_paise=10_000_000,
         )
 
 
@@ -998,8 +998,14 @@ async def test_paper_portfolio_summary_is_virtual_and_not_an_order() -> None:
     assert bridge.summary_calls == 1
     assert result == {
         "cash_paise": 9_500_000,
-        "holdings_value_paise": 500_000,
-        "total_value_paise": 10_000_000,
+        "holdings_cost_basis_paise": 500_000,
+        "cash_plus_cost_basis_paise": 10_000_000,
+        "valuation_basis": "historical_cost_basis",
+        "live_value_available": False,
+        "notice": (
+            "Holdings are shown at historical cost basis; live portfolio value "
+            "is unavailable."
+        ),
         "paper": True,
         "is_order": False,
     }

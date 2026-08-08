@@ -47,10 +47,11 @@ export interface PaperRpcHandlers {
 export interface PaperRpcDependencies {
   expectedAgentIdentity: string;
   getPortfolio(): PaperPortfolio;
-  getDraft(): PaperOrderDraft | null;
+  getDraft(): PreparedPaperDraft | null;
+  getReadiness(): PaperLedgerReadiness;
   now(): string;
   openDashboard(): void;
-  prepareDraft(draft: PaperOrderDraft): void;
+  prepareDraft(draft: PreparedPaperDraft): void;
 }
 
 interface PaperRoomRpcRegistry {
@@ -82,6 +83,8 @@ interface PaperRpcSender {
 export interface ConfirmPaperDraftDependencies {
   portfolio: PaperPortfolio;
   draft: PaperOrderDraft;
+  preparedAgentIdentity: string;
+  currentAgentIdentity: string;
   now: string;
   storage: PaperPortfolioStorage | null | undefined;
   coordinator?: PaperPortfolioLockCoordinator | null;
@@ -89,9 +92,21 @@ export interface ConfirmPaperDraftDependencies {
 }
 
 export type PaperTradingView = 'session' | 'dashboard';
+export type PaperLedgerReadiness = 'initializing' | 'ready' | 'unavailable' | 'corrupt';
+
+export interface PreparedPaperDraft {
+  draft: PaperOrderDraft;
+  agentIdentity: string;
+}
+
+export interface PaperLedgerInitialization {
+  readiness: PaperLedgerReadiness;
+  portfolio: PaperPortfolio;
+}
 
 export interface PaperTradingContextValue {
   view: PaperTradingView;
+  readiness: PaperLedgerReadiness;
   portfolio: PaperPortfolio;
   draft: PaperOrderDraft | null;
   error: string | null;
@@ -199,6 +214,18 @@ function authorize(callerIdentity: string, expectedAgentIdentity: string): void 
   }
 }
 
+function pythonCompatibleUtcTimestamp(value: string): string {
+  const timestamp = new Date(value);
+  if (!Number.isFinite(timestamp.getTime())) throw new Error('Invalid paper result timestamp');
+  return timestamp.toISOString().replace(/Z$/, '+00:00');
+}
+
+function requireReadyLedger(dependencies: PaperRpcDependencies): void {
+  if (dependencies.getReadiness() !== 'ready') {
+    throw new Error('Paper portfolio ledger is not ready');
+  }
+}
+
 export function createPaperRpcHandlers(dependencies: PaperRpcDependencies): PaperRpcHandlers {
   if (
     typeof dependencies.expectedAgentIdentity !== 'string' ||
@@ -216,19 +243,20 @@ export function createPaperRpcHandlers(dependencies: PaperRpcDependencies): Pape
 
   const prepareOrder: PaperRpcHandler = async ({ callerIdentity, payload }) => {
     authorize(callerIdentity, dependencies.expectedAgentIdentity);
+    requireReadyLedger(dependencies);
     const decoded = decodeObject(payload);
     const draft = decodePaperOrderDraft(decoded);
     const portfolio = dependencies.getPortfolio();
     if (portfolio.appliedDraftIds.includes(draft.draftId)) {
       throw new Error('Paper draft was already applied');
     }
-    if (dependencies.getDraft()?.draftId === draft.draftId) {
+    if (dependencies.getDraft()?.draft.draftId === draft.draftId) {
       throw new Error('Paper draft was already prepared');
     }
     if (Date.parse(draft.expiresAt) <= Date.parse(dependencies.now())) {
       throw new Error('Paper draft has expired');
     }
-    dependencies.prepareDraft(draft);
+    dependencies.prepareDraft({ draft, agentIdentity: dependencies.expectedAgentIdentity });
     dependencies.openDashboard();
     return JSON.stringify({
       version: 1,
@@ -240,23 +268,24 @@ export function createPaperRpcHandlers(dependencies: PaperRpcDependencies): Pape
 
   const getPortfolioSummary: PaperRpcHandler = async ({ callerIdentity, payload }) => {
     authorize(callerIdentity, dependencies.expectedAgentIdentity);
+    requireReadyLedger(dependencies);
     decodeEmptyPaperRequest(payload);
     const portfolio = dependencies.getPortfolio();
-    const holdingsValuePaise = portfolio.holdings.reduce((total, holding) => {
+    const holdingsCostBasisPaise = portfolio.holdings.reduce((total, holding) => {
       const next = total + holding.costBasisPaise;
       if (!Number.isSafeInteger(next)) throw new Error('Paper portfolio summary is unavailable');
       return next;
     }, 0);
-    const totalValuePaise = portfolio.cashPaise + holdingsValuePaise;
-    if (!Number.isSafeInteger(totalValuePaise) || totalValuePaise < 0) {
+    const cashPlusCostBasisPaise = portfolio.cashPaise + holdingsCostBasisPaise;
+    if (!Number.isSafeInteger(cashPlusCostBasisPaise) || cashPlusCostBasisPaise < 0) {
       throw new Error('Paper portfolio summary is unavailable');
     }
     return JSON.stringify({
       version: 1,
       paper: true,
       cash_paise: portfolio.cashPaise,
-      holdings_value_paise: holdingsValuePaise,
-      total_value_paise: totalValuePaise,
+      holdings_cost_basis_paise: holdingsCostBasisPaise,
+      cash_plus_cost_basis_paise: cashPlusCostBasisPaise,
     });
   };
 
@@ -300,6 +329,12 @@ export function registerPaperRpcHandlers(
 export async function confirmPaperDraft(
   dependencies: ConfirmPaperDraftDependencies
 ): Promise<SaveResult> {
+  if (
+    !dependencies.preparedAgentIdentity.trim() ||
+    dependencies.preparedAgentIdentity !== dependencies.currentAgentIdentity
+  ) {
+    throw new Error('Paper draft belongs to a different agent session');
+  }
   const candidate = reducePaperPortfolio(dependencies.portfolio, {
     type: 'confirmDraft',
     draft: dependencies.draft,
@@ -321,7 +356,7 @@ export async function confirmPaperDraft(
     trading_symbol: fill.tradingSymbol,
     quantity: fill.quantity,
     fill_price_paise: fill.fillPricePaise,
-    simulated_at: fill.filledAt,
+    simulated_at: pythonCompatibleUtcTimestamp(fill.filledAt),
     cash_paise: result.portfolio.cashPaise,
   };
   try {
@@ -340,6 +375,38 @@ function browserStorage(): PaperPortfolioStorage | null {
   }
 }
 
+function browserLockCoordinator(): PaperPortfolioLockCoordinator | null {
+  try {
+    const locks = typeof navigator === 'undefined' ? null : navigator.locks;
+    return locks && typeof locks.request === 'function'
+      ? (locks as unknown as PaperPortfolioLockCoordinator)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function initializePaperLedger(
+  storage: PaperPortfolioStorage | null | undefined,
+  coordinator: PaperPortfolioLockCoordinator | null | undefined,
+  now: string
+): PaperLedgerInitialization {
+  const fallback = createPaperPortfolio(now);
+  const loaded = loadPaperPortfolio(storage);
+  if (loaded.status === 'corrupt') return { readiness: 'corrupt', portfolio: fallback };
+  if (loaded.status === 'unavailable') return { readiness: 'unavailable', portfolio: fallback };
+  if (!coordinator || typeof coordinator.request !== 'function') {
+    return {
+      readiness: 'unavailable',
+      portfolio: loaded.status === 'ready' ? loaded.portfolio : fallback,
+    };
+  }
+  return {
+    readiness: 'ready',
+    portfolio: loaded.status === 'ready' ? loaded.portfolio : fallback,
+  };
+}
+
 const PaperTradingContext = createContext<PaperTradingContextValue | null>(null);
 
 export function usePaperTrading(): PaperTradingContextValue {
@@ -353,31 +420,44 @@ export function PaperTradingProvider({ children }: PropsWithChildren) {
   const agent = useAgent();
   const [view, setView] = useState<PaperTradingView>('session');
   const [portfolio, setPortfolio] = useState(() => createPaperPortfolio(new Date().toISOString()));
-  const [draft, setDraft] = useState<PaperOrderDraft | null>(null);
+  const [readiness, setReadiness] = useState<PaperLedgerReadiness>('initializing');
+  const [draft, setDraft] = useState<PreparedPaperDraft | null>(null);
   const [error, setError] = useState<string | null>(null);
   const portfolioRef = useRef(portfolio);
   const draftRef = useRef(draft);
+  const readinessRef = useRef(readiness);
 
   const updatePortfolio = useCallback((next: PaperPortfolio) => {
     portfolioRef.current = next;
     setPortfolio(next);
   }, []);
-  const updateDraft = useCallback((next: PaperOrderDraft | null) => {
+  const updateDraft = useCallback((next: PreparedPaperDraft | null) => {
     draftRef.current = next;
     setDraft(next);
+  }, []);
+  const updateReadiness = useCallback((next: PaperLedgerReadiness) => {
+    readinessRef.current = next;
+    setReadiness(next);
   }, []);
   const openDashboard = useCallback(() => setView('dashboard'), []);
   const closeDashboard = useCallback(() => setView('session'), []);
 
   useEffect(() => {
-    const loaded = loadPaperPortfolio(browserStorage());
-    if (loaded.status === 'ready') updatePortfolio(loaded.portfolio);
-    else if (loaded.status === 'corrupt' || loaded.status === 'unavailable') {
-      setError(PERSISTENCE_ERROR);
-    }
-  }, [updatePortfolio]);
+    const initialized = initializePaperLedger(
+      browserStorage(),
+      browserLockCoordinator(),
+      new Date().toISOString()
+    );
+    updatePortfolio(initialized.portfolio);
+    updateReadiness(initialized.readiness);
+    if (initialized.readiness !== 'ready') setError(PERSISTENCE_ERROR);
+  }, [updatePortfolio, updateReadiness]);
 
   const expectedAgentIdentity = connectedAgentIdentity(agent);
+  useEffect(() => {
+    const current = draftRef.current;
+    if (current && current.agentIdentity !== expectedAgentIdentity) updateDraft(null);
+  }, [expectedAgentIdentity, updateDraft]);
   const handlers = useMemo(
     () =>
       expectedAgentIdentity
@@ -385,11 +465,11 @@ export function PaperTradingProvider({ children }: PropsWithChildren) {
             expectedAgentIdentity,
             getPortfolio: () => portfolioRef.current,
             getDraft: () => draftRef.current,
+            getReadiness: () => readinessRef.current,
             now: () => new Date().toISOString(),
             openDashboard,
             prepareDraft: (next) => {
               updateDraft(next);
-              setError(null);
             },
           })
         : null,
@@ -403,6 +483,10 @@ export function PaperTradingProvider({ children }: PropsWithChildren) {
 
   const confirmDraft = useCallback(async () => {
     const currentDraft = draftRef.current;
+    if (readinessRef.current !== 'ready') {
+      setError(PERSISTENCE_ERROR);
+      return false;
+    }
     if (!currentDraft || !expectedAgentIdentity) {
       setError('No active paper draft is available to confirm.');
       return false;
@@ -410,7 +494,9 @@ export function PaperTradingProvider({ children }: PropsWithChildren) {
     try {
       const result = await confirmPaperDraft({
         portfolio: portfolioRef.current,
-        draft: currentDraft,
+        draft: currentDraft.draft,
+        preparedAgentIdentity: currentDraft.agentIdentity,
+        currentAgentIdentity: expectedAgentIdentity,
         now: new Date().toISOString(),
         storage: browserStorage(),
         sendOrderResult: (payload) =>
@@ -424,7 +510,8 @@ export function PaperTradingProvider({ children }: PropsWithChildren) {
       }
       if (result.status === 'stale') {
         updatePortfolio(result.portfolio);
-        if (result.portfolio.appliedDraftIds.includes(currentDraft.draftId)) updateDraft(null);
+        if (result.portfolio.appliedDraftIds.includes(currentDraft.draft.draftId))
+          updateDraft(null);
         setError(STALE_ERROR);
         return false;
       }
@@ -437,6 +524,10 @@ export function PaperTradingProvider({ children }: PropsWithChildren) {
   }, [expectedAgentIdentity, session.room.localParticipant, updateDraft, updatePortfolio]);
 
   const resetPortfolio = useCallback(async () => {
+    if (readinessRef.current !== 'ready') {
+      setError(PERSISTENCE_ERROR);
+      return false;
+    }
     try {
       const candidate = reducePaperPortfolio(portfolioRef.current, {
         type: 'reset',
@@ -465,15 +556,26 @@ export function PaperTradingProvider({ children }: PropsWithChildren) {
   const value = useMemo<PaperTradingContextValue>(
     () => ({
       view,
+      readiness,
       portfolio,
-      draft,
+      draft: draft?.draft ?? null,
       error,
       openDashboard,
       closeDashboard,
       confirmDraft,
       resetPortfolio,
     }),
-    [closeDashboard, confirmDraft, draft, error, openDashboard, portfolio, resetPortfolio, view]
+    [
+      closeDashboard,
+      confirmDraft,
+      draft,
+      error,
+      openDashboard,
+      portfolio,
+      readiness,
+      resetPortfolio,
+      view,
+    ]
   );
 
   return <PaperTradingContext.Provider value={value}>{children}</PaperTradingContext.Provider>;

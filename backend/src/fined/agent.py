@@ -565,8 +565,14 @@ class FinEdAssistant(Agent):
             raise ToolError(PAPER_TRADING_UI_UNAVAILABLE_MESSAGE) from None
         return {
             "cash_paise": summary.cash_paise,
-            "holdings_value_paise": summary.holdings_value_paise,
-            "total_value_paise": summary.total_value_paise,
+            "holdings_cost_basis_paise": summary.holdings_cost_basis_paise,
+            "cash_plus_cost_basis_paise": summary.cash_plus_cost_basis_paise,
+            "valuation_basis": "historical_cost_basis",
+            "live_value_available": False,
+            "notice": (
+                "Holdings are shown at historical cost basis; live portfolio value "
+                "is unavailable."
+            ),
             "paper": True,
             "is_order": False,
         }

@@ -120,14 +120,18 @@ def test_draft_rejects_boolean_notional() -> None:
 def test_summary_rejects_negative_cash() -> None:
     with pytest.raises(ValueError):
         PaperPortfolioSummary(
-            cash_paise=-1, holdings_value_paise=0, total_value_paise=0
+            cash_paise=-1,
+            holdings_cost_basis_paise=0,
+            cash_plus_cost_basis_paise=0,
         )
 
 
 def test_summary_rejects_an_inconsistent_total() -> None:
     with pytest.raises(ValueError):
         PaperPortfolioSummary(
-            cash_paise=100, holdings_value_paise=20, total_value_paise=121
+            cash_paise=100,
+            holdings_cost_basis_paise=20,
+            cash_plus_cost_basis_paise=121,
         )
 
 
@@ -154,8 +158,8 @@ def test_decoders_reject_unknown_response_keys() -> None:
             {
                 "paper": True,
                 "cash_paise": 10_000_000,
-                "holdings_value_paise": 0,
-                "total_value_paise": 10_000_000,
+                "holdings_cost_basis_paise": 0,
+                "cash_plus_cost_basis_paise": 10_000_000,
             },
         ),
         (
@@ -187,10 +191,38 @@ def test_summary_decoder_accepts_only_the_versioned_public_shape() -> None:
                 "version": 1,
                 "paper": True,
                 "cash_paise": 10_000_000,
-                "holdings_value_paise": 250_000,
-                "total_value_paise": 10_250_000,
+                "holdings_cost_basis_paise": 250_000,
+                "cash_plus_cost_basis_paise": 10_250_000,
             }
         )
     )
 
-    assert summary.total_value_paise == 10_250_000
+    assert summary.holdings_cost_basis_paise == 250_000
+    assert summary.cash_plus_cost_basis_paise == 10_250_000
+
+
+def test_summary_decoder_rejects_fields_that_claim_a_live_portfolio_value() -> None:
+    with pytest.raises(ValueError):
+        decode_paper_portfolio_summary(
+            json.dumps(
+                {
+                    "version": 1,
+                    "paper": True,
+                    "cash_paise": 10_000_000,
+                    "holdings_value_paise": 250_000,
+                    "total_value_paise": 10_250_000,
+                }
+            )
+        )
+
+
+def test_browser_shaped_order_result_uses_a_python_310_compatible_utc_offset() -> None:
+    payload = (
+        '{"version":1,"paper":true,"draft_id":"draft-1","side":"buy",'
+        '"trading_symbol":"RELIANCE-EQ","quantity":1,"fill_price_paise":250000,'
+        '"simulated_at":"2026-08-08T00:00:10.000+00:00","cash_paise":9749900}'
+    )
+
+    result = decode_paper_order_result(payload)
+
+    assert result.simulated_at == datetime(2026, 8, 8, 0, 0, 10, tzinfo=UTC)
