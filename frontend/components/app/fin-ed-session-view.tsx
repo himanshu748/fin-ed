@@ -81,7 +81,7 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
   const shouldReduceMotion = useReducedMotion();
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(true);
   const paperTradingTriggerRef = useRef<HTMLButtonElement>(null);
-  const previousPaperViewRef = useRef<PaperTradingView | null>(null);
+  const committedPaperViewRef = useRef<PaperTradingView | null>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const activeMode = LEARNING_MODES.find((mode) => mode.value === learningMode);
   const status = statusFor(session.connectionState, agent.state);
@@ -89,18 +89,20 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
     shouldReduceMotion && agent.state === 'speaking' ? 'listening' : agent.state;
 
   useLayoutEffect(() => {
-    const previousView = previousPaperViewRef.current;
-    previousPaperViewRef.current = paperTrading.view;
+    const targetView = paperTrading.view;
+    const committedView = committedPaperViewRef.current;
 
-    if (
-      previousView === paperTrading.view ||
-      (previousView === null && paperTrading.view === 'session')
-    ) {
+    if (committedView === targetView) {
       return;
     }
 
-    const moveFocus = () => {
-      if (paperTrading.view === 'dashboard') {
+    if (committedView === null && targetView === 'session') {
+      committedPaperViewRef.current = targetView;
+      return;
+    }
+
+    const moveFocus = (view: PaperTradingView) => {
+      if (view === 'dashboard') {
         workspaceRef.current?.querySelector<HTMLElement>('h1')?.focus();
       } else {
         paperTradingTriggerRef.current?.focus();
@@ -108,7 +110,8 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
     };
 
     if (shouldReduceMotion) {
-      moveFocus();
+      committedPaperViewRef.current = targetView;
+      moveFocus(targetView);
       return;
     }
 
@@ -117,17 +120,24 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
 
     let timeline: gsap.core.Timeline | undefined;
     const context = gsap.context(() => {
-      timeline = gsap.timeline({ onComplete: moveFocus }).fromTo(
-        workspace,
-        { autoAlpha: 0, x: paperTrading.view === 'dashboard' ? 18 : -18 },
-        {
-          autoAlpha: 1,
-          x: 0,
-          duration: 0.26,
-          ease: 'power2.out',
-          clearProps: 'transform,opacity,visibility',
-        }
-      );
+      timeline = gsap
+        .timeline({
+          onComplete: () => {
+            committedPaperViewRef.current = targetView;
+            moveFocus(targetView);
+          },
+        })
+        .fromTo(
+          workspace,
+          { autoAlpha: 0, x: targetView === 'dashboard' ? 18 : -18 },
+          {
+            autoAlpha: 1,
+            x: 0,
+            duration: 0.26,
+            ease: 'power2.out',
+            clearProps: 'transform,opacity,visibility',
+          }
+        );
     }, workspace);
 
     return () => {

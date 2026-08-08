@@ -99,6 +99,7 @@ function createSessionHarness({ initialView = 'session', reduceMotion = false } 
       records[item.index] = {
         cleanup: typeof cleanup === 'function' ? cleanup : null,
         dependencies: item.dependencies,
+        effect: item.effect,
       };
     }
     pending.length = 0;
@@ -156,6 +157,7 @@ function createSessionHarness({ initialView = 'session', reduceMotion = false } 
         from: null,
         to: null,
         target: null,
+        killed: false,
         fromTo(target, from, to) {
           timeline.target = target;
           timeline.from = from;
@@ -163,6 +165,7 @@ function createSessionHarness({ initialView = 'session', reduceMotion = false } 
           return timeline;
         },
         kill() {
+          timeline.killed = true;
           timelineKills += 1;
         },
       };
@@ -237,6 +240,18 @@ function createSessionHarness({ initialView = 'session', reduceMotion = false } 
     },
     unmount() {
       for (const record of [...layoutEffects, ...passiveEffects]) record?.cleanup?.();
+    },
+    strictModeReplayLayoutEffects() {
+      for (const record of layoutEffects) record?.cleanup?.();
+      for (let index = 0; index < layoutEffects.length; index += 1) {
+        const record = layoutEffects[index];
+        if (!record) continue;
+        const cleanup = record.effect();
+        layoutEffects[index] = {
+          ...record,
+          cleanup: typeof cleanup === 'function' ? cleanup : null,
+        };
+      }
     },
     focusCalls() {
       return { triggerFocusCalls, dashboardFocusCalls, sessionHeadingFocusCalls };
@@ -534,6 +549,51 @@ test('a dashboard remount coordinates one entrance while a session remount stays
     dashboardFocusCalls: 0,
     sessionHeadingFocusCalls: 0,
   });
+});
+
+test('Strict Mode replay replaces the initial dashboard timeline before focusing once', () => {
+  const harness = createSessionHarness({ initialView: 'dashboard' });
+  harness.render();
+  assert.equal(harness.timelines.length, 1);
+
+  harness.strictModeReplayLayoutEffects();
+
+  assert.equal(harness.timelines.length, 2, 'effect replay must create a replacement timeline');
+  assert.equal(harness.timelines[0].killed, true);
+  assert.equal(harness.timelines[1].killed, false);
+  assert.equal(harness.timelines.filter((timeline) => !timeline.killed).length, 1);
+  assert.deepEqual(harness.cleanupCalls(), { contextReverts: 1, timelineKills: 1 });
+  assert.equal(harness.focusCalls().dashboardFocusCalls, 0);
+
+  harness.timelines[1].options.onComplete();
+  assert.equal(harness.focusCalls().dashboardFocusCalls, 1);
+  assert.equal(harness.focusCalls().triggerFocusCalls, 0);
+});
+
+test('an interrupted view switch keeps the last completed view and can restart safely', () => {
+  const harness = createSessionHarness({ initialView: 'session' });
+  harness.render();
+
+  harness.paperTrading.view = 'dashboard';
+  harness.render();
+  assert.equal(harness.timelines.length, 1);
+
+  harness.paperTrading.view = 'session';
+  harness.render();
+  assert.equal(harness.timelines.length, 1, 'return to the committed view needs no animation');
+  assert.equal(harness.timelines[0].killed, true);
+  assert.deepEqual(harness.focusCalls(), {
+    triggerFocusCalls: 0,
+    dashboardFocusCalls: 0,
+    sessionHeadingFocusCalls: 0,
+  });
+
+  harness.paperTrading.view = 'dashboard';
+  harness.render();
+  assert.equal(harness.timelines.length, 2);
+  assert.equal(harness.timelines.filter((timeline) => !timeline.killed).length, 1);
+  harness.timelines[1].options.onComplete();
+  assert.equal(harness.focusCalls().dashboardFocusCalls, 1);
 });
 
 test('paper dashboard autofocus can be disabled without changing its standalone default', () => {

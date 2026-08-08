@@ -377,7 +377,7 @@ test('keeps voice controls mounted while the paper workspace replaces only sessi
       '<AgentControlBar',
       'paperTrading.view ===',
       'paperTradingTriggerRef',
-      'previousPaperViewRef',
+      'committedPaperViewRef',
       'Nikhil',
       'Murf Falcon 2',
       'India voice',
@@ -417,7 +417,6 @@ test('scopes the paper workspace transition and restores keyboard focus', () => 
     session,
     [
       'gsap.context',
-      'gsap.timeline',
       'autoAlpha',
       '? 18 : -18',
       'duration: 0.26',
