@@ -473,7 +473,7 @@ def test_prompt_defines_browser_only_paper_trading_safety_contract() -> None:
         "the tool prepares a draft",
         "never say it filled until the browser reports a confirmed paper result",
         "never provide a recommendation or convert a paper request into a real broker action",
-        "paper orders support cash equity and etf delivery only",
+        "paper fills are currently limited to nse eq cash equity and etf delivery",
         "never prepare an intraday, leveraged, short-selling, or f&o paper order",
         "f&o simulation means educational payoff examples only, never a paper order",
     ):
@@ -536,12 +536,52 @@ async def test_instrument_search_preserves_ambiguous_choices_for_the_learner() -
         "requires_selection": True,
         "paper": True,
         "is_order": False,
-        "message": "Ask the learner to choose one exact exchange and instrument.",
+        "message": (
+            "Ask the learner to choose one exact exchange and instrument. "
+            "Paper fills are currently limited to NSE EQ."
+        ),
     }
     assert set(state.resolved_market_instruments) == {
         ("NSE", "2885"),
         ("BSE", "500325"),
     }
+
+
+@pytest.mark.asyncio
+async def test_bse_cash_instrument_remains_searchable_for_education() -> None:
+    instrument = MarketInstrument(
+        exchange="BSE",
+        trading_symbol="RELIANCE",
+        symbol_token="500325",
+        series=None,
+    )
+    provider = FakeMarketDataProvider(instruments=(instrument,))
+    state = SessionState(
+        profile=ParticipantProfile(LearningMode.STOCKS),
+        retriever=FakeRetriever([]),
+        market_data=provider,
+        paper_trading=FakePaperTradingBridge(),
+    )
+
+    result = await FinEdAssistant().search_market_instruments(
+        _context(state), query="RELIANCE", exchange="BSE"
+    )
+
+    assert provider.search_calls == [
+        InstrumentSearchRequest(query="RELIANCE", exchange="BSE")
+    ]
+    assert result["matches"] == [
+        {
+            "exchange": "BSE",
+            "symbol_token": "500325",
+            "trading_symbol": "RELIANCE",
+            "series": None,
+            "is_order": False,
+        }
+    ]
+    assert "Paper fills are currently limited to NSE EQ." in str(result["message"])
+    assert state.resolved_market_instruments[("BSE", "500325")] == instrument
+    assert set(state.resolved_market_instruments) == {("BSE", "500325")}
 
 
 def _paper_quote(
@@ -611,12 +651,6 @@ async def test_prepare_order_does_not_track_draft_without_browser_acknowledgemen
     [
         {"trading_symbol": "RELIANCE-EQ", "series": "EQ"},
         {"trading_symbol": "NIFTYBEES-EQ", "series": "EQ"},
-        {
-            "exchange": "BSE",
-            "symbol_token": "500325",
-            "trading_symbol": "RELIANCE-A",
-            "series": "A",
-        },
     ],
 )
 async def test_prepare_order_accepts_provider_resolved_allowlisted_delivery_instrument(
@@ -659,14 +693,8 @@ async def test_prepare_order_accepts_provider_resolved_allowlisted_delivery_inst
         {
             "exchange": "BSE",
             "symbol_token": "500325",
-            "trading_symbol": "RELIANCE-B",
-            "series": "B",
-        },
-        {
-            "exchange": "BSE",
-            "symbol_token": "500325",
-            "trading_symbol": "RELIANCE",
-            "series": None,
+            "trading_symbol": "RELIANCE-A",
+            "series": "A",
         },
     ],
 )
@@ -688,7 +716,7 @@ async def test_prepare_order_rejects_unsupported_provider_series_before_quote(
         instrument=instrument,
     )
 
-    with pytest.raises(ToolError, match="supported cash equity or ETF delivery"):
+    with pytest.raises(ToolError, match="limited to NSE EQ"):
         await FinEdAssistant().prepare_paper_order(
             _context(state),
             "buy",
@@ -697,6 +725,40 @@ async def test_prepare_order_rejects_unsupported_provider_series_before_quote(
             1,
         )
 
+    assert provider.calls == []
+    assert bridge.draft is None
+
+
+@pytest.mark.asyncio
+async def test_prepare_order_rejects_real_shape_bse_cash_before_quote() -> None:
+    instrument = MarketInstrument(
+        exchange="BSE",
+        trading_symbol="RELIANCE",
+        symbol_token="500325",
+        series=None,
+    )
+    provider = FakeMarketDataProvider(
+        quote=_paper_quote(
+            exchange="BSE",
+            symbol_token="500325",
+            trading_symbol="RELIANCE",
+        )
+    )
+    bridge = FakePaperTradingBridge()
+    state = _paper_state(
+        provider=provider,
+        bridge=bridge,
+        instrument=instrument,
+    )
+
+    with pytest.raises(ToolError) as failure:
+        await FinEdAssistant().prepare_paper_order(
+            _context(state), "buy", "BSE", "500325", 1
+        )
+
+    assert str(failure.value) == (
+        "Paper fills are currently limited to NSE EQ cash equity and ETF delivery."
+    )
     assert provider.calls == []
     assert bridge.draft is None
 
@@ -781,10 +843,14 @@ async def test_fno_mode_rejects_paper_order_preparation() -> None:
         bridge=FakePaperTradingBridge(),
     )
 
-    with pytest.raises(ToolError, match="cash equity and ETF delivery"):
+    with pytest.raises(ToolError, match="limited to NSE EQ") as failure:
         await FinEdAssistant().prepare_paper_order(
             _context(state), "buy", "NSE", "2885", 1
         )
+
+    assert str(failure.value) == (
+        "Paper fills are currently limited to NSE EQ cash equity and ETF delivery."
+    )
 
 
 @pytest.mark.asyncio

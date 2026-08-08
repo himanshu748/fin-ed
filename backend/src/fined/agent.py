@@ -58,11 +58,12 @@ MAX_SEARCH_QUERY_BYTES = 4096
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _INDIA_TIME = ZoneInfo("Asia/Kolkata")
 _SUPPORTED_PAPER_NSE_SERIES = frozenset({"EQ"})
-_SUPPORTED_PAPER_BSE_GROUPS = frozenset({"A"})
 _PAPER_INSTRUMENT_NOT_RESOLVED_MESSAGE = (
     "Use search_market_instruments and select a provider-resolved instrument first."
 )
-_PAPER_INSTRUMENT_UNSUPPORTED_MESSAGE = "Only a supported cash equity or ETF delivery instrument can be used for a paper order."
+_PAPER_INSTRUMENT_UNSUPPORTED_MESSAGE = (
+    "Paper fills are currently limited to NSE EQ cash equity and ETF delivery."
+)
 _PAPER_CHARGE_ERROR_MESSAGE = "Paper order charges could not be calculated safely."
 
 _TOPIC_NAMES = {
@@ -166,7 +167,7 @@ KNOWLEDGE
 
 PAPER TRADING
 - Paper trading is a browser-only educational simulation with virtual money.
-- Paper orders support cash equity and ETF delivery only.
+- Paper fills are currently limited to NSE EQ cash equity and ETF delivery.
 - Never prepare an intraday, leveraged, short-selling, or F&O paper order.
 - F&O simulation means educational payoff examples only, never a paper order.
 - Use open_paper_trading_dashboard for intent to practise or view the paper portfolio.
@@ -412,11 +413,20 @@ class FinEdAssistant(Agent):
 
         matches = [instrument.to_public_dict() for instrument in instruments]
         if len(matches) == 1:
-            message = "Use the exact exchange and symbol token shown for a paper draft."
+            message = (
+                "Use the exact exchange and symbol token shown for education. "
+                "Paper fills are currently limited to NSE EQ."
+            )
         elif matches:
-            message = "Ask the learner to choose one exact exchange and instrument."
+            message = (
+                "Ask the learner to choose one exact exchange and instrument. "
+                "Paper fills are currently limited to NSE EQ."
+            )
         else:
-            message = "No supported cash equity or ETF instrument was found."
+            message = (
+                "No supported cash-market instrument was found. "
+                "Paper fills are currently limited to NSE EQ."
+            )
         return {
             "matches": matches,
             "requires_selection": len(matches) != 1,
@@ -438,15 +448,13 @@ class FinEdAssistant(Agent):
 
         Args:
             side: Exact paper side, buy or sell.
-            exchange: Cash-market exchange, exactly NSE or BSE.
-            symbol_token: Numeric token from search_market_instruments.
+            exchange: Exact exchange from search; current paper fills require NSE.
+            symbol_token: Numeric search token whose provider series must be EQ.
             quantity: Positive whole share or ETF-unit quantity.
         """
         state = context.userdata
         if state.profile.learning_mode is LearningMode.FNO:
-            raise ToolError(
-                "Paper order preparation supports cash equity and ETF delivery only."
-            )
+            raise ToolError(_PAPER_INSTRUMENT_UNSUPPORTED_MESSAGE)
         if not isinstance(side, str) or side not in {"buy", "sell"}:
             raise ToolError("side must be buy or sell.")
         parsed_quantity = _positive_integer(quantity, "quantity")
@@ -481,7 +489,6 @@ class FinEdAssistant(Agent):
         charge_paise: int | None = None
         cash_effect_paise: int | None = None
         charge_status = "unavailable"
-        bse_group = instrument.series if exchange == "BSE" else None
         try:
             breakdown = calculate_delivery_fill(
                 DeliveryFill(
@@ -491,7 +498,7 @@ class FinEdAssistant(Agent):
                     quantity=parsed_quantity,
                     price=quote.last_traded_price,
                     brokerage_promotion_applies=False,
-                    bse_group=bse_group,
+                    bse_group=None,
                 )
             )
         except (UnsupportedScheduleError, ScheduleConfigurationError):
@@ -728,11 +735,10 @@ def _rupees_to_paise(value: Decimal) -> int:
 
 
 def _supports_paper_delivery(instrument: MarketInstrument) -> bool:
-    if instrument.exchange == "NSE":
-        return instrument.series in _SUPPORTED_PAPER_NSE_SERIES
-    if instrument.exchange == "BSE":
-        return instrument.series in _SUPPORTED_PAPER_BSE_GROUPS
-    return False
+    return (
+        instrument.exchange == "NSE"
+        and instrument.series in _SUPPORTED_PAPER_NSE_SERIES
+    )
 
 
 def _validate_bse_group(exchange: str, value: str | None) -> str | None:
