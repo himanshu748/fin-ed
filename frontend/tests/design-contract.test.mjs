@@ -54,7 +54,7 @@ test('publishes original FinEd editorial artwork and compact brand icons', () =>
   }
 });
 
-function loadReveal({ react = React, useReducedMotion = () => false } = {}) {
+function loadReveal({ react = React, useGsapReveal = () => {} } = {}) {
   const output = ts.transpileModule(read('components/app/reveal.tsx'), {
     compilerOptions: {
       jsx: ts.JsxEmit.ReactJSX,
@@ -66,7 +66,7 @@ function loadReveal({ react = React, useReducedMotion = () => false } = {}) {
   const dependencies = new Map([
     ['react', react],
     ['react/jsx-runtime', jsxRuntime],
-    ['motion/react', { useReducedMotion }],
+    ['@/hooks/use-gsap-reveal', { useGsapReveal }],
     ['@/lib/shadcn/utils', { cn: (...values) => values.filter(Boolean).join(' ') }],
   ]);
 
@@ -285,7 +285,7 @@ test('keeps the paper workspace simulated, browser-owned, and quote-gated', () =
 
 test('honors reduced motion without idle animation loops', () => {
   const styles = read('styles/globals.css');
-  const reveal = read('components/app/reveal.tsx');
+  const revealHook = read('hooks/use-gsap-reveal.ts');
   const conversation = read('components/ai-elements/conversation.tsx');
   const visualizer = read('hooks/agents-ui/use-agent-audio-visualizer-bar.ts');
 
@@ -294,7 +294,11 @@ test('honors reduced motion without idle animation loops', () => {
     ['prefers-reduced-motion', ':focus-visible'],
     'missing global motion or focus handling'
   );
-  includesAll(reveal, ['useReducedMotion'], 'reveal must respect reduced motion');
+  includesAll(
+    revealHook,
+    ['gsap.matchMedia()', 'prefers-reduced-motion: reduce'],
+    'reveal must respect reduced motion'
+  );
   includesAll(
     conversation,
     ['prefers-reduced-motion', 'instant'],
@@ -445,11 +449,9 @@ test('server-rendered Reveal emits visible content before hydration', () => {
   assert.doesNotMatch(markup, /(?:opacity-0|translate-[xy]|translate\(|translate[XY]\()/i);
 });
 
-test('reduced-motion Reveal does not observe or animate the element', () => {
-  let observerConstructions = 0;
-  let observeCalls = 0;
+test('Reveal delegates animation without invoking the Web Animations API', () => {
+  let hookCalls = 0;
   let animateCalls = 0;
-  const cleanups = [];
   const node = {
     animate() {
       animateCalls += 1;
@@ -457,41 +459,20 @@ test('reduced-motion Reveal does not observe or animate the element', () => {
     },
   };
   const react = {
-    useEffect(effect) {
-      const cleanup = effect();
-      if (cleanup) cleanups.push(cleanup);
-    },
     useRef() {
       return { current: node };
     },
   };
-  const previousObserver = globalThis.IntersectionObserver;
 
-  globalThis.IntersectionObserver = class MockIntersectionObserver {
-    constructor(callback) {
-      observerConstructions += 1;
-      this.callback = callback;
-    }
+  const Reveal = loadReveal({
+    react,
+    useGsapReveal(ref, options) {
+      hookCalls += 1;
+      assert.equal(ref.current, node);
+      assert.deepEqual(options, { delay: 0, once: true, start: 'top 86%', y: 18 });
+    },
+  });
+  Reveal({ children: 'Visible content' });
 
-    observe() {
-      observeCalls += 1;
-      this.callback([{ isIntersecting: true }]);
-    }
-
-    disconnect() {}
-  };
-
-  try {
-    const Reveal = loadReveal({ react, useReducedMotion: () => true });
-    Reveal({ children: 'Visible content' });
-    for (const cleanup of cleanups) cleanup();
-  } finally {
-    if (previousObserver === undefined) delete globalThis.IntersectionObserver;
-    else globalThis.IntersectionObserver = previousObserver;
-  }
-
-  assert.deepEqual(
-    { observerConstructions, observeCalls, animateCalls },
-    { observerConstructions: 0, observeCalls: 0, animateCalls: 0 }
-  );
+  assert.deepEqual({ hookCalls, animateCalls }, { hookCalls: 1, animateCalls: 0 });
 });
