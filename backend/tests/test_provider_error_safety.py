@@ -102,7 +102,9 @@ def test_angel_provider_centralizes_httpx_access_in_guarded_helper() -> None:
     ]
     network_access = [*async_client_constructions, *http_verb_accesses]
     assert network_access
-    assert {containing_function(node) for node in network_access} == {"_post_read_only"}
+    assert {containing_function(node) for node in network_access} == {
+        "_post_read_only_batch"
+    }
 
 
 class _FailingLLM(llm.LLM):

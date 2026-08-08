@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 import pytest
@@ -30,6 +31,20 @@ def config() -> AngelOneMarketDataConfig:
         client_public_ip="203.0.113.10",
         mac_address="00:11:22:33:44:55",
     )
+
+
+def capture_async_client_constructions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[int]:
+    original = angel_one.httpx.AsyncClient
+    constructions: list[int] = []
+
+    def counting_async_client(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+        constructions.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(angel_one.httpx, "AsyncClient", counting_async_client)
+    return constructions
 
 
 @pytest.mark.asyncio
@@ -98,30 +113,83 @@ async def test_search_rejects_f_string_forbidden_endpoint_before_transport(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("endpoint", [QUOTE_ENDPOINT, SEARCH_SCRIP_ENDPOINT])
-async def test_transport_gate_allows_each_exact_read_only_endpoint(
-    endpoint: str,
+async def test_batch_transport_gate_allows_exact_endpoints_in_request_order(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured_requests: list[httpx.Request] = []
+    client_constructions = capture_async_client_constructions(monkeypatch)
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured_requests.append(request)
-        return httpx.Response(200, json={"status": True}, request=request)
+        return httpx.Response(
+            200,
+            json={"status": True, "sequence": len(captured_requests)},
+            request=request,
+        )
 
     provider = AngelOneMarketDataProvider(
         config(), transport=httpx.MockTransport(handler)
     )
 
-    response = await provider._post_read_only(endpoint, {"probe": "read-only"})
+    responses = await provider._post_read_only_batch(
+        (
+            (QUOTE_ENDPOINT, {"probe": "quote"}),
+            (SEARCH_SCRIP_ENDPOINT, {"probe": "search"}),
+        )
+    )
 
-    assert response.status_code == 200
-    assert [request.url for request in captured_requests] == [httpx.URL(endpoint)]
-    assert json.loads(captured_requests[0].content) == {"probe": "read-only"}
+    assert [response.json()["sequence"] for response in responses] == [1, 2]
+    assert client_constructions == [1]
+    assert [request.url for request in captured_requests] == [
+        httpx.URL(QUOTE_ENDPOINT),
+        httpx.URL(SEARCH_SCRIP_ENDPOINT),
+    ]
+    assert [json.loads(request.content) for request in captured_requests] == [
+        {"probe": "quote"},
+        {"probe": "search"},
+    ]
 
 
 @pytest.mark.asyncio
-async def test_angel_one_provider_posts_ltp_request_and_normalizes_quote() -> None:
+async def test_batch_gate_rejects_every_request_before_constructing_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_requests: list[httpx.Request] = []
+    client_constructions = capture_async_client_constructions(monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(200, request=request)
+
+    provider = AngelOneMarketDataProvider(
+        config(), transport=httpx.MockTransport(handler)
+    )
+    forbidden = (
+        "https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/"
+        + "cancel"
+        + "Order"
+    )
+
+    with pytest.raises(MarketDataUnavailableError) as failure:
+        await provider._post_read_only_batch(
+            (
+                (QUOTE_ENDPOINT, {"probe": "allowed-first"}),
+                (forbidden, {"probe": "forbidden-second"}),
+                (SEARCH_SCRIP_ENDPOINT, {"probe": "allowed-third"}),
+            )
+        )
+
+    assert str(failure.value) == MARKET_DATA_UNAVAILABLE_MESSAGE
+    assert client_constructions == []
+    assert captured_requests == []
+
+
+@pytest.mark.asyncio
+async def test_angel_one_provider_posts_ltp_request_and_normalizes_quote(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     seen: dict[str, object] = {}
+    client_constructions = capture_async_client_constructions(monkeypatch)
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen["url"] = str(request.url)
@@ -157,6 +225,7 @@ async def test_angel_one_provider_posts_ltp_request_and_normalizes_quote() -> No
 
     quote = await provider.get_quote(QuoteRequest("NSE", "3045"))
 
+    assert client_constructions == [1]
     assert seen["url"] == QUOTE_ENDPOINT
     headers = seen["headers"]
     assert isinstance(headers, dict)
@@ -235,8 +304,11 @@ async def test_provider_maps_upstream_and_stale_failures_to_fixed_message(
 
 
 @pytest.mark.asyncio
-async def test_search_scrip_posts_only_to_read_only_endpoint() -> None:
+async def test_search_scrip_posts_only_to_read_only_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     captured_request: httpx.Request | None = None
+    client_constructions = capture_async_client_constructions(monkeypatch)
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal captured_request
@@ -263,6 +335,7 @@ async def test_search_scrip_posts_only_to_read_only_endpoint() -> None:
         InstrumentSearchRequest(query="RELIANCE", exchange="NSE")
     )
 
+    assert client_constructions == [1]
     assert results[0].trading_symbol == "RELIANCE-EQ"
     assert results[0].series == "EQ"
     assert captured_request is not None
@@ -275,10 +348,11 @@ async def test_search_scrip_posts_only_to_read_only_endpoint() -> None:
 
 
 @pytest.mark.asyncio
-async def test_search_scrip_without_exchange_queries_nse_and_bse_and_merges_results() -> (
-    None
-):
+async def test_search_scrip_without_exchange_queries_nse_and_bse_and_merges_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     captured_requests: list[httpx.Request] = []
+    client_constructions = capture_async_client_constructions(monkeypatch)
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured_requests.append(request)
@@ -319,6 +393,7 @@ async def test_search_scrip_without_exchange_queries_nse_and_bse_and_merges_resu
         InstrumentSearchRequest(query="RELIANCE", limit=3)
     )
 
+    assert client_constructions == [1]
     assert [
         (request.url, json.loads(request.content)) for request in captured_requests
     ] == [

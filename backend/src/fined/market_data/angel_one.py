@@ -38,6 +38,7 @@ MAX_RESPONSE_BYTES = 256 * 1024
 DEFAULT_MAX_AGE_SECONDS = 120
 _MAC_ADDRESS = re.compile(r"^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 _INDIA_TIME = ZoneInfo("Asia/Kolkata")
+_ReadOnlyRequest = tuple[str, Mapping[str, object]]
 
 
 @dataclass(frozen=True)
@@ -79,12 +80,7 @@ class AngelOneMarketDataProvider:
             "exchangeTokens": {request.exchange: [request.symbol_token]},
         }
         try:
-            response = await self._post_read_only(QUOTE_ENDPOINT, payload)
-            if (
-                response.status_code != 200
-                or len(response.content) > MAX_RESPONSE_BYTES
-            ):
-                raise ValueError("invalid quote response")
+            (response,) = await self._post_read_only_batch(((QUOTE_ENDPOINT, payload),))
             data = response.json()
             quote = self._parse_quote(data, request)
         except Exception:
@@ -106,18 +102,22 @@ class AngelOneMarketDataProvider:
         )
         instruments: list[MarketInstrument] = []
         try:
-            for search_request in search_requests:
-                payload = {
-                    "exchange": search_request.exchange,
-                    "searchscrip": search_request.query,
-                }
-                # Angel One names this read-only instrument lookup under order/v1.
-                response = await self._post_read_only(SEARCH_SCRIP_ENDPOINT, payload)
-                if (
-                    response.status_code != 200
-                    or len(response.content) > MAX_RESPONSE_BYTES
-                ):
-                    raise ValueError("invalid instrument search response")
+            # Angel One names this read-only instrument lookup under order/v1.
+            responses = await self._post_read_only_batch(
+                tuple(
+                    (
+                        SEARCH_SCRIP_ENDPOINT,
+                        {
+                            "exchange": search_request.exchange,
+                            "searchscrip": search_request.query,
+                        },
+                    )
+                    for search_request in search_requests
+                )
+            )
+            for search_request, response in zip(
+                search_requests, responses, strict=True
+            ):
                 instruments.extend(
                     self._parse_instruments(response.json(), search_request)
                 )
@@ -125,22 +125,36 @@ class AngelOneMarketDataProvider:
             raise MarketDataUnavailableError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
         return self._rank_instruments(instruments, request)
 
-    async def _post_read_only(
-        self, endpoint: str, payload: Mapping[str, object]
-    ) -> httpx.Response:
-        if endpoint not in _READ_ONLY_ENDPOINTS:
+    async def _post_read_only_batch(
+        self, requests: tuple[_ReadOnlyRequest, ...]
+    ) -> tuple[httpx.Response, ...]:
+        invalid_endpoints = tuple(
+            endpoint for endpoint, _ in requests if endpoint not in _READ_ONLY_ENDPOINTS
+        )
+        if invalid_endpoints:
             raise MarketDataUnavailableError(MARKET_DATA_UNAVAILABLE_MESSAGE)
+        if not requests:
+            return ()
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(3.0),
                 follow_redirects=False,
                 transport=self._transport,
             ) as client:
-                return await client.post(
-                    endpoint,
-                    content=json.dumps(payload, separators=(",", ":")),
-                    headers=self._authenticated_headers(),
-                )
+                responses: list[httpx.Response] = []
+                for endpoint, payload in requests:
+                    response = await client.post(
+                        endpoint,
+                        content=json.dumps(payload, separators=(",", ":")),
+                        headers=self._authenticated_headers(),
+                    )
+                    if (
+                        response.status_code != 200
+                        or len(response.content) > MAX_RESPONSE_BYTES
+                    ):
+                        raise ValueError("invalid read-only response")
+                    responses.append(response)
+            return tuple(responses)
         except Exception:
             raise MarketDataUnavailableError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
 
