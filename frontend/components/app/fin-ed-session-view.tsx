@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ConnectionState } from 'livekit-client';
 import { BookOpen, LayoutDashboard, Mic2, ShieldCheck } from 'lucide-react';
 import { useReducedMotion } from 'motion/react';
@@ -16,7 +16,10 @@ import { AgentAudioVisualizerBar } from '@/components/agents-ui/agent-audio-visu
 import { AgentChatTranscript } from '@/components/agents-ui/agent-chat-transcript';
 import { AgentControlBar } from '@/components/agents-ui/agent-control-bar';
 import { PaperTradingDashboard } from '@/components/paper-trading/paper-trading-dashboard';
-import { usePaperTrading } from '@/components/paper-trading/paper-trading-provider';
+import {
+  type PaperTradingView,
+  usePaperTrading,
+} from '@/components/paper-trading/paper-trading-provider';
 import { LEARNING_MODES, type LearningMode } from '@/lib/learning-modes';
 
 const SESSION_EDUCATION_BOUNDARY =
@@ -63,10 +66,19 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
   const paperTrading = usePaperTrading();
   const shouldReduceMotion = useReducedMotion();
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(true);
+  const paperTradingTriggerRef = useRef<HTMLButtonElement>(null);
+  const previousPaperViewRef = useRef<PaperTradingView>(paperTrading.view);
   const activeMode = LEARNING_MODES.find((mode) => mode.value === learningMode);
   const status = statusFor(session.connectionState, agent.state);
   const visualizerState: AgentState =
     shouldReduceMotion && agent.state === 'speaking' ? 'listening' : agent.state;
+
+  useEffect(() => {
+    if (previousPaperViewRef.current === 'dashboard' && paperTrading.view === 'session') {
+      paperTradingTriggerRef.current?.focus();
+    }
+    previousPaperViewRef.current = paperTrading.view;
+  }, [paperTrading.view]);
 
   return (
     <div className="min-h-svh bg-[var(--paper)] text-[var(--ledger-ink)]">
@@ -86,6 +98,7 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
 
           <div className="flex flex-wrap items-center justify-end gap-2">
             <button
+              ref={paperTradingTriggerRef}
               type="button"
               aria-pressed={paperTrading.view === 'dashboard'}
               onClick={paperTrading.openDashboard}

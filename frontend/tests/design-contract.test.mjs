@@ -208,6 +208,8 @@ test('keeps voice controls mounted while the paper workspace replaces only sessi
       '<PaperTradingDashboard',
       '<AgentControlBar',
       'paperTrading.view ===',
+      'paperTradingTriggerRef',
+      'previousPaperViewRef',
     ],
     'missing connected paper view integration'
   );

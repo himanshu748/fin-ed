@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { PaperLedgerReadiness } from '@/components/paper-trading/paper-trading-provider';
 import {
   formatPaperCurrency,
@@ -16,6 +16,18 @@ const confirmLabels = {
   sell: 'Confirm paper sell',
 } as const;
 
+export function paperQuoteExpiry(expiresAt: string, nowMs: number) {
+  const remainingMs = Date.parse(expiresAt) - nowMs;
+  if (remainingMs <= 0) return { expired: true, label: 'Expired' } as const;
+  const remainingSeconds = Math.ceil(remainingMs / 1_000);
+  const minutes = Math.floor(remainingSeconds / 60);
+  const seconds = remainingSeconds % 60;
+  return {
+    expired: false,
+    label: `Expires in ${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`,
+  } as const;
+}
+
 interface OrderReviewProps {
   draft: PaperOrderDraft | null;
   portfolio: PaperPortfolio;
@@ -26,10 +38,11 @@ interface OrderReviewProps {
 function reviewError(
   draft: PaperOrderDraft,
   portfolio: PaperPortfolio,
-  readiness: PaperLedgerReadiness
+  readiness: PaperLedgerReadiness,
+  isExpired: boolean
 ): string | null {
   if (readiness !== 'ready') return 'Paper portfolio is unavailable.';
-  if (Date.parse(draft.expiresAt) <= Date.now()) return 'Paper quote expired. Ask for a new quote.';
+  if (isExpired) return 'Paper quote expired. Ask for a new quote.';
   if (
     draft.chargeStatus === 'unavailable' ||
     draft.chargePaise === null ||
@@ -55,6 +68,20 @@ function reviewError(
 export function OrderReview({ draft, portfolio, readiness, onConfirm }: OrderReviewProps) {
   const [isConfirming, setIsConfirming] = useState(false);
   const [confirmationStatus, setConfirmationStatus] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const draftExpiresAt = draft?.expiresAt;
+
+  useEffect(() => {
+    if (!draftExpiresAt) return;
+    const updateNow = () => setNowMs(Date.now());
+    updateNow();
+    const countdownTimer = setInterval(updateNow, 1_000);
+    const expiryTimer = setTimeout(updateNow, Math.max(0, Date.parse(draftExpiresAt) - Date.now()));
+    return () => {
+      clearInterval(countdownTimer);
+      clearTimeout(expiryTimer);
+    };
+  }, [draftExpiresAt]);
 
   if (!draft) {
     return (
@@ -73,7 +100,8 @@ export function OrderReview({ draft, portfolio, readiness, onConfirm }: OrderRev
     );
   }
 
-  const error = reviewError(draft, portfolio, readiness);
+  const expiry = paperQuoteExpiry(draft.expiresAt, nowMs);
+  const error = reviewError(draft, portfolio, readiness, expiry.expired);
   const charges = draft.chargePaise;
   const estimatedTotal = draft.cashEffectPaise === null ? null : Math.abs(draft.cashEffectPaise);
   const confirmLabel = confirmLabels[draft.side];
@@ -159,8 +187,17 @@ export function OrderReview({ draft, portfolio, readiness, onConfirm }: OrderRev
           {quoteTimeFormatter.format(new Date(draft.quoteTime))}
         </dd>
         <dt>Quote expiry</dt>
-        <dd className="font-data text-right text-xs">
-          {quoteTimeFormatter.format(new Date(draft.expiresAt))}
+        <dd className="text-right text-xs">
+          <span className="font-data block">
+            {quoteTimeFormatter.format(new Date(draft.expiresAt))}
+          </span>
+          <span
+            className={`font-data mt-1 block font-semibold ${
+              expiry.expired ? 'text-[var(--risk-brick)]' : 'text-[var(--ledger-blue)]'
+            }`}
+          >
+            {expiry.label}
+          </span>
         </dd>
       </dl>
 

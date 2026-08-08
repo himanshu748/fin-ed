@@ -1,7 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { BookOpen, RotateCcw, ShieldCheck, X } from 'lucide-react';
+import * as Dialog from '@radix-ui/react-dialog';
 import { ActivityLedger } from '@/components/paper-trading/activity-ledger';
 import { HoldingsLedger } from '@/components/paper-trading/holdings-ledger';
 import { OrderReview } from '@/components/paper-trading/order-review';
@@ -14,14 +15,28 @@ export function PaperTradingDashboard() {
   const [isResetOpen, setIsResetOpen] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [resetStatus, setResetStatus] = useState<string | null>(null);
+  const dashboardHeadingRef = useRef<HTMLHeadingElement>(null);
+
+  useEffect(() => {
+    dashboardHeadingRef.current?.focus();
+  }, []);
 
   async function handleReset() {
     if (readiness !== 'ready' || isResetting) return;
     setIsResetting(true);
     const reset = await resetPortfolio();
-    setResetStatus(reset ? 'Practice portfolio reset.' : 'Practice portfolio could not be reset.');
+    setResetStatus(
+      reset
+        ? 'Practice portfolio reset.'
+        : 'Practice portfolio could not be reset. Check browser storage access and try again.'
+    );
     setIsResetting(false);
     if (reset) setIsResetOpen(false);
+  }
+
+  function handleResetOpenChange(open: boolean) {
+    setIsResetOpen(open);
+    if (open) setResetStatus(null);
   }
 
   return (
@@ -32,7 +47,11 @@ export function PaperTradingDashboard() {
             <ShieldCheck aria-hidden="true" className="size-5" />
             <span>Paper trading only</span>
           </div>
-          <h1 className="font-display mt-3 text-3xl leading-tight font-bold sm:text-4xl">
+          <h1
+            ref={dashboardHeadingRef}
+            tabIndex={-1}
+            className="font-display mt-3 text-3xl leading-tight font-bold focus-visible:outline-3 focus-visible:outline-offset-4 focus-visible:outline-[var(--ledger-blue)] sm:text-4xl"
+          >
             Practice portfolio
           </h1>
           <p className="mt-2 text-[var(--muted-ink)]">
@@ -76,7 +95,7 @@ export function PaperTradingDashboard() {
       <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--ledger-rule)] pt-5">
         <div role="status" aria-live="polite" className="min-h-6 text-sm text-[var(--muted-ink)]">
           {error ??
-            resetStatus ??
+            (resetStatus === 'Practice portfolio reset.' ? resetStatus : null) ??
             (readiness === 'ready' ? 'Paper ledger ready.' : 'Paper ledger unavailable.')}
         </div>
         <section aria-labelledby="paper-settings-heading" className="flex items-center gap-2">
@@ -86,69 +105,82 @@ export function PaperTradingDashboard() {
           >
             Settings
           </h2>
-          <button
-            type="button"
-            disabled={readiness !== 'ready' || isResetting}
-            onClick={() => setIsResetOpen(true)}
-            className="flex min-h-11 min-w-11 items-center gap-2 rounded-[10px] px-3 font-semibold text-[var(--ledger-blue)] transition-colors hover:bg-[var(--blue-wash)] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)] disabled:cursor-not-allowed disabled:text-[var(--muted-ink)]"
-          >
-            <RotateCcw aria-hidden="true" className="size-5" />
-            Reset practice
-          </button>
+          <Dialog.Root modal={true} open={isResetOpen} onOpenChange={handleResetOpenChange}>
+            <Dialog.Trigger asChild>
+              <button
+                type="button"
+                disabled={readiness !== 'ready' || isResetting}
+                className="flex min-h-11 min-w-11 items-center gap-2 rounded-[10px] px-3 font-semibold text-[var(--ledger-blue)] transition-colors hover:bg-[var(--blue-wash)] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)] disabled:cursor-not-allowed disabled:text-[var(--muted-ink)]"
+              >
+                <RotateCcw aria-hidden="true" className="size-5" />
+                Reset practice
+              </button>
+            </Dialog.Trigger>
+
+            <Dialog.Portal>
+              <Dialog.Overlay className="fixed inset-0 z-50 bg-[rgb(21_35_59/0.45)]" />
+              <Dialog.Content
+                role="dialog"
+                aria-modal="true"
+                className="fixed top-1/2 left-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-[12px] border border-[var(--ledger-rule)] bg-[var(--surface)] p-[18px] shadow-xl sm:p-6"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <Dialog.Title asChild>
+                      <h2 className="font-display text-xl font-semibold">
+                        Reset practice portfolio?
+                      </h2>
+                    </Dialog.Title>
+                    <Dialog.Description asChild>
+                      <p className="mt-3 text-sm leading-6 text-[var(--muted-ink)]">
+                        This clears all paper holdings and fill activity, then restores the original
+                        virtual cash balance. Your live voice session stays connected.
+                      </p>
+                    </Dialog.Description>
+                  </div>
+                  <Dialog.Close asChild>
+                    <button
+                      type="button"
+                      aria-label="Close reset confirmation"
+                      className="grid min-h-11 min-w-11 shrink-0 place-items-center rounded-[10px] text-[var(--ledger-blue)] hover:bg-[var(--blue-wash)] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)]"
+                    >
+                      <X aria-hidden="true" className="size-5" />
+                    </button>
+                  </Dialog.Close>
+                </div>
+
+                {resetStatus && resetStatus !== 'Practice portfolio reset.' ? (
+                  <p
+                    role="alert"
+                    className="mt-5 rounded-[8px] border border-[var(--risk-brick)] bg-[var(--risk-wash)] p-3 text-sm font-semibold text-[var(--risk-brick)]"
+                  >
+                    {resetStatus}
+                  </p>
+                ) : null}
+
+                <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                  <Dialog.Close asChild>
+                    <button
+                      type="button"
+                      className="min-h-11 min-w-11 rounded-[10px] border border-[var(--ledger-blue)] px-4 font-semibold text-[var(--ledger-blue)] hover:bg-[var(--blue-wash)] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)]"
+                    >
+                      Keep practice portfolio
+                    </button>
+                  </Dialog.Close>
+                  <button
+                    type="button"
+                    disabled={isResetting}
+                    onClick={handleReset}
+                    className="min-h-11 min-w-11 rounded-[10px] bg-[var(--ledger-blue)] px-4 font-semibold text-white hover:bg-[var(--ledger-blue-hover)] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)] disabled:cursor-not-allowed disabled:bg-[var(--ledger-rule)] disabled:text-[var(--muted-ink)]"
+                  >
+                    {isResetting ? 'Resetting practice' : 'Confirm reset practice'}
+                  </button>
+                </div>
+              </Dialog.Content>
+            </Dialog.Portal>
+          </Dialog.Root>
         </section>
       </div>
-
-      {isResetOpen ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="reset-practice-title"
-          aria-describedby="reset-practice-description"
-          className="fixed inset-0 z-50 grid place-items-center bg-[rgb(21_35_59/0.45)] p-4"
-        >
-          <section className="w-full max-w-md rounded-[12px] border border-[var(--ledger-rule)] bg-[var(--surface)] p-[18px] shadow-xl sm:p-6">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 id="reset-practice-title" className="font-display text-xl font-semibold">
-                  Reset practice portfolio?
-                </h2>
-                <p
-                  id="reset-practice-description"
-                  className="mt-3 text-sm leading-6 text-[var(--muted-ink)]"
-                >
-                  This clears all paper holdings and fill activity, then restores the original
-                  virtual cash balance. Your live voice session stays connected.
-                </p>
-              </div>
-              <button
-                type="button"
-                aria-label="Close reset confirmation"
-                onClick={() => setIsResetOpen(false)}
-                className="grid min-h-11 min-w-11 shrink-0 place-items-center rounded-[10px] text-[var(--ledger-blue)] hover:bg-[var(--blue-wash)] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)]"
-              >
-                <X aria-hidden="true" className="size-5" />
-              </button>
-            </div>
-            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-              <button
-                type="button"
-                onClick={() => setIsResetOpen(false)}
-                className="min-h-11 min-w-11 rounded-[10px] border border-[var(--ledger-blue)] px-4 font-semibold text-[var(--ledger-blue)] hover:bg-[var(--blue-wash)] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)]"
-              >
-                Keep practice portfolio
-              </button>
-              <button
-                type="button"
-                disabled={isResetting}
-                onClick={handleReset}
-                className="min-h-11 min-w-11 rounded-[10px] bg-[var(--ledger-blue)] px-4 font-semibold text-white hover:bg-[var(--ledger-blue-hover)] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)] disabled:cursor-not-allowed disabled:bg-[var(--ledger-rule)] disabled:text-[var(--muted-ink)]"
-              >
-                {isResetting ? 'Resetting practice' : 'Confirm reset practice'}
-              </button>
-            </div>
-          </section>
-        </div>
-      ) : null}
     </main>
   );
 }

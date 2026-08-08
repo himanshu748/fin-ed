@@ -6,6 +6,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 import ts from 'typescript';
+import * as Dialog from '@radix-ui/react-dialog';
 
 const frontendRoot = join(import.meta.dirname, '..');
 
@@ -45,6 +46,143 @@ function compile(relativePath, dependencies) {
     compiledModule.exports
   );
   return compiledModule.exports;
+}
+
+function loadOrderReview(react = React) {
+  const common = new Map([
+    ['react', react],
+    ['react/jsx-runtime', jsxRuntime],
+  ]);
+  const portfolioSummary = compile('components/paper-trading/portfolio-summary.tsx', common);
+  common.set('@/components/paper-trading/portfolio-summary', portfolioSummary);
+  return compile('components/paper-trading/order-review.tsx', common);
+}
+
+function statefulReact(refCurrents = []) {
+  const states = [];
+  const refs = [];
+  let stateCursor = 0;
+  let refCursor = 0;
+  let effects = [];
+
+  return {
+    react: {
+      ...React,
+      useEffect(effect) {
+        effects.push(effect);
+      },
+      useRef(initialValue) {
+        const index = refCursor;
+        refCursor += 1;
+        if (!(index in refs)) {
+          refs[index] = {
+            current: index in refCurrents ? refCurrents[index] : initialValue,
+          };
+        }
+        return refs[index];
+      },
+      useState(initialValue) {
+        const index = stateCursor;
+        stateCursor += 1;
+        if (!(index in states)) {
+          states[index] = typeof initialValue === 'function' ? initialValue() : initialValue;
+        }
+        return [
+          states[index],
+          (value) => {
+            states[index] = typeof value === 'function' ? value(states[index]) : value;
+          },
+        ];
+      },
+    },
+    render(Component, props) {
+      stateCursor = 0;
+      refCursor = 0;
+      effects = [];
+      const element = Component(props);
+      for (const effect of effects) effect();
+      return element;
+    },
+  };
+}
+
+function loadSessionViewForFocus(react, paperTrading) {
+  const connectionState = {
+    Reconnecting: 'reconnecting',
+    SignalReconnecting: 'signal-reconnecting',
+    Connected: 'connected',
+  };
+  return compile(
+    'components/app/fin-ed-session-view.tsx',
+    new Map([
+      ['react', react],
+      ['react/jsx-runtime', jsxRuntime],
+      ['livekit-client', { ConnectionState: connectionState }],
+      ['lucide-react', iconModule],
+      ['motion/react', { useReducedMotion: () => true }],
+      [
+        '@livekit/components-react',
+        {
+          useAgent: () => ({ state: 'idle' }),
+          useSessionContext: () => ({
+            connectionState: connectionState.Connected,
+            isConnected: true,
+          }),
+          useSessionMessages: () => ({ messages: [] }),
+          useVoiceAssistant: () => ({ audioTrack: undefined }),
+        },
+      ],
+      [
+        '@/components/agents-ui/agent-audio-visualizer-bar',
+        { AgentAudioVisualizerBar: () => null },
+      ],
+      ['@/components/agents-ui/agent-chat-transcript', { AgentChatTranscript: () => null }],
+      ['@/components/agents-ui/agent-control-bar', { AgentControlBar: () => null }],
+      ['@/components/paper-trading/paper-trading-dashboard', { PaperTradingDashboard: () => null }],
+      [
+        '@/components/paper-trading/paper-trading-provider',
+        { usePaperTrading: () => paperTrading },
+      ],
+      ['@/lib/learning-modes', { LEARNING_MODES: [{ value: 'general', label: 'Ask Anything' }] }],
+    ])
+  ).FinEdSessionView;
+}
+
+function textContent(node) {
+  if (node === null || node === undefined || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(textContent).join('');
+  return textContent(node.props?.children);
+}
+
+function findElement(node, predicate) {
+  if (node === null || node === undefined || typeof node !== 'object') return null;
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findElement(child, predicate);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (predicate(node)) return node;
+  return findElement(node.props?.children, predicate);
+}
+
+function loadDashboardForInteraction(react, context) {
+  return compile(
+    'components/paper-trading/paper-trading-dashboard.tsx',
+    new Map([
+      ['react', react],
+      ['react/jsx-runtime', jsxRuntime],
+      ['lucide-react', iconModule],
+      ['@radix-ui/react-dialog', Dialog],
+      ['@/components/paper-trading/activity-ledger', { ActivityLedger: () => null }],
+      ['@/components/paper-trading/holdings-ledger', { HoldingsLedger: () => null }],
+      ['@/components/paper-trading/order-review', { OrderReview: () => null }],
+      ['@/components/paper-trading/portfolio-summary', { PortfolioSummary: () => null }],
+      ['@/components/paper-trading/paper-trading-provider', { usePaperTrading: () => context }],
+    ])
+  ).PaperTradingDashboard;
 }
 
 function portfolio(overrides = {}) {
@@ -128,12 +266,13 @@ function renderDashboard(overrides = {}) {
     ['react', React],
     ['react/jsx-runtime', jsxRuntime],
     ['lucide-react', iconModule],
+    ['@radix-ui/react-dialog', Dialog],
   ]);
   const portfolioSummary = compile('components/paper-trading/portfolio-summary.tsx', common);
   common.set('@/components/paper-trading/portfolio-summary', portfolioSummary);
   const holdingsLedger = compile('components/paper-trading/holdings-ledger.tsx', common);
   const activityLedger = compile('components/paper-trading/activity-ledger.tsx', common);
-  const orderReview = compile('components/paper-trading/order-review.tsx', common);
+  const orderReview = loadOrderReview();
   const dashboard = compile(
     'components/paper-trading/paper-trading-dashboard.tsx',
     new Map([
@@ -212,6 +351,84 @@ test('disables confirmation for expired, unavailable, and unaffordable paper buy
   assert.match(insufficient, /<button[^>]*disabled=""[^>]*>Confirm paper buy<\/button>/);
 });
 
+test('calculates an honest paper quote countdown at the exact expiry boundary', () => {
+  const { paperQuoteExpiry } = loadOrderReview();
+
+  assert.equal(typeof paperQuoteExpiry, 'function');
+  assert.deepEqual(
+    paperQuoteExpiry('2026-08-08T09:30:30.000Z', Date.parse('2026-08-08T09:30:00.001Z')),
+    {
+      expired: false,
+      label: 'Expires in 00:30',
+    }
+  );
+  assert.deepEqual(
+    paperQuoteExpiry('2026-08-08T09:30:30.000Z', Date.parse('2026-08-08T09:30:29.999Z')),
+    {
+      expired: false,
+      label: 'Expires in 00:01',
+    }
+  );
+  assert.deepEqual(
+    paperQuoteExpiry('2026-08-08T09:30:30.000Z', Date.parse('2026-08-08T09:30:30.000Z')),
+    {
+      expired: true,
+      label: 'Expired',
+    }
+  );
+});
+
+test('updates the rendered countdown at one-second cadence and exactly at expiry', () => {
+  const hooks = statefulReact();
+  const { OrderReview } = loadOrderReview(hooks.react);
+  const originalDateNow = Date.now;
+  const originalSetInterval = globalThis.setInterval;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearInterval = globalThis.clearInterval;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const intervals = [];
+  const timeouts = [];
+  let now = Date.parse('2026-08-08T09:30:00.000Z');
+
+  Date.now = () => now;
+  globalThis.setInterval = (callback, delay) => {
+    intervals.push({ callback, delay });
+    return 1;
+  };
+  globalThis.setTimeout = (callback, delay) => {
+    timeouts.push({ callback, delay });
+    return 2;
+  };
+  globalThis.clearInterval = () => undefined;
+  globalThis.clearTimeout = () => undefined;
+
+  const props = {
+    draft: draft({ expiresAt: '2026-08-08T09:30:02.500Z' }),
+    portfolio: portfolio(),
+    readiness: 'ready',
+    onConfirm: async () => true,
+  };
+
+  try {
+    let markup = renderToStaticMarkup(hooks.render(OrderReview, props));
+    assert.match(markup, /Expires in 00:03/);
+    assert.equal(intervals[0]?.delay, 1_000);
+    assert.equal(timeouts[0]?.delay, 2_500);
+
+    now = Date.parse('2026-08-08T09:30:02.500Z');
+    timeouts[0].callback();
+    markup = renderToStaticMarkup(hooks.render(OrderReview, props));
+    assert.match(markup, /Expired/);
+    assert.match(markup, /<button[^>]*disabled=""[^>]*>Confirm paper buy<\/button>/);
+  } finally {
+    Date.now = originalDateNow;
+    globalThis.setInterval = originalSetInterval;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearInterval = originalClearInterval;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
 test('uses a real second reset confirmation and 44px controls', () => {
   const dashboard = read('components/paper-trading/paper-trading-dashboard.tsx');
   includesAll(
@@ -230,6 +447,54 @@ test('uses a real second reset confirmation and 44px controls', () => {
   );
 });
 
+test('keeps a rejected reset open with retry guidance inside the Radix dialog', async () => {
+  let resetCalls = 0;
+  const context = {
+    view: 'dashboard',
+    readiness: 'ready',
+    portfolio: portfolio(),
+    draft: null,
+    error: null,
+    openDashboard() {},
+    closeDashboard() {},
+    async confirmDraft() {
+      return true;
+    },
+    async resetPortfolio() {
+      resetCalls += 1;
+      return false;
+    },
+  };
+  const hooks = statefulReact();
+  const Dashboard = loadDashboardForInteraction(hooks.react, context);
+  let tree = hooks.render(Dashboard, {});
+  let root = findElement(tree, (element) => element.type === Dialog.Root);
+
+  assert.ok(root, 'reset must use the Radix dialog root');
+  assert.equal(root.props.modal, true);
+  assert.ok(findElement(root, (element) => element.type === Dialog.Trigger));
+  root.props.onOpenChange(true);
+
+  tree = hooks.render(Dashboard, {});
+  root = findElement(tree, (element) => element.type === Dialog.Root);
+  let content = findElement(root, (element) => element.type === Dialog.Content);
+  const confirm = findElement(
+    content,
+    (element) => element.type === 'button' && textContent(element) === 'Confirm reset practice'
+  );
+  assert.ok(confirm, 'dialog must contain a separate reset confirmation');
+  await confirm.props.onClick();
+
+  tree = hooks.render(Dashboard, {});
+  root = findElement(tree, (element) => element.type === Dialog.Root);
+  content = findElement(root, (element) => element.type === Dialog.Content);
+  const alert = findElement(content, (element) => element.props?.role === 'alert');
+  assert.equal(root.props.open, true, 'failed reset must keep the dialog open');
+  assert.equal(resetCalls, 1);
+  assert.ok(alert, 'failed reset guidance must be inside Dialog.Content');
+  assert.match(textContent(alert), /could not be reset.*Try again/i);
+});
+
 test('puts order review before holdings in the mobile reading order', () => {
   const dashboard = read('components/paper-trading/paper-trading-dashboard.tsx');
 
@@ -237,4 +502,58 @@ test('puts order review before holdings in the mobile reading order', () => {
     dashboard.indexOf('<OrderReview') < dashboard.indexOf('<HoldingsLedger'),
     'mobile DOM order must put order review before holdings'
   );
+});
+
+test('focuses the dashboard heading after the paper workspace renders', () => {
+  let focusCalls = 0;
+  const hooks = statefulReact([
+    {
+      focus() {
+        focusCalls += 1;
+      },
+    },
+  ]);
+  const context = {
+    view: 'dashboard',
+    readiness: 'ready',
+    portfolio: portfolio(),
+    draft: null,
+    error: null,
+    openDashboard() {},
+    closeDashboard() {},
+    async confirmDraft() {
+      return true;
+    },
+    async resetPortfolio() {
+      return true;
+    },
+  };
+  const Dashboard = loadDashboardForInteraction(hooks.react, context);
+  const tree = hooks.render(Dashboard, {});
+  const heading = findElement(tree, (element) => element.type === 'h1');
+
+  assert.equal(heading?.props.tabIndex, -1);
+  assert.equal(focusCalls, 1);
+});
+
+test('restores focus to the Paper trading trigger after returning to learning', () => {
+  let focusCalls = 0;
+  const trigger = {
+    focus() {
+      focusCalls += 1;
+    },
+  };
+  const hooks = statefulReact([trigger]);
+  const paperTrading = {
+    view: 'dashboard',
+    openDashboard() {},
+    closeDashboard() {},
+  };
+  const SessionView = loadSessionViewForFocus(hooks.react, paperTrading);
+
+  hooks.render(SessionView, { appConfig: {}, learningMode: 'general' });
+  assert.equal(focusCalls, 0);
+  paperTrading.view = 'session';
+  hooks.render(SessionView, { appConfig: {}, learningMode: 'general' });
+  assert.equal(focusCalls, 1);
 });
