@@ -102,30 +102,45 @@ class AngelOneMarketDataProvider:
     async def search_instruments(
         self, request: InstrumentSearchRequest
     ) -> tuple[MarketInstrument, ...]:
-        payload: dict[str, str] = {"searchscrip": request.query}
-        if request.exchange is not None:
-            payload["exchange"] = request.exchange
+        search_requests = (
+            (request,)
+            if request.exchange is not None
+            else tuple(
+                InstrumentSearchRequest(
+                    query=request.query, exchange=exchange, limit=request.limit
+                )
+                for exchange in ("NSE", "BSE")
+            )
+        )
+        instruments: list[MarketInstrument] = []
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(3.0),
                 follow_redirects=False,
                 transport=self._transport,
             ) as client:
-                # Angel One names this read-only instrument lookup under order/v1.
-                response = await client.post(
-                    SEARCH_SCRIP_ENDPOINT,
-                    content=json.dumps(payload, separators=(",", ":")),
-                    headers=self._authenticated_headers(),
-                )
-            if (
-                response.status_code != 200
-                or len(response.content) > MAX_RESPONSE_BYTES
-            ):
-                raise ValueError("invalid instrument search response")
-            results = self._parse_instruments(response.json(), request)
+                for search_request in search_requests:
+                    payload = {
+                        "exchange": search_request.exchange,
+                        "searchscrip": search_request.query,
+                    }
+                    # Angel One names this read-only instrument lookup under order/v1.
+                    response = await client.post(
+                        SEARCH_SCRIP_ENDPOINT,
+                        content=json.dumps(payload, separators=(",", ":")),
+                        headers=self._authenticated_headers(),
+                    )
+                    if (
+                        response.status_code != 200
+                        or len(response.content) > MAX_RESPONSE_BYTES
+                    ):
+                        raise ValueError("invalid instrument search response")
+                    instruments.extend(
+                        self._parse_instruments(response.json(), search_request)
+                    )
         except Exception:
             raise MarketDataUnavailableError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
-        return results
+        return self._rank_instruments(instruments, request)
 
     def _authenticated_headers(self) -> dict[str, str]:
         return {
@@ -205,15 +220,28 @@ class AngelOneMarketDataProvider:
                 seen.add(key)
                 instruments.append(instrument)
 
-        instruments.sort(
+        return self._rank_instruments(instruments, request)
+
+    def _rank_instruments(
+        self,
+        instruments: list[MarketInstrument],
+        request: InstrumentSearchRequest,
+    ) -> tuple[MarketInstrument, ...]:
+        deduplicated: dict[tuple[str, str], MarketInstrument] = {}
+        for instrument in instruments:
+            deduplicated.setdefault(
+                (instrument.exchange, instrument.symbol_token), instrument
+            )
+        ranked = sorted(
+            deduplicated.values(),
             key=lambda item: (
                 not item.trading_symbol.startswith(request.query),
                 item.trading_symbol,
                 item.exchange,
                 item.symbol_token,
-            )
+            ),
         )
-        return tuple(instruments[: request.limit])
+        return tuple(ranked[: request.limit])
 
 
 def create_market_data_provider(

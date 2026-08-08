@@ -186,54 +186,122 @@ async def test_search_scrip_posts_only_to_read_only_endpoint() -> None:
 
 
 @pytest.mark.asyncio
+async def test_search_scrip_without_exchange_queries_nse_and_bse_and_merges_results() -> (
+    None
+):
+    captured_requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        exchange = json.loads(request.content)["exchange"]
+        data = {
+            "NSE": [
+                {
+                    "exchange": "NSE",
+                    "tradingsymbol": "RELIANCE-Z",
+                    "symboltoken": "2889",
+                },
+                {
+                    "exchange": "NSE",
+                    "tradingsymbol": "A RELIANCE",
+                    "symboltoken": "2888",
+                },
+            ],
+            "BSE": [
+                {
+                    "exchange": "BSE",
+                    "tradingsymbol": "RELIANCE-A",
+                    "symboltoken": "500325",
+                },
+                {
+                    "exchange": "BSE",
+                    "tradingsymbol": "RELIANCE-B",
+                    "symboltoken": "500326",
+                },
+            ],
+        }[exchange]
+        return httpx.Response(200, json={"status": True, "data": data})
+
+    provider = AngelOneMarketDataProvider(
+        config(), transport=httpx.MockTransport(handler)
+    )
+
+    results = await provider.search_instruments(
+        InstrumentSearchRequest(query="RELIANCE", limit=3)
+    )
+
+    assert [
+        (request.url, json.loads(request.content)) for request in captured_requests
+    ] == [
+        (
+            httpx.URL(SEARCH_SCRIP_ENDPOINT),
+            {"exchange": "NSE", "searchscrip": "RELIANCE"},
+        ),
+        (
+            httpx.URL(SEARCH_SCRIP_ENDPOINT),
+            {"exchange": "BSE", "searchscrip": "RELIANCE"},
+        ),
+    ]
+    assert [(item.exchange, item.symbol_token) for item in results] == [
+        ("BSE", "500325"),
+        ("BSE", "500326"),
+        ("NSE", "2889"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_search_scrip_deduplicates_sorts_prefixes_and_honors_limit() -> None:
+    data = [
+        {
+            "exchange": "BSE",
+            "tradingsymbol": "A RELIANCE",
+            "symboltoken": "500325",
+        },
+        {
+            "exchange": "NSE",
+            "tradingsymbol": "RELIANCE-EQ",
+            "symboltoken": "2885",
+        },
+        {
+            "exchange": "NSE",
+            "tradingsymbol": "RELIANCE-BE",
+            "symboltoken": "2886",
+        },
+        {
+            "exchange": "NSE",
+            "tradingsymbol": "RELIANCE-EQ duplicate",
+            "symboltoken": "2885",
+        },
+        {
+            "exchange": "BSE",
+            "tradingsymbol": "RELIANCE-B",
+            "symboltoken": "500326",
+        },
+        {
+            "exchange": "NSE",
+            "tradingsymbol": "RELIANCE-C",
+            "symboltoken": "2887",
+        },
+        {
+            "exchange": "NSE",
+            "tradingsymbol": "RELIANCE-D",
+            "symboltoken": "2888",
+        },
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        exchange = json.loads(request.content)["exchange"]
+        return httpx.Response(
+            200,
+            json={
+                "status": True,
+                "data": [item for item in data if item["exchange"] == exchange],
+            },
+        )
+
     provider = AngelOneMarketDataProvider(
         config(),
-        transport=httpx.MockTransport(
-            lambda request: httpx.Response(
-                200,
-                json={
-                    "status": True,
-                    "data": [
-                        {
-                            "exchange": "BSE",
-                            "tradingsymbol": "A RELIANCE",
-                            "symboltoken": "500325",
-                        },
-                        {
-                            "exchange": "NSE",
-                            "tradingsymbol": "RELIANCE-EQ",
-                            "symboltoken": "2885",
-                        },
-                        {
-                            "exchange": "NSE",
-                            "tradingsymbol": "RELIANCE-BE",
-                            "symboltoken": "2886",
-                        },
-                        {
-                            "exchange": "NSE",
-                            "tradingsymbol": "RELIANCE-EQ duplicate",
-                            "symboltoken": "2885",
-                        },
-                        {
-                            "exchange": "BSE",
-                            "tradingsymbol": "RELIANCE-B",
-                            "symboltoken": "500326",
-                        },
-                        {
-                            "exchange": "NSE",
-                            "tradingsymbol": "RELIANCE-C",
-                            "symboltoken": "2887",
-                        },
-                        {
-                            "exchange": "NSE",
-                            "tradingsymbol": "RELIANCE-D",
-                            "symboltoken": "2888",
-                        },
-                    ],
-                },
-            )
-        ),
+        transport=httpx.MockTransport(handler),
     )
 
     results = await provider.search_instruments(
