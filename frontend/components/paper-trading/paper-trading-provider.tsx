@@ -46,6 +46,7 @@ export interface PaperRpcHandlers {
 
 export interface PaperRpcDependencies {
   expectedAgentIdentity: string;
+  expectedAgentSessionKey: string;
   getPortfolio(): PaperPortfolio;
   getDraft(): PreparedPaperDraft | null;
   getReadiness(): PaperLedgerReadiness;
@@ -85,6 +86,8 @@ export interface ConfirmPaperDraftDependencies {
   draft: PaperOrderDraft;
   preparedAgentIdentity: string;
   currentAgentIdentity: string;
+  preparedAgentSessionKey: string;
+  currentAgentSessionKey: string;
   now: string;
   storage: PaperPortfolioStorage | null | undefined;
   coordinator?: PaperPortfolioLockCoordinator | null;
@@ -97,11 +100,17 @@ export type PaperLedgerReadiness = 'initializing' | 'ready' | 'unavailable' | 'c
 export interface PreparedPaperDraft {
   draft: PaperOrderDraft;
   agentIdentity: string;
+  agentSessionKey: string;
 }
 
 export interface PaperLedgerInitialization {
   readiness: PaperLedgerReadiness;
   portfolio: PaperPortfolio;
+}
+
+export interface PaperLedgerState extends PaperLedgerInitialization {
+  draft: PreparedPaperDraft | null;
+  error: string | null;
 }
 
 export interface PaperTradingContextValue {
@@ -118,12 +127,35 @@ export interface PaperTradingContextValue {
 
 interface AgentIdentitySource {
   isConnected: boolean;
-  internal: { agentParticipant: { identity: string } | null };
+  internal: { agentParticipant: { identity: string; sid?: string } | null };
 }
+
+interface ConnectedAgentSession {
+  identity: string;
+  sessionKey: string;
+}
+
+const participantGenerations = new WeakMap<object, string>();
+let participantGenerationSequence = 0;
 
 export function connectedAgentIdentity(agent: AgentIdentitySource): string | null {
   const identity = agent.isConnected ? agent.internal.agentParticipant?.identity : null;
   return typeof identity === 'string' && identity.trim() ? identity : null;
+}
+
+export function connectedAgentSession(agent: AgentIdentitySource): ConnectedAgentSession | null {
+  const identity = connectedAgentIdentity(agent);
+  const participant = agent.internal.agentParticipant;
+  if (!identity || !participant) return null;
+  const sid = typeof participant.sid === 'string' ? participant.sid.trim() : '';
+  if (sid) return { identity, sessionKey: `${identity}:${sid}` };
+  let generation = participantGenerations.get(participant);
+  if (!generation) {
+    participantGenerationSequence += 1;
+    generation = `instance-${participantGenerationSequence}`;
+    participantGenerations.set(participant, generation);
+  }
+  return { identity, sessionKey: `${identity}:${generation}` };
 }
 
 export function sendPaperOrderResult(
@@ -233,6 +265,12 @@ export function createPaperRpcHandlers(dependencies: PaperRpcDependencies): Pape
   ) {
     throw new Error('Expected paper RPC agent identity must be non-empty');
   }
+  if (
+    typeof dependencies.expectedAgentSessionKey !== 'string' ||
+    !dependencies.expectedAgentSessionKey.trim()
+  ) {
+    throw new Error('Expected paper RPC agent session must be non-empty');
+  }
 
   const openDashboard: PaperRpcHandler = async ({ callerIdentity, payload }) => {
     authorize(callerIdentity, dependencies.expectedAgentIdentity);
@@ -256,7 +294,11 @@ export function createPaperRpcHandlers(dependencies: PaperRpcDependencies): Pape
     if (Date.parse(draft.expiresAt) <= Date.parse(dependencies.now())) {
       throw new Error('Paper draft has expired');
     }
-    dependencies.prepareDraft({ draft, agentIdentity: dependencies.expectedAgentIdentity });
+    dependencies.prepareDraft({
+      draft,
+      agentIdentity: dependencies.expectedAgentIdentity,
+      agentSessionKey: dependencies.expectedAgentSessionKey,
+    });
     dependencies.openDashboard();
     return JSON.stringify({
       version: 1,
@@ -331,7 +373,9 @@ export async function confirmPaperDraft(
 ): Promise<SaveResult> {
   if (
     !dependencies.preparedAgentIdentity.trim() ||
-    dependencies.preparedAgentIdentity !== dependencies.currentAgentIdentity
+    dependencies.preparedAgentIdentity !== dependencies.currentAgentIdentity ||
+    !dependencies.preparedAgentSessionKey.trim() ||
+    dependencies.preparedAgentSessionKey !== dependencies.currentAgentSessionKey
   ) {
     throw new Error('Paper draft belongs to a different agent session');
   }
@@ -386,25 +430,66 @@ function browserLockCoordinator(): PaperPortfolioLockCoordinator | null {
   }
 }
 
-export function initializePaperLedger(
+export async function initializePaperLedger(
   storage: PaperPortfolioStorage | null | undefined,
   coordinator: PaperPortfolioLockCoordinator | null | undefined,
   now: string
-): PaperLedgerInitialization {
+): Promise<PaperLedgerInitialization> {
   const fallback = createPaperPortfolio(now);
   const loaded = loadPaperPortfolio(storage);
   if (loaded.status === 'corrupt') return { readiness: 'corrupt', portfolio: fallback };
   if (loaded.status === 'unavailable') return { readiness: 'unavailable', portfolio: fallback };
+  const candidate = loaded.status === 'ready' ? loaded.portfolio : fallback;
   if (!coordinator || typeof coordinator.request !== 'function') {
+    return { readiness: 'unavailable', portfolio: candidate };
+  }
+  const saved = await savePaperPortfolio(storage, candidate, coordinator);
+  if (saved.status === 'saved' || saved.status === 'stale') {
+    return { readiness: 'ready', portfolio: saved.portfolio };
+  }
+  return { readiness: saved.status, portfolio: candidate };
+}
+
+export function reconcilePaperSave(
+  state: PaperLedgerState,
+  result: SaveResult,
+  operation: 'confirm' | 'reset'
+): PaperLedgerState {
+  if (result.status === 'saved') {
     return {
-      readiness: 'unavailable',
-      portfolio: loaded.status === 'ready' ? loaded.portfolio : fallback,
+      readiness: 'ready',
+      portfolio: result.portfolio,
+      draft: null,
+      error: null,
+    };
+  }
+  if (result.status === 'stale') {
+    const draftWasApplied =
+      operation === 'confirm' &&
+      state.draft !== null &&
+      result.portfolio.appliedDraftIds.includes(state.draft.draft.draftId);
+    return {
+      readiness: 'ready',
+      portfolio: result.portfolio,
+      draft: draftWasApplied ? null : state.draft,
+      error: STALE_ERROR,
     };
   }
   return {
-    readiness: 'ready',
-    portfolio: loaded.status === 'ready' ? loaded.portfolio : fallback,
+    readiness: result.status,
+    portfolio: state.portfolio,
+    draft: null,
+    error: PERSISTENCE_ERROR,
   };
+}
+
+export function reconcileAgentSession(
+  state: PaperLedgerState,
+  expectedAgentSessionKey: string | null
+): PaperLedgerState {
+  return state.draft && state.draft.agentSessionKey !== expectedAgentSessionKey
+    ? { ...state, draft: null }
+    : state;
 }
 
 const PaperTradingContext = createContext<PaperTradingContextValue | null>(null);
@@ -419,61 +504,68 @@ export function PaperTradingProvider({ children }: PropsWithChildren) {
   const session = useSessionContext();
   const agent = useAgent();
   const [view, setView] = useState<PaperTradingView>('session');
-  const [portfolio, setPortfolio] = useState(() => createPaperPortfolio(new Date().toISOString()));
-  const [readiness, setReadiness] = useState<PaperLedgerReadiness>('initializing');
-  const [draft, setDraft] = useState<PreparedPaperDraft | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const portfolioRef = useRef(portfolio);
-  const draftRef = useRef(draft);
-  const readinessRef = useRef(readiness);
+  const [ledger, setLedger] = useState<PaperLedgerState>(() => ({
+    readiness: 'initializing',
+    portfolio: createPaperPortfolio(new Date().toISOString()),
+    draft: null,
+    error: null,
+  }));
+  const ledgerRef = useRef(ledger);
 
-  const updatePortfolio = useCallback((next: PaperPortfolio) => {
-    portfolioRef.current = next;
-    setPortfolio(next);
-  }, []);
-  const updateDraft = useCallback((next: PreparedPaperDraft | null) => {
-    draftRef.current = next;
-    setDraft(next);
-  }, []);
-  const updateReadiness = useCallback((next: PaperLedgerReadiness) => {
-    readinessRef.current = next;
-    setReadiness(next);
-  }, []);
+  const updateLedger = useCallback(
+    (transition: (current: PaperLedgerState) => PaperLedgerState) => {
+      const next = transition(ledgerRef.current);
+      ledgerRef.current = next;
+      setLedger(next);
+    },
+    []
+  );
   const openDashboard = useCallback(() => setView('dashboard'), []);
   const closeDashboard = useCallback(() => setView('session'), []);
 
   useEffect(() => {
-    const initialized = initializePaperLedger(
+    let active = true;
+    void initializePaperLedger(
       browserStorage(),
       browserLockCoordinator(),
       new Date().toISOString()
-    );
-    updatePortfolio(initialized.portfolio);
-    updateReadiness(initialized.readiness);
-    if (initialized.readiness !== 'ready') setError(PERSISTENCE_ERROR);
-  }, [updatePortfolio, updateReadiness]);
+    ).then((initialized) => {
+      if (!active) return;
+      updateLedger((current) => ({
+        ...current,
+        ...initialized,
+        draft: initialized.readiness === 'ready' ? current.draft : null,
+        error: initialized.readiness === 'ready' ? current.error : PERSISTENCE_ERROR,
+      }));
+    });
+    return () => {
+      active = false;
+    };
+  }, [updateLedger]);
 
-  const expectedAgentIdentity = connectedAgentIdentity(agent);
+  const agentSession = connectedAgentSession(agent);
+  const expectedAgentIdentity = agentSession?.identity ?? null;
+  const expectedAgentSessionKey = agentSession?.sessionKey ?? null;
   useEffect(() => {
-    const current = draftRef.current;
-    if (current && current.agentIdentity !== expectedAgentIdentity) updateDraft(null);
-  }, [expectedAgentIdentity, updateDraft]);
+    updateLedger((current) => reconcileAgentSession(current, expectedAgentSessionKey));
+  }, [expectedAgentSessionKey, updateLedger]);
   const handlers = useMemo(
     () =>
-      expectedAgentIdentity
+      expectedAgentIdentity && expectedAgentSessionKey
         ? createPaperRpcHandlers({
             expectedAgentIdentity,
-            getPortfolio: () => portfolioRef.current,
-            getDraft: () => draftRef.current,
-            getReadiness: () => readinessRef.current,
+            expectedAgentSessionKey,
+            getPortfolio: () => ledgerRef.current.portfolio,
+            getDraft: () => ledgerRef.current.draft,
+            getReadiness: () => ledgerRef.current.readiness,
             now: () => new Date().toISOString(),
             openDashboard,
             prepareDraft: (next) => {
-              updateDraft(next);
+              updateLedger((current) => ({ ...current, draft: next }));
             },
           })
         : null,
-    [expectedAgentIdentity, openDashboard, updateDraft]
+    [expectedAgentIdentity, expectedAgentSessionKey, openDashboard, updateLedger]
   );
 
   useEffect(() => {
@@ -482,100 +574,87 @@ export function PaperTradingProvider({ children }: PropsWithChildren) {
   }, [handlers, session.room]);
 
   const confirmDraft = useCallback(async () => {
-    const currentDraft = draftRef.current;
-    if (readinessRef.current !== 'ready') {
-      setError(PERSISTENCE_ERROR);
+    const current = ledgerRef.current;
+    const currentDraft = current.draft;
+    if (current.readiness !== 'ready') {
+      updateLedger((state) => ({ ...state, error: PERSISTENCE_ERROR }));
       return false;
     }
-    if (!currentDraft || !expectedAgentIdentity) {
-      setError('No active paper draft is available to confirm.');
+    if (!currentDraft || !expectedAgentIdentity || !expectedAgentSessionKey) {
+      updateLedger((state) => ({
+        ...state,
+        error: 'No active paper draft is available to confirm.',
+      }));
       return false;
     }
     try {
       const result = await confirmPaperDraft({
-        portfolio: portfolioRef.current,
+        portfolio: current.portfolio,
         draft: currentDraft.draft,
         preparedAgentIdentity: currentDraft.agentIdentity,
         currentAgentIdentity: expectedAgentIdentity,
+        preparedAgentSessionKey: currentDraft.agentSessionKey,
+        currentAgentSessionKey: expectedAgentSessionKey,
         now: new Date().toISOString(),
         storage: browserStorage(),
         sendOrderResult: (payload) =>
           sendPaperOrderResult(session.room.localParticipant, expectedAgentIdentity, payload),
       });
+      updateLedger((state) => reconcilePaperSave(state, result, 'confirm'));
       if (result.status === 'saved') {
-        updatePortfolio(result.portfolio);
-        updateDraft(null);
-        setError(null);
         return true;
       }
-      if (result.status === 'stale') {
-        updatePortfolio(result.portfolio);
-        if (result.portfolio.appliedDraftIds.includes(currentDraft.draft.draftId))
-          updateDraft(null);
-        setError(STALE_ERROR);
-        return false;
-      }
-      setError(PERSISTENCE_ERROR);
       return false;
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'The paper order could not be confirmed.');
+      updateLedger((state) => ({
+        ...state,
+        error: cause instanceof Error ? cause.message : 'The paper order could not be confirmed.',
+      }));
       return false;
     }
-  }, [expectedAgentIdentity, session.room.localParticipant, updateDraft, updatePortfolio]);
+  }, [expectedAgentIdentity, expectedAgentSessionKey, session.room.localParticipant, updateLedger]);
 
   const resetPortfolio = useCallback(async () => {
-    if (readinessRef.current !== 'ready') {
-      setError(PERSISTENCE_ERROR);
+    const current = ledgerRef.current;
+    if (current.readiness !== 'ready') {
+      updateLedger((state) => ({ ...state, error: PERSISTENCE_ERROR }));
       return false;
     }
     try {
-      const candidate = reducePaperPortfolio(portfolioRef.current, {
+      const candidate = reducePaperPortfolio(current.portfolio, {
         type: 'reset',
         now: new Date().toISOString(),
       });
       const result = await savePaperPortfolio(browserStorage(), candidate);
+      updateLedger((state) => reconcilePaperSave(state, result, 'reset'));
       if (result.status === 'saved') {
-        updatePortfolio(result.portfolio);
-        updateDraft(null);
-        setError(null);
         return true;
       }
-      if (result.status === 'stale') {
-        updatePortfolio(result.portfolio);
-        setError(STALE_ERROR);
-        return false;
-      }
-      setError(PERSISTENCE_ERROR);
       return false;
     } catch {
-      setError(PERSISTENCE_ERROR);
+      updateLedger((state) => ({
+        ...state,
+        readiness: 'unavailable',
+        draft: null,
+        error: PERSISTENCE_ERROR,
+      }));
       return false;
     }
-  }, [updateDraft, updatePortfolio]);
+  }, [updateLedger]);
 
   const value = useMemo<PaperTradingContextValue>(
     () => ({
       view,
-      readiness,
-      portfolio,
-      draft: draft?.draft ?? null,
-      error,
+      readiness: ledger.readiness,
+      portfolio: ledger.portfolio,
+      draft: ledger.draft?.draft ?? null,
+      error: ledger.error,
       openDashboard,
       closeDashboard,
       confirmDraft,
       resetPortfolio,
     }),
-    [
-      closeDashboard,
-      confirmDraft,
-      draft,
-      error,
-      openDashboard,
-      portfolio,
-      readiness,
-      resetPortfolio,
-      view,
-    ]
+    [closeDashboard, confirmDraft, ledger, openDashboard, resetPortfolio, view]
   );
 
   return <PaperTradingContext.Provider value={value}>{children}</PaperTradingContext.Provider>;

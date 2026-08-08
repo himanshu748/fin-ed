@@ -54,14 +54,20 @@ function loadProviderModule() {
 const {
   confirmPaperDraft,
   connectedAgentIdentity,
+  connectedAgentSession,
   createPaperRpcHandlers,
   initializePaperLedger,
+  reconcileAgentSession,
+  reconcilePaperSave,
   registerPaperRpcHandlers,
   sendPaperOrderResult,
 } = loadProviderModule();
 const { createPaperPortfolio, reducePaperPortfolio } = require('../lib/paper-trading/reducer.ts');
 const { decodePaperOrderDraft } = require('../lib/paper-trading/schema.ts');
-const { PAPER_PORTFOLIO_STORAGE_KEY } = require('../lib/paper-trading/storage.ts');
+const {
+  PAPER_PORTFOLIO_STORAGE_KEY,
+  savePaperPortfolio,
+} = require('../lib/paper-trading/storage.ts');
 
 const NOW = '2026-08-08T00:00:10.000Z';
 const OPEN_REQUEST = '{"version":1,"paper":true}';
@@ -94,6 +100,7 @@ function harness(overrides = {}) {
   let portfolio = createPaperPortfolio('2026-08-08T00:00:00.000Z', 'portfolio-1');
   const handlers = createPaperRpcHandlers({
     expectedAgentIdentity: 'agent-1',
+    expectedAgentSessionKey: 'agent-1:sid-a',
     getPortfolio: () => portfolio,
     getDraft: () => prepared,
     getReadiness: () => 'ready',
@@ -133,14 +140,22 @@ function memoryStorage(entries = {}) {
     setItem(key, value) {
       values.set(key, value);
     },
+    putRaw(key, value) {
+      values.set(key, value);
+    },
   };
 }
 
 function locks() {
+  let requestCount = 0;
   return {
+    get requestCount() {
+      return requestCount;
+    },
     async request(name, options, callback) {
       assert.equal(name, PAPER_PORTFOLIO_STORAGE_KEY);
       assert.deepEqual(options, { mode: 'exclusive' });
+      requestCount += 1;
       return callback();
     },
   };
@@ -166,7 +181,7 @@ test('open dashboard accepts only an exact request from the connected agent', as
 });
 
 test('agent identity is available only from a connected LiveKit agent participant', () => {
-  const participant = { identity: 'agent-1' };
+  const participant = { identity: 'agent-1', sid: 'sid-a' };
 
   assert.equal(
     connectedAgentIdentity({ isConnected: true, internal: { agentParticipant: participant } }),
@@ -179,6 +194,19 @@ test('agent identity is available only from a connected LiveKit agent participan
   assert.equal(
     connectedAgentIdentity({ isConnected: true, internal: { agentParticipant: null } }),
     null
+  );
+  assert.equal(
+    connectedAgentSession({ isConnected: true, internal: { agentParticipant: participant } })
+      .sessionKey,
+    'agent-1:sid-a'
+  );
+  assert.notEqual(
+    connectedAgentSession({ isConnected: true, internal: { agentParticipant: participant } })
+      .sessionKey,
+    connectedAgentSession({
+      isConnected: true,
+      internal: { agentParticipant: { identity: 'agent-1', sid: 'sid-b' } },
+    }).sessionKey
   );
 });
 
@@ -296,6 +324,7 @@ test('prepare order binds the draft to the authorized agent session', async () =
   await state.handlers.prepareOrder(invocation(draftPayload(), 'agent-1'));
 
   assert.equal(preparedBinding.agentIdentity, 'agent-1');
+  assert.equal(preparedBinding.agentSessionKey, 'agent-1:sid-a');
   assert.equal(preparedBinding.draft.draftId, 'draft-1');
 });
 
@@ -332,15 +361,19 @@ test('prepare and summary RPCs reject initializing, corrupt, and unavailable led
   }
 });
 
-test('ledger initialization is ready only with readable storage and lock coordination', () => {
-  const missing = initializePaperLedger(memoryStorage(), locks(), NOW);
+test('ledger initialization is ready only after a coordinated real persistence result', async () => {
+  const missingStorage = memoryStorage();
+  const missingLocks = locks();
+  const missing = await initializePaperLedger(missingStorage, missingLocks, NOW);
   assert.equal(missing.readiness, 'ready');
   assert.equal(missing.portfolio.cashPaise, 10_000_000);
+  assert.equal(missingLocks.requestCount, 1);
+  assert.notEqual(missingStorage.getItem(PAPER_PORTFOLIO_STORAGE_KEY), null);
 
-  const noLocks = initializePaperLedger(memoryStorage(), null, NOW);
+  const noLocks = await initializePaperLedger(memoryStorage(), null, NOW);
   assert.equal(noLocks.readiness, 'unavailable');
 
-  const throwing = initializePaperLedger(
+  const throwingRead = await initializePaperLedger(
     {
       getItem() {
         throw new Error('private storage failure');
@@ -352,14 +385,109 @@ test('ledger initialization is ready only with readable storage and lock coordin
     locks(),
     NOW
   );
-  assert.equal(throwing.readiness, 'unavailable');
+  assert.equal(throwingRead.readiness, 'unavailable');
 
-  const corrupt = initializePaperLedger(
+  const throwingWrite = await initializePaperLedger(
+    {
+      getItem() {
+        return null;
+      },
+      setItem() {
+        throw new Error('private storage failure');
+      },
+    },
+    locks(),
+    NOW
+  );
+  assert.equal(throwingWrite.readiness, 'unavailable');
+
+  const corrupt = await initializePaperLedger(
     memoryStorage({ [PAPER_PORTFOLIO_STORAGE_KEY]: '{' }),
     locks(),
     NOW
   );
   assert.equal(corrupt.readiness, 'corrupt');
+});
+
+test('a confirm write failure atomically downgrades readiness and closes later RPC access', async () => {
+  const portfolio = createPaperPortfolio('2026-08-08T00:00:00.000Z', 'portfolio-1');
+  const draft = decodePaperOrderDraft(JSON.parse(draftPayload()));
+  const result = await confirmPaperDraft({
+    portfolio,
+    draft,
+    preparedAgentIdentity: 'agent-1',
+    currentAgentIdentity: 'agent-1',
+    preparedAgentSessionKey: 'agent-1:sid-a',
+    currentAgentSessionKey: 'agent-1:sid-a',
+    now: NOW,
+    storage: {
+      getItem() {
+        return null;
+      },
+      setItem() {
+        throw new Error('private write failure');
+      },
+    },
+    coordinator: locks(),
+    sendOrderResult() {
+      return Promise.resolve('ack');
+    },
+  });
+  const next = reconcilePaperSave(
+    {
+      readiness: 'ready',
+      portfolio,
+      draft: {
+        draft,
+        agentIdentity: 'agent-1',
+        agentSessionKey: 'agent-1:sid-a',
+      },
+      error: null,
+    },
+    result,
+    'confirm'
+  );
+
+  assert.equal(next.readiness, 'unavailable');
+  assert.equal(next.portfolio.revision, 0);
+  assert.equal(next.draft, null);
+  assert.match(next.error, /persistence is unavailable/);
+  const handlers = harness({ getReadiness: () => next.readiness }).handlers;
+  await assert.rejects(() => handlers.prepareOrder(invocation(draftPayload())), /not ready/);
+  await assert.rejects(() => handlers.getPortfolioSummary(invocation(OPEN_REQUEST)), /not ready/);
+});
+
+test('corruption discovered during reset atomically downgrades readiness', async () => {
+  const portfolio = createPaperPortfolio('2026-08-08T00:00:00.000Z', 'portfolio-1');
+  const draft = decodePaperOrderDraft(JSON.parse(draftPayload()));
+  const storage = memoryStorage({
+    [PAPER_PORTFOLIO_STORAGE_KEY]: JSON.stringify(portfolio),
+  });
+  storage.putRaw(PAPER_PORTFOLIO_STORAGE_KEY, '{');
+  const candidate = reducePaperPortfolio(portfolio, {
+    type: 'reset',
+    now: NOW,
+  });
+  const result = await savePaperPortfolio(storage, candidate, locks());
+  const next = reconcilePaperSave(
+    {
+      readiness: 'ready',
+      portfolio,
+      draft: {
+        draft,
+        agentIdentity: 'agent-1',
+        agentSessionKey: 'agent-1:sid-a',
+      },
+      error: null,
+    },
+    result,
+    'reset'
+  );
+
+  assert.equal(next.readiness, 'corrupt');
+  assert.equal(next.portfolio.revision, 0);
+  assert.equal(next.draft, null);
+  assert.match(next.error, /persistence is unavailable/);
 });
 
 test('RPC registration installs and cleans up all three methods exactly once', () => {
@@ -423,6 +551,8 @@ test('confirmed fill persists through the lock and sends an exact result without
     draft,
     preparedAgentIdentity: 'agent-1',
     currentAgentIdentity: 'agent-1',
+    preparedAgentSessionKey: 'agent-1:sid-a',
+    currentAgentSessionKey: 'agent-1:sid-a',
     now: NOW,
     storage,
     coordinator: locks(),
@@ -460,6 +590,8 @@ test('a replacement agent cannot confirm or receive a draft prepared by the prio
         draft: decodePaperOrderDraft(JSON.parse(draftPayload())),
         preparedAgentIdentity: 'agent-1',
         currentAgentIdentity: 'agent-2',
+        preparedAgentSessionKey: 'agent-1:sid-a',
+        currentAgentSessionKey: 'agent-2:sid-b',
         now: NOW,
         storage,
         coordinator: locks(),
@@ -474,6 +606,59 @@ test('a replacement agent cannot confirm or receive a draft prepared by the prio
   assert.equal(storage.getItem(PAPER_PORTFOLIO_STORAGE_KEY), null);
   assert.equal(portfolio.revision, 0);
   assert.equal(resultCalls, 0);
+});
+
+test('same-identity participant replacement cannot confirm the prior SID draft', async () => {
+  const portfolio = createPaperPortfolio('2026-08-08T00:00:00.000Z', 'portfolio-1');
+  const storage = memoryStorage();
+  let resultCalls = 0;
+
+  await assert.rejects(
+    () =>
+      confirmPaperDraft({
+        portfolio,
+        draft: decodePaperOrderDraft(JSON.parse(draftPayload())),
+        preparedAgentIdentity: 'agent-1',
+        currentAgentIdentity: 'agent-1',
+        preparedAgentSessionKey: 'agent-1:sid-a',
+        currentAgentSessionKey: 'agent-1:sid-b',
+        now: NOW,
+        storage,
+        coordinator: locks(),
+        sendOrderResult() {
+          resultCalls += 1;
+          return Promise.resolve('ack');
+        },
+      }),
+    /different agent session/
+  );
+
+  assert.equal(storage.getItem(PAPER_PORTFOLIO_STORAGE_KEY), null);
+  assert.equal(portfolio.revision, 0);
+  assert.equal(resultCalls, 0);
+});
+
+test('provider lifecycle clears a bound draft when only the participant SID changes', () => {
+  const portfolio = createPaperPortfolio('2026-08-08T00:00:00.000Z', 'portfolio-1');
+  const draft = decodePaperOrderDraft(JSON.parse(draftPayload()));
+
+  const reconnected = reconcileAgentSession(
+    {
+      readiness: 'ready',
+      portfolio,
+      draft: {
+        draft,
+        agentIdentity: 'agent-1',
+        agentSessionKey: 'agent-1:sid-a',
+      },
+      error: null,
+    },
+    'agent-1:sid-b'
+  );
+
+  assert.equal(reconnected.draft, null);
+  assert.equal(reconnected.readiness, 'ready');
+  assert.equal(reconnected.portfolio, portfolio);
 });
 
 test('result RPC targets only the connected agent with the backend-compatible flat payload', async () => {
@@ -523,6 +708,8 @@ test('a stale save returns the winning portfolio and never reports the losing dr
     draft: decodePaperOrderDraft(JSON.parse(draftPayload())),
     preparedAgentIdentity: 'agent-1',
     currentAgentIdentity: 'agent-1',
+    preparedAgentSessionKey: 'agent-1:sid-a',
+    currentAgentSessionKey: 'agent-1:sid-a',
     now: NOW,
     storage,
     coordinator: locks(),
@@ -545,6 +732,8 @@ test('unavailable persistence fails safely without applying or reporting a fill'
     draft: decodePaperOrderDraft(JSON.parse(draftPayload())),
     preparedAgentIdentity: 'agent-1',
     currentAgentIdentity: 'agent-1',
+    preparedAgentSessionKey: 'agent-1:sid-a',
+    currentAgentSessionKey: 'agent-1:sid-a',
     now: NOW,
     storage: memoryStorage(),
     coordinator: null,
