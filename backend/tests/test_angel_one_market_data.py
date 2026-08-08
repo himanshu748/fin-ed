@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 
+import fined.market_data.angel_one as angel_one
 from fined.market_data.angel_one import (
     QUOTE_ENDPOINT,
     SEARCH_SCRIP_ENDPOINT,
@@ -29,6 +30,93 @@ def config() -> AngelOneMarketDataConfig:
         client_public_ip="203.0.113.10",
         mac_address="00:11:22:33:44:55",
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reassigned_endpoint",
+    [
+        (
+            "https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/"
+            + "place"
+            + "Order"
+        ),
+        "https://example.invalid/account/profile",
+    ],
+)
+async def test_quote_rejects_runtime_reassigned_endpoint_before_transport(
+    monkeypatch: pytest.MonkeyPatch,
+    reassigned_endpoint: str,
+) -> None:
+    transport_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal transport_calls
+        transport_calls += 1
+        return httpx.Response(500, request=request)
+
+    monkeypatch.setattr(angel_one, "QUOTE_ENDPOINT", reassigned_endpoint)
+    provider = AngelOneMarketDataProvider(
+        config(), transport=httpx.MockTransport(handler)
+    )
+
+    with pytest.raises(MarketDataUnavailableError) as failure:
+        await provider.get_quote(QuoteRequest("NSE", "3045"))
+
+    assert str(failure.value) == MARKET_DATA_UNAVAILABLE_MESSAGE
+    assert transport_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_search_rejects_f_string_forbidden_endpoint_before_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal transport_calls
+        transport_calls += 1
+        return httpx.Response(500, request=request)
+
+    endpoint_action = "getProfile"
+    reassigned_endpoint = (
+        f"https://apiconnect.angelone.in/rest/secure/angelbroking/user/v1/"
+        f"{endpoint_action}"
+    )
+    monkeypatch.setattr(angel_one, "SEARCH_SCRIP_ENDPOINT", reassigned_endpoint)
+    provider = AngelOneMarketDataProvider(
+        config(), transport=httpx.MockTransport(handler)
+    )
+
+    with pytest.raises(MarketDataUnavailableError) as failure:
+        await provider.search_instruments(
+            InstrumentSearchRequest(query="RELIANCE", exchange="NSE")
+        )
+
+    assert str(failure.value) == MARKET_DATA_UNAVAILABLE_MESSAGE
+    assert transport_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", [QUOTE_ENDPOINT, SEARCH_SCRIP_ENDPOINT])
+async def test_transport_gate_allows_each_exact_read_only_endpoint(
+    endpoint: str,
+) -> None:
+    captured_requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(200, json={"status": True}, request=request)
+
+    provider = AngelOneMarketDataProvider(
+        config(), transport=httpx.MockTransport(handler)
+    )
+
+    response = await provider._post_read_only(endpoint, {"probe": "read-only"})
+
+    assert response.status_code == 200
+    assert [request.url for request in captured_requests] == [httpx.URL(endpoint)]
+    assert json.loads(captured_requests[0].content) == {"probe": "read-only"}
 
 
 @pytest.mark.asyncio

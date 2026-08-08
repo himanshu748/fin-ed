@@ -437,6 +437,57 @@ test('paper dashboard states the safety boundary and exact confirmation', () => 
   );
 });
 
+test('renders browser-owned safeguards and wires enabled buy and sell confirmations', async () => {
+  const dashboardMarkup = renderDashboard();
+  includesAll(
+    dashboardMarkup,
+    [
+      'Paper trading only',
+      'No real money or broker account.',
+      'Current/live value:',
+      'trusted current quote is required',
+      'This is a simulated paper order. No real money or broker order will be used.',
+      'Simulated fills recorded in this browser.',
+    ],
+    'missing visible browser-owned paper safeguards'
+  );
+
+  for (const [side, cashEffectPaise, label] of [
+    ['buy', -2_950_700, 'Confirm paper buy'],
+    ['sell', 2_950_300, 'Confirm paper sell'],
+  ]) {
+    const hooks = statefulReact();
+    const { OrderReview } = loadOrderReview(hooks.react);
+    const clock = fakeBrowserClock(Date.parse('2026-08-08T09:31:00.000Z'));
+    let confirmCalls = 0;
+    try {
+      const tree = hooks.render(OrderReview, {
+        draft: draft({ side, cashEffectPaise }),
+        portfolio: portfolio(),
+        readiness: 'ready',
+        async onConfirm() {
+          confirmCalls += 1;
+          return true;
+        },
+      });
+      const confirm = findElement(
+        tree,
+        (element) => element.type === 'button' && textContent(element) === label
+      );
+
+      assert.ok(confirm, `${label} must render as a real button`);
+      assert.equal(confirm.props.type, 'button');
+      assert.notEqual(confirm.props.disabled, true);
+      assert.equal(typeof confirm.props.onClick, 'function');
+      await confirm.props.onClick();
+      assert.equal(confirmCalls, 1);
+    } finally {
+      hooks.unmount();
+      clock.restore();
+    }
+  }
+});
+
 test('renders an open ledger with native headings, status, tables, and mobile labels', () => {
   const markup = renderDashboard();
 

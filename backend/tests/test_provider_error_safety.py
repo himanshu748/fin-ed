@@ -25,24 +25,14 @@ PROVIDER_REQUEST_ID_SENTINEL = "SECRET_PROVIDER_REQUEST_ID"
 PROVIDER_CAUSE_SENTINEL = "SECRET_PROVIDER_CAUSE"
 SYNCHRONOUS_UNEXPECTED_SENTINEL = "SECRET_SYNC_PROVIDER_EXCEPTION"
 
-FORBIDDEN_BROKER_ENDPOINTS = (
-    "placeOrder",
-    "modifyOrder",
-    "cancelOrder",
-    "orderBook",
-    "holding",
-    "rmsLimit",
-    "generateTokens",
-    "generateToken",
-    "generateSession",
-    "loginByPassword",
-    "logout",
-    "getFunds",
-    "getProfile",
-)
-ALLOWED_MARKET_ENDPOINTS = {
-    "https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote/",
-    "https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/searchScrip",
+HTTP_VERBS = {"delete", "get", "patch", "post", "put", "request"}
+ALTERNATE_HTTP_MODULES = {
+    "aiohttp",
+    "http.client",
+    "requests",
+    "urllib",
+    "urllib.request",
+    "urllib3",
 }
 
 
@@ -62,54 +52,57 @@ def _retryable_status_error_with_raw_cause() -> APIStatusError:
         return error
 
 
-def test_market_provider_contains_only_read_only_broker_endpoints() -> None:
+def test_angel_provider_centralizes_httpx_access_in_guarded_helper() -> None:
     provider_path = Path("src/fined/market_data/angel_one.py")
     source = provider_path.read_text()
     tree = ast.parse(source, filename=str(provider_path))
-
-    assert not any(
-        value.casefold() in source.casefold() for value in FORBIDDEN_BROKER_ENDPOINTS
-    )
-
-    endpoint_constants = {
-        node.value.value
-        for node in tree.body
-        if isinstance(node, ast.Assign)
-        and any(
-            isinstance(target, ast.Name) and target.id.endswith("_ENDPOINT")
-            for target in node.targets
-        )
-        and isinstance(node.value, ast.Constant)
-        and isinstance(node.value.value, str)
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
     }
-    assert endpoint_constants == ALLOWED_MARKET_ENDPOINTS
 
-    http_client_names = {
-        item.optional_vars.id
+    def containing_function(node: ast.AST) -> str | None:
+        current = parents.get(node)
+        while current is not None:
+            if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                return current.name
+            current = parents.get(current)
+        return None
+
+    imported_modules = {
+        alias.name
         for node in ast.walk(tree)
-        if isinstance(node, ast.AsyncWith)
-        for item in node.items
-        if isinstance(item.context_expr, ast.Call)
-        and isinstance(item.context_expr.func, ast.Attribute)
-        and isinstance(item.context_expr.func.value, ast.Name)
-        and item.context_expr.func.value.id == "httpx"
-        and item.context_expr.func.attr == "AsyncClient"
-        and isinstance(item.optional_vars, ast.Name)
+        if isinstance(node, ast.Import)
+        for alias in node.names
     }
-    assert http_client_names
-    http_calls = [
-        (node.func.attr, ast.unparse(node.args[0]))
+    imported_from_modules = {
+        node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+    }
+    assert "httpx" in imported_modules
+    assert not (imported_modules | imported_from_modules) & ALTERNATE_HTTP_MODULES
+    assert "httpx" not in imported_from_modules
+
+    async_client_constructions = [
+        node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and isinstance(node.func.value, ast.Name)
-        and node.func.value.id in http_client_names
-        and node.func.attr in {"delete", "get", "patch", "post", "put", "request"}
+        and node.func.value.id == "httpx"
+        and node.func.attr == "AsyncClient"
     ]
-    assert http_calls == [
-        ("post", "QUOTE_ENDPOINT"),
-        ("post", "SEARCH_SCRIP_ENDPOINT"),
+    http_verb_accesses = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and node.attr in HTTP_VERBS
+        and isinstance(node.value, ast.Name)
+        and node.value.id in {"client", "httpx"}
     ]
+    network_access = [*async_client_constructions, *http_verb_accesses]
+    assert network_access
+    assert {containing_function(node) for node in network_access} == {"_post_read_only"}
 
 
 class _FailingLLM(llm.LLM):

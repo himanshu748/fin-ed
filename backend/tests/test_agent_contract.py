@@ -20,6 +20,7 @@ from fined.agent import (
 )
 from fined.calculator import ScheduleConfigurationError, UnsupportedScheduleError
 from fined.knowledge.index import SearchHit
+from fined.market_data.angel_one import create_market_data_provider
 from fined.market_data.models import (
     InstrumentSearchRequest,
     MarketInstrument,
@@ -89,6 +90,7 @@ class FakePaperTradingBridge:
     summary_calls: int = 0
     fail: bool = False
     prepared: bool = True
+    prepare_calls: int = 0
 
     async def open_dashboard(self) -> PaperDashboardAck:
         self.open_calls += 1
@@ -97,6 +99,7 @@ class FakePaperTradingBridge:
         return PaperDashboardAck(opened=True)
 
     async def prepare_order(self, draft: PaperOrderDraft) -> PaperDraftAck:
+        self.prepare_calls += 1
         self.draft = draft
         if self.fail:
             raise PaperTradingUIUnavailableError()
@@ -982,6 +985,33 @@ async def test_paper_tools_sanitize_bridge_and_provider_failures() -> None:
     assert str(bridge_failure.value) == "Paper trading is unavailable right now."
     assert str(provider_failure.value) == "Live market data is temporarily unavailable."
     assert state.pending_paper_drafts == {}
+
+
+@pytest.mark.asyncio
+async def test_real_unconfigured_market_provider_blocks_paper_order_before_browser() -> (
+    None
+):
+    bridge = FakePaperTradingBridge()
+    instrument = _paper_instrument()
+    state = SessionState(
+        profile=ParticipantProfile(LearningMode.STOCKS),
+        retriever=FakeRetriever([]),
+        market_data=create_market_data_provider(environment={}),
+        paper_trading=bridge,
+        resolved_market_instruments={
+            (instrument.exchange, instrument.symbol_token): instrument
+        },
+    )
+
+    with pytest.raises(ToolError) as failure:
+        await FinEdAssistant().prepare_paper_order(
+            _context(state), "buy", "NSE", "2885", 1
+        )
+
+    assert str(failure.value) == "Live market data is temporarily unavailable."
+    assert state.pending_paper_drafts == {}
+    assert bridge.prepare_calls == 0
+    assert bridge.draft is None
 
 
 @pytest.mark.asyncio

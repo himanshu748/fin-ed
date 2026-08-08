@@ -224,6 +224,7 @@ test('keeps the paper workspace simulated, browser-owned, and quote-gated', () =
   const dashboard = read('components/paper-trading/paper-trading-dashboard.tsx');
   const orderReview = read('components/paper-trading/order-review.tsx');
   const portfolioSummary = read('components/paper-trading/portfolio-summary.tsx');
+  const activityLedger = read('components/paper-trading/activity-ledger.tsx');
 
   includesAll(
     dashboard,
@@ -244,6 +245,11 @@ test('keeps the paper workspace simulated, browser-owned, and quote-gated', () =
     portfolioSummary,
     ['Current/live value:', 'Unavailable', 'trusted current quote is required'],
     'missing honest no-quote state'
+  );
+  includesAll(
+    activityLedger,
+    ['Simulated fills recorded in this browser.'],
+    'missing visible browser ownership copy'
   );
 });
 
@@ -281,6 +287,10 @@ test('does not leak starter branding, pill actions, or prohibited punctuation', 
     'components/app/mode-bento.tsx',
     'components/app/welcome-view.tsx',
     'components/app/fin-ed-session-view.tsx',
+    'components/paper-trading/activity-ledger.tsx',
+    'components/paper-trading/order-review.tsx',
+    'components/paper-trading/paper-trading-dashboard.tsx',
+    'components/paper-trading/portfolio-summary.tsx',
   ];
   const sources = visibleFiles.map((file) => [file, read(file)]);
 

@@ -32,6 +32,7 @@ QUOTE_ENDPOINT = (
 SEARCH_SCRIP_ENDPOINT = (
     "https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/searchScrip"
 )
+_READ_ONLY_ENDPOINTS = frozenset({QUOTE_ENDPOINT, SEARCH_SCRIP_ENDPOINT})
 PROVIDER_NAME = "Angel One SmartAPI"
 MAX_RESPONSE_BYTES = 256 * 1024
 DEFAULT_MAX_AGE_SECONDS = 120
@@ -78,16 +79,7 @@ class AngelOneMarketDataProvider:
             "exchangeTokens": {request.exchange: [request.symbol_token]},
         }
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(3.0),
-                follow_redirects=False,
-                transport=self._transport,
-            ) as client:
-                response = await client.post(
-                    QUOTE_ENDPOINT,
-                    content=json.dumps(payload, separators=(",", ":")),
-                    headers=self._authenticated_headers(),
-                )
+            response = await self._post_read_only(QUOTE_ENDPOINT, payload)
             if (
                 response.status_code != 200
                 or len(response.content) > MAX_RESPONSE_BYTES
@@ -114,33 +106,43 @@ class AngelOneMarketDataProvider:
         )
         instruments: list[MarketInstrument] = []
         try:
+            for search_request in search_requests:
+                payload = {
+                    "exchange": search_request.exchange,
+                    "searchscrip": search_request.query,
+                }
+                # Angel One names this read-only instrument lookup under order/v1.
+                response = await self._post_read_only(SEARCH_SCRIP_ENDPOINT, payload)
+                if (
+                    response.status_code != 200
+                    or len(response.content) > MAX_RESPONSE_BYTES
+                ):
+                    raise ValueError("invalid instrument search response")
+                instruments.extend(
+                    self._parse_instruments(response.json(), search_request)
+                )
+        except Exception:
+            raise MarketDataUnavailableError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
+        return self._rank_instruments(instruments, request)
+
+    async def _post_read_only(
+        self, endpoint: str, payload: Mapping[str, object]
+    ) -> httpx.Response:
+        if endpoint not in _READ_ONLY_ENDPOINTS:
+            raise MarketDataUnavailableError(MARKET_DATA_UNAVAILABLE_MESSAGE)
+        try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(3.0),
                 follow_redirects=False,
                 transport=self._transport,
             ) as client:
-                for search_request in search_requests:
-                    payload = {
-                        "exchange": search_request.exchange,
-                        "searchscrip": search_request.query,
-                    }
-                    # Angel One names this read-only instrument lookup under order/v1.
-                    response = await client.post(
-                        SEARCH_SCRIP_ENDPOINT,
-                        content=json.dumps(payload, separators=(",", ":")),
-                        headers=self._authenticated_headers(),
-                    )
-                    if (
-                        response.status_code != 200
-                        or len(response.content) > MAX_RESPONSE_BYTES
-                    ):
-                        raise ValueError("invalid instrument search response")
-                    instruments.extend(
-                        self._parse_instruments(response.json(), search_request)
-                    )
+                return await client.post(
+                    endpoint,
+                    content=json.dumps(payload, separators=(",", ":")),
+                    headers=self._authenticated_headers(),
+                )
         except Exception:
             raise MarketDataUnavailableError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
-        return self._rank_instruments(instruments, request)
 
     def _authenticated_headers(self) -> dict[str, str]:
         return {
