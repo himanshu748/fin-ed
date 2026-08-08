@@ -87,13 +87,17 @@ def test_instrument_search_rejects_non_cash_exchange(exchange: str) -> None:
 
 def test_market_instrument_requires_cash_exchange_and_numeric_token() -> None:
     item = MarketInstrument(
-        exchange="NSE", symbol_token="2885", trading_symbol="RELIANCE-EQ"
+        exchange="NSE",
+        symbol_token="2885",
+        trading_symbol="RELIANCE-EQ",
+        series="EQ",
     )
 
     assert item.to_public_dict() == {
         "exchange": "NSE",
         "symbol_token": "2885",
         "trading_symbol": "RELIANCE-EQ",
+        "series": "EQ",
         "is_order": False,
     }
     with pytest.raises(ValueError, match="exchange"):
@@ -102,6 +106,30 @@ def test_market_instrument_requires_cash_exchange_and_numeric_token() -> None:
         MarketInstrument(exchange="NSE", symbol_token="X", trading_symbol="X")
     with pytest.raises(ValueError, match="trading symbol"):
         MarketInstrument(exchange="NSE", symbol_token="2885", trading_symbol=" ")
+
+
+@pytest.mark.parametrize("series", ["eq", " EQ", "EQ ", "E-Q", "", 1])
+def test_market_instrument_rejects_untrusted_noncanonical_series(
+    series: object,
+) -> None:
+    with pytest.raises(ValueError, match="series"):
+        MarketInstrument(
+            exchange="NSE",
+            symbol_token="2885",
+            trading_symbol="RELIANCE-EQ",
+            series=series,  # type: ignore[arg-type]
+        )
+
+
+def test_market_instrument_carries_explicit_unknown_provider_series() -> None:
+    item = MarketInstrument(
+        exchange="BSE",
+        symbol_token="500325",
+        trading_symbol="RELIANCE",
+        series=None,
+    )
+
+    assert item.to_public_dict()["series"] is None
 
 
 @pytest.mark.asyncio

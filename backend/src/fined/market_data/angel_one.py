@@ -210,10 +210,12 @@ class AngelOneMarketDataProvider:
                 request.exchange is not None and exchange != request.exchange
             ):
                 raise ValueError("instrument exchange is invalid")
+            trading_symbol = _required_text(row, "tradingsymbol")
             instrument = MarketInstrument(
                 exchange=exchange,
-                trading_symbol=_required_text(row, "tradingsymbol"),
+                trading_symbol=trading_symbol,
                 symbol_token=_required_text(row, "symboltoken"),
+                series=_terminal_series(trading_symbol),
             )
             key = (instrument.exchange, instrument.symbol_token)
             if key not in seen:
@@ -289,6 +291,13 @@ def _positive_decimal(value: object) -> Decimal:
     if not parsed.is_finite() or parsed <= 0:
         raise ValueError("quote price is invalid")
     return parsed
+
+
+def _terminal_series(trading_symbol: str) -> str | None:
+    _, separator, candidate = trading_symbol.rpartition("-")
+    if not separator or not re.fullmatch(r"[A-Z0-9]{1,8}", candidate):
+        return None
+    return candidate
 
 
 def _exchange_time(value: str) -> datetime:

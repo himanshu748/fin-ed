@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -106,6 +107,8 @@ async def my_agent(ctx: JobContext) -> None:
     load_dotenv(".env.local")
     embedding_client = genai.Client()
     client_closed = False
+    paper_result_rpc_registered = False
+    paper_result_rpc_unregistered = False
 
     async def close_client_once() -> None:
         nonlocal client_closed
@@ -114,6 +117,16 @@ async def my_agent(ctx: JobContext) -> None:
         client_closed = True
         await _close_embedding_client(embedding_client)
 
+    def unregister_paper_result_rpc_once() -> None:
+        nonlocal paper_result_rpc_unregistered
+        if not paper_result_rpc_registered or paper_result_rpc_unregistered:
+            return
+        paper_result_rpc_unregistered = True
+        try:
+            ctx.room.local_participant.unregister_rpc_method(PAPER_ORDER_RESULT_METHOD)
+        except Exception:
+            logger.warning("Paper result RPC cleanup failed")
+
     try:
         install_current_websocket_serializer()
         embedder = GeminiEmbedder(embedding_client)
@@ -121,13 +134,14 @@ async def my_agent(ctx: JobContext) -> None:
         paper_trading = LiveKitPaperTradingBridge(
             ctx.room.local_participant, participant.identity
         )
+        state = SessionState(
+            profile=profile,
+            retriever=index,
+            market_data=create_market_data_provider(),
+            paper_trading=paper_trading,
+        )
         session = AgentSession[SessionState](
-            userdata=SessionState(
-                profile=profile,
-                retriever=index,
-                market_data=create_market_data_provider(),
-                paper_trading=paper_trading,
-            ),
+            userdata=state,
             stt=deepgram.STT(
                 model="nova-3",
                 language="multi",
@@ -159,22 +173,37 @@ async def my_agent(ctx: JobContext) -> None:
             if data.caller_identity != participant.identity:
                 raise rtc.RpcError(2001, "Paper result caller is not authorized.")
             try:
-                decode_paper_order_result(data.payload)
+                result = decode_paper_order_result(data.payload)
             except Exception:
                 raise rtc.RpcError(2002, "Invalid paper result.") from None
+            draft = state.pending_paper_drafts.get(result.draft_id)
+            if (
+                draft is None
+                or draft.expires_at <= datetime.now(UTC)
+                or result.side != draft.side
+                or result.trading_symbol != draft.trading_symbol
+                or result.quantity != draft.quantity
+                or result.fill_price_paise != draft.price_paise
+            ):
+                raise rtc.RpcError(2002, "Invalid paper result.")
+            del state.pending_paper_drafts[result.draft_id]
             await session.say(PAPER_RESULT_SENTENCE)
             return PAPER_RESULT_ACK
 
         ctx.room.local_participant.register_rpc_method(
             PAPER_ORDER_RESULT_METHOD, on_paper_order_result
         )
+        paper_result_rpc_registered = True
 
         async def on_shutdown(reason: str) -> None:
             del reason
             try:
                 logger.info("Agent usage summary: %s", usage.get_summary())
             finally:
-                await close_client_once()
+                try:
+                    unregister_paper_result_rpc_once()
+                finally:
+                    await close_client_once()
 
         ctx.add_shutdown_callback(on_shutdown)
 
@@ -194,7 +223,10 @@ async def my_agent(ctx: JobContext) -> None:
         )
         await session.say(build_greeting(profile))
     except BaseException:
-        await close_client_once()
+        try:
+            unregister_paper_result_rpc_once()
+        finally:
+            await close_client_once()
         raise
 
 

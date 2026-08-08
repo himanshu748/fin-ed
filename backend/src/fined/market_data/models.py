@@ -6,6 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 
 _SYMBOL_TOKEN = re.compile(r"^[0-9]{1,20}$")
+_SERIES = re.compile(r"^[A-Z0-9]{1,8}$")
 SUPPORTED_EXCHANGES = frozenset({"NSE", "BSE"})
 
 
@@ -51,17 +52,23 @@ class MarketInstrument:
     exchange: str
     symbol_token: str
     trading_symbol: str
+    series: str | None = None
 
     def __post_init__(self) -> None:
         QuoteRequest(self.exchange, self.symbol_token)
         if not isinstance(self.trading_symbol, str) or not self.trading_symbol.strip():
             raise ValueError("trading symbol must be non-empty text")
+        if self.series is not None and (
+            not isinstance(self.series, str) or not _SERIES.fullmatch(self.series)
+        ):
+            raise ValueError("series must be canonical uppercase provider text or null")
 
     def to_public_dict(self) -> dict[str, object]:
         return {
             "exchange": self.exchange,
             "symbol_token": self.symbol_token,
             "trading_symbol": self.trading_symbol,
+            "series": self.series,
             "is_order": False,
         }
 

@@ -18,6 +18,7 @@ from fined.agent import (
     build_system_prompt,
     parse_participant_profile,
 )
+from fined.calculator import ScheduleConfigurationError, UnsupportedScheduleError
 from fined.knowledge.index import SearchHit
 from fined.market_data.models import (
     InstrumentSearchRequest,
@@ -87,6 +88,7 @@ class FakePaperTradingBridge:
     open_calls: int = 0
     summary_calls: int = 0
     fail: bool = False
+    prepared: bool = True
 
     async def open_dashboard(self) -> PaperDashboardAck:
         self.open_calls += 1
@@ -98,7 +100,7 @@ class FakePaperTradingBridge:
         self.draft = draft
         if self.fail:
             raise PaperTradingUIUnavailableError()
-        return PaperDraftAck(prepared=True, draft_id=draft.draft_id)
+        return PaperDraftAck(prepared=self.prepared, draft_id=draft.draft_id)
 
     async def get_portfolio_summary(self) -> PaperPortfolioSummary:
         self.summary_calls += 1
@@ -113,6 +115,40 @@ class FakePaperTradingBridge:
 
 def _context(state: SessionState) -> RunContext[SessionState]:
     return cast(RunContext[SessionState], SimpleNamespace(userdata=state))
+
+
+def _paper_instrument(
+    *,
+    exchange: str = "NSE",
+    symbol_token: str = "2885",
+    trading_symbol: str = "RELIANCE-EQ",
+    series: str | None = "EQ",
+) -> MarketInstrument:
+    return MarketInstrument(
+        exchange=exchange,
+        symbol_token=symbol_token,
+        trading_symbol=trading_symbol,
+        series=series,
+    )
+
+
+def _paper_state(
+    *,
+    provider: FakeMarketDataProvider,
+    bridge: FakePaperTradingBridge,
+    profile: ParticipantProfile | None = None,
+    instrument: MarketInstrument | None = None,
+) -> SessionState:
+    resolved = instrument or _paper_instrument()
+    return SessionState(
+        profile=profile or ParticipantProfile(LearningMode.STOCKS),
+        retriever=FakeRetriever([]),
+        market_data=provider,
+        paper_trading=bridge,
+        resolved_market_instruments={
+            (resolved.exchange, resolved.symbol_token): resolved
+        },
+    )
 
 
 @pytest.mark.parametrize(
@@ -221,7 +257,7 @@ def test_prompt_requires_deterministic_tools_sources_and_honest_abstention() -> 
         "markdown source links",
         "no spoken urls",
         "high risk",
-        "education and simulation only",
+        "educational simulation means payoff examples only",
         "could not be verified",
     ):
         assert required in prompt
@@ -314,7 +350,9 @@ def test_greeting_names_track_topic_and_adds_fno_risk_line() -> None:
     assert "track" not in fno.casefold()
     assert "F&O" in fno
     assert "high risk" in fno.casefold()
-    assert "education and simulation" in fno.casefold()
+    assert "payoff examples" in fno.casefold()
+    assert "not paper orders" in fno.casefold()
+    assert "education and simulation only" not in fno.casefold()
 
 
 def test_greetings_are_english_and_offer_user_led_language_choice() -> None:
@@ -435,6 +473,9 @@ def test_prompt_defines_browser_only_paper_trading_safety_contract() -> None:
         "the tool prepares a draft",
         "never say it filled until the browser reports a confirmed paper result",
         "never provide a recommendation or convert a paper request into a real broker action",
+        "paper orders support cash equity and etf delivery only",
+        "never prepare an intraday, leveraged, short-selling, or f&o paper order",
+        "f&o simulation means educational payoff examples only, never a paper order",
     ):
         assert required in prompt
 
@@ -459,8 +500,8 @@ async def test_open_paper_dashboard_calls_bridge_without_broker_action() -> None
 async def test_instrument_search_preserves_ambiguous_choices_for_the_learner() -> None:
     provider = FakeMarketDataProvider(
         instruments=(
-            MarketInstrument("NSE", "2885", "RELIANCE-EQ"),
-            MarketInstrument("BSE", "500325", "RELIANCE-A"),
+            MarketInstrument("NSE", "2885", "RELIANCE-EQ", "EQ"),
+            MarketInstrument("BSE", "500325", "RELIANCE-A", "A"),
         )
     )
     state = SessionState(
@@ -481,12 +522,14 @@ async def test_instrument_search_preserves_ambiguous_choices_for_the_learner() -
                 "exchange": "NSE",
                 "symbol_token": "2885",
                 "trading_symbol": "RELIANCE-EQ",
+                "series": "EQ",
                 "is_order": False,
             },
             {
                 "exchange": "BSE",
                 "symbol_token": "500325",
                 "trading_symbol": "RELIANCE-A",
+                "series": "A",
                 "is_order": False,
             },
         ],
@@ -495,15 +538,25 @@ async def test_instrument_search_preserves_ambiguous_choices_for_the_learner() -
         "is_order": False,
         "message": "Ask the learner to choose one exact exchange and instrument.",
     }
+    assert set(state.resolved_market_instruments) == {
+        ("NSE", "2885"),
+        ("BSE", "500325"),
+    }
 
 
-def _paper_quote(*, age_seconds: int = 0) -> MarketQuote:
+def _paper_quote(
+    *,
+    age_seconds: int = 0,
+    exchange: str = "NSE",
+    symbol_token: str = "2885",
+    trading_symbol: str = "RELIANCE-EQ",
+) -> MarketQuote:
     received_time = datetime.now(UTC)
     exchange_time = received_time - timedelta(seconds=age_seconds)
     return MarketQuote(
-        exchange="NSE",
-        symbol_token="2885",
-        trading_symbol="RELIANCE-EQ",
+        exchange=exchange,
+        symbol_token=symbol_token,
+        trading_symbol=trading_symbol,
         last_traded_price=Decimal("2500.50"),
         close_price=Decimal("2490.00"),
         provider="Angel One SmartAPI",
@@ -516,12 +569,7 @@ def _paper_quote(*, age_seconds: int = 0) -> MarketQuote:
 async def test_prepare_order_uses_provider_quote_not_model_price() -> None:
     bridge = FakePaperTradingBridge()
     provider = FakeMarketDataProvider(quote=_paper_quote())
-    state = SessionState(
-        profile=ParticipantProfile(LearningMode.STOCKS),
-        retriever=FakeRetriever([]),
-        market_data=provider,
-        paper_trading=bridge,
-    )
+    state = _paper_state(provider=provider, bridge=bridge)
 
     result = await FinEdAssistant().prepare_paper_order(
         _context(state), side="buy", exchange="NSE", symbol_token="2885", quantity=1
@@ -535,6 +583,142 @@ async def test_prepare_order_uses_provider_quote_not_model_price() -> None:
     assert bridge.draft.charge_status == "estimated"
     assert bridge.draft.expires_at - bridge.draft.quote_time == timedelta(seconds=30)
     assert bridge.draft.draft_id
+    assert state.pending_paper_drafts == {bridge.draft.draft_id: bridge.draft}
+
+
+@pytest.mark.asyncio
+async def test_prepare_order_does_not_track_draft_without_browser_acknowledgement() -> (
+    None
+):
+    bridge = FakePaperTradingBridge(prepared=False)
+    state = _paper_state(
+        provider=FakeMarketDataProvider(quote=_paper_quote()),
+        bridge=bridge,
+    )
+
+    with pytest.raises(ToolError, match="Paper trading is unavailable"):
+        await FinEdAssistant().prepare_paper_order(
+            _context(state), "buy", "NSE", "2885", 1
+        )
+
+    assert bridge.draft is not None
+    assert state.pending_paper_drafts == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "instrument_fields",
+    [
+        {"trading_symbol": "RELIANCE-EQ", "series": "EQ"},
+        {"trading_symbol": "NIFTYBEES-EQ", "series": "EQ"},
+        {
+            "exchange": "BSE",
+            "symbol_token": "500325",
+            "trading_symbol": "RELIANCE-A",
+            "series": "A",
+        },
+    ],
+)
+async def test_prepare_order_accepts_provider_resolved_allowlisted_delivery_instrument(
+    instrument_fields: dict[str, object],
+) -> None:
+    instrument = _paper_instrument(**instrument_fields)  # type: ignore[arg-type]
+    quote = _paper_quote(
+        exchange=instrument.exchange,
+        symbol_token=instrument.symbol_token,
+        trading_symbol=instrument.trading_symbol,
+    )
+    provider = FakeMarketDataProvider(quote=quote)
+    bridge = FakePaperTradingBridge()
+    state = _paper_state(
+        provider=provider,
+        bridge=bridge,
+        instrument=instrument,
+    )
+
+    await FinEdAssistant().prepare_paper_order(
+        _context(state),
+        "buy",
+        instrument.exchange,
+        instrument.symbol_token,
+        1,
+    )
+
+    assert provider.calls == [
+        QuoteRequest(instrument.exchange, instrument.symbol_token)
+    ]
+    assert bridge.draft is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "instrument_fields",
+    [
+        {"trading_symbol": "RELIANCE-BE", "series": "BE"},
+        {"trading_symbol": "RELIANCE-BL", "series": "BL"},
+        {
+            "exchange": "BSE",
+            "symbol_token": "500325",
+            "trading_symbol": "RELIANCE-B",
+            "series": "B",
+        },
+        {
+            "exchange": "BSE",
+            "symbol_token": "500325",
+            "trading_symbol": "RELIANCE",
+            "series": None,
+        },
+    ],
+)
+async def test_prepare_order_rejects_unsupported_provider_series_before_quote(
+    instrument_fields: dict[str, object],
+) -> None:
+    instrument = _paper_instrument(**instrument_fields)  # type: ignore[arg-type]
+    provider = FakeMarketDataProvider(
+        quote=_paper_quote(
+            exchange=instrument.exchange,
+            symbol_token=instrument.symbol_token,
+            trading_symbol=instrument.trading_symbol,
+        )
+    )
+    bridge = FakePaperTradingBridge()
+    state = _paper_state(
+        provider=provider,
+        bridge=bridge,
+        instrument=instrument,
+    )
+
+    with pytest.raises(ToolError, match="supported cash equity or ETF delivery"):
+        await FinEdAssistant().prepare_paper_order(
+            _context(state),
+            "buy",
+            instrument.exchange,
+            instrument.symbol_token,
+            1,
+        )
+
+    assert provider.calls == []
+    assert bridge.draft is None
+
+
+@pytest.mark.asyncio
+async def test_prepare_order_rejects_unresolved_instrument_before_quote() -> None:
+    provider = FakeMarketDataProvider(quote=_paper_quote())
+    bridge = FakePaperTradingBridge()
+    state = SessionState(
+        profile=ParticipantProfile(LearningMode.STOCKS),
+        retriever=FakeRetriever([]),
+        market_data=provider,
+        paper_trading=bridge,
+    )
+
+    with pytest.raises(ToolError, match="search_market_instruments"):
+        await FinEdAssistant().prepare_paper_order(
+            _context(state), "buy", "NSE", "2885", 1
+        )
+
+    assert provider.calls == []
+    assert bridge.draft is None
 
 
 @pytest.mark.asyncio
@@ -551,11 +735,9 @@ async def test_prepare_order_rounds_provider_rupees_to_paise_half_up() -> None:
         exchange_time=now,
         received_time=now,
     )
-    state = SessionState(
-        profile=ParticipantProfile(LearningMode.STOCKS),
-        retriever=FakeRetriever([]),
-        market_data=FakeMarketDataProvider(quote=quote),
-        paper_trading=bridge,
+    state = _paper_state(
+        provider=FakeMarketDataProvider(quote=quote),
+        bridge=bridge,
     )
 
     await FinEdAssistant().prepare_paper_order(_context(state), "buy", "NSE", "2885", 1)
@@ -578,11 +760,9 @@ async def test_prepare_order_rejects_invalid_side_or_quantity_before_quote(
     side: str, quantity: int, message: str
 ) -> None:
     provider = FakeMarketDataProvider(quote=_paper_quote())
-    state = SessionState(
-        profile=ParticipantProfile(LearningMode.STOCKS),
-        retriever=FakeRetriever([]),
-        market_data=provider,
-        paper_trading=FakePaperTradingBridge(),
+    state = _paper_state(
+        provider=provider,
+        bridge=FakePaperTradingBridge(),
     )
 
     with pytest.raises(ToolError, match=message):
@@ -595,11 +775,10 @@ async def test_prepare_order_rejects_invalid_side_or_quantity_before_quote(
 
 @pytest.mark.asyncio
 async def test_fno_mode_rejects_paper_order_preparation() -> None:
-    state = SessionState(
+    state = _paper_state(
         profile=ParticipantProfile(LearningMode.FNO),
-        retriever=FakeRetriever([]),
-        market_data=FakeMarketDataProvider(quote=_paper_quote()),
-        paper_trading=FakePaperTradingBridge(),
+        provider=FakeMarketDataProvider(quote=_paper_quote()),
+        bridge=FakePaperTradingBridge(),
     )
 
     with pytest.raises(ToolError, match="cash equity and ETF delivery"):
@@ -613,11 +792,9 @@ async def test_prepare_order_rejects_quote_that_cannot_reach_browser_unexpired()
     None
 ):
     bridge = FakePaperTradingBridge()
-    state = SessionState(
-        profile=ParticipantProfile(LearningMode.STOCKS),
-        retriever=FakeRetriever([]),
-        market_data=FakeMarketDataProvider(quote=_paper_quote(age_seconds=31)),
-        paper_trading=bridge,
+    state = _paper_state(
+        provider=FakeMarketDataProvider(quote=_paper_quote(age_seconds=31)),
+        bridge=bridge,
     )
 
     with pytest.raises(ToolError, match="fresh quote"):
@@ -629,20 +806,22 @@ async def test_prepare_order_rejects_quote_that_cannot_reach_browser_unexpired()
 
 
 @pytest.mark.asyncio
-async def test_prepare_order_marks_charges_unavailable_when_schedule_is_unavailable(
+@pytest.mark.parametrize(
+    "error_type", [UnsupportedScheduleError, ScheduleConfigurationError]
+)
+async def test_prepare_order_marks_charges_unavailable_only_for_documented_schedule_errors(
     monkeypatch: pytest.MonkeyPatch,
+    error_type: type[Exception],
 ) -> None:
     def unavailable(*args: object, **kwargs: object) -> object:
         del args, kwargs
-        raise RuntimeError("private charge schedule detail")
+        raise error_type("private charge schedule detail")
 
     monkeypatch.setattr("fined.agent.calculate_delivery_fill", unavailable)
     bridge = FakePaperTradingBridge()
-    state = SessionState(
-        profile=ParticipantProfile(LearningMode.STOCKS),
-        retriever=FakeRetriever([]),
-        market_data=FakeMarketDataProvider(quote=_paper_quote()),
-        paper_trading=bridge,
+    state = _paper_state(
+        provider=FakeMarketDataProvider(quote=_paper_quote()),
+        bridge=bridge,
     )
 
     result = await FinEdAssistant().prepare_paper_order(
@@ -654,6 +833,32 @@ async def test_prepare_order_marks_charges_unavailable_when_schedule_is_unavaila
     assert bridge.draft.charge_status == "unavailable"
     assert bridge.draft.charge_paise is None
     assert bridge.draft.cash_effect_paise is None
+
+
+@pytest.mark.asyncio
+async def test_prepare_order_sanitizes_unexpected_charge_failure_without_draft(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise RuntimeError("private charge implementation detail")
+
+    monkeypatch.setattr("fined.agent.calculate_delivery_fill", fail)
+    bridge = FakePaperTradingBridge()
+    state = _paper_state(
+        provider=FakeMarketDataProvider(quote=_paper_quote()),
+        bridge=bridge,
+    )
+
+    with pytest.raises(ToolError) as failure:
+        await FinEdAssistant().prepare_paper_order(
+            _context(state), "buy", "NSE", "2885", 1
+        )
+
+    assert str(failure.value) == "Paper order charges could not be calculated safely."
+    assert "private" not in str(failure.value)
+    assert bridge.draft is None
+    assert state.pending_paper_drafts == {}
 
 
 @pytest.mark.asyncio
@@ -686,11 +891,9 @@ async def test_prepare_order_uses_indian_market_date_for_same_day_charges(
         exchange_time=fixed_now,
         received_time=fixed_now,
     )
-    state = SessionState(
-        profile=ParticipantProfile(LearningMode.STOCKS),
-        retriever=FakeRetriever([]),
-        market_data=FakeMarketDataProvider(quote=quote),
-        paper_trading=FakePaperTradingBridge(),
+    state = _paper_state(
+        provider=FakeMarketDataProvider(quote=quote),
+        bridge=FakePaperTradingBridge(),
     )
 
     await FinEdAssistant().prepare_paper_order(_context(state), "buy", "NSE", "2885", 1)
@@ -701,12 +904,7 @@ async def test_prepare_order_uses_indian_market_date_for_same_day_charges(
 @pytest.mark.asyncio
 async def test_paper_tools_sanitize_bridge_and_provider_failures() -> None:
     bridge = FakePaperTradingBridge(fail=True)
-    state = SessionState(
-        profile=ParticipantProfile(LearningMode.STOCKS),
-        retriever=FakeRetriever([]),
-        market_data=FakeMarketDataProvider(),
-        paper_trading=bridge,
-    )
+    state = _paper_state(provider=FakeMarketDataProvider(), bridge=bridge)
 
     with pytest.raises(ToolError) as bridge_failure:
         await FinEdAssistant().open_paper_trading_dashboard(_context(state))
@@ -717,6 +915,7 @@ async def test_paper_tools_sanitize_bridge_and_provider_failures() -> None:
 
     assert str(bridge_failure.value) == "Paper trading is unavailable right now."
     assert str(provider_failure.value) == "Live market data is temporarily unavailable."
+    assert state.pending_paper_drafts == {}
 
 
 @pytest.mark.asyncio
@@ -1066,7 +1265,7 @@ async def test_fno_session_cannot_reach_the_delivery_calculator() -> None:
         retriever=FakeRetriever([]),
     )
 
-    with pytest.raises(ToolError, match="F&O mode"):
+    with pytest.raises(ToolError, match="F&O mode") as failure:
         await FinEdAssistant().calculate_angel_one_trade_cost(
             context=_context(state),
             trade_date="2026-02-28",
@@ -1075,3 +1274,6 @@ async def test_fno_session_cannot_reach_the_delivery_calculator() -> None:
             buy_price="6",
             sell_price="6",
         )
+
+    assert "educational payoff examples only" in str(failure.value)
+    assert "simulation only" not in str(failure.value)

@@ -58,7 +58,10 @@ def quote() -> MarketQuote:
 
 def instrument() -> MarketInstrument:
     return MarketInstrument(
-        exchange="NSE", symbol_token="2885", trading_symbol="RELIANCE-EQ"
+        exchange="NSE",
+        symbol_token="2885",
+        trading_symbol="RELIANCE-EQ",
+        series="EQ",
     )
 
 
@@ -97,6 +100,7 @@ async def test_mcp_search_result_returns_public_read_only_instruments() -> None:
             "exchange": "NSE",
             "symbol_token": "2885",
             "trading_symbol": "RELIANCE-EQ",
+            "series": "EQ",
             "is_order": False,
         }
     ]

@@ -176,6 +176,7 @@ async def test_search_scrip_posts_only_to_read_only_endpoint() -> None:
     )
 
     assert results[0].trading_symbol == "RELIANCE-EQ"
+    assert results[0].series == "EQ"
     assert captured_request is not None
     assert captured_request.url.path.endswith("/order/v1/searchScrip")
     assert json.loads(captured_request.content) == {
@@ -247,6 +248,45 @@ async def test_search_scrip_without_exchange_queries_nse_and_bse_and_merges_resu
         ("BSE", "500326"),
         ("NSE", "2889"),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exchange", "trading_symbol", "expected_series"),
+    [
+        ("NSE", "RELIANCE-EQ", "EQ"),
+        ("NSE", "RELIANCE-BE", "BE"),
+        ("BSE", "RELIANCE-A", "A"),
+        ("BSE", "RELIANCE", None),
+    ],
+)
+async def test_search_scrip_carries_provider_owned_terminal_series(
+    exchange: str, trading_symbol: str, expected_series: str | None
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": True,
+                "data": [
+                    {
+                        "exchange": exchange,
+                        "tradingsymbol": trading_symbol,
+                        "symboltoken": "2885",
+                    }
+                ],
+            },
+        )
+
+    provider = AngelOneMarketDataProvider(
+        config(), transport=httpx.MockTransport(handler)
+    )
+
+    results = await provider.search_instruments(
+        InstrumentSearchRequest(query="RELIANCE", exchange=exchange)
+    )
+
+    assert results[0].series == expected_series
 
 
 @pytest.mark.asyncio
