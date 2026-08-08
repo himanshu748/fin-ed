@@ -14,6 +14,10 @@ function read(relativePath) {
   return readFileSync(join(frontendRoot, relativePath), 'utf8');
 }
 
+function readBytes(relativePath) {
+  return readFileSync(join(frontendRoot, relativePath));
+}
+
 function readRepo(relativePath) {
   return readFileSync(join(repoRoot, relativePath), 'utf8');
 }
@@ -44,13 +48,91 @@ test('publishes original FinEd editorial artwork and compact brand icons', () =>
   const mark = read('public/fined-saathi-mark.svg');
   includesAll(
     mark,
-    ['viewBox="0 0 64 64"', '#15233B', '#174EA6', '#1F6B4F', '#FFFCF5'],
+    ['viewBox="0 0 64 64"', '#15233B', '#1F6B4F', '#FFFCF5'],
     'missing compact flat mark structure'
   );
   assert.ok(!/<(?:linearGradient|radialGradient|text)\b/i.test(mark), 'mark must stay flat');
   const allowedColors = new Set(['#F6F2E8', '#FFFCF5', '#15233B', '#174EA6', '#1F6B4F', '#A13D35']);
   for (const color of mark.match(/#[\dA-F]{6}/gi) ?? []) {
     assert.ok(allowedColors.has(color.toUpperCase()), `mark uses non-project color: ${color}`);
+  }
+});
+
+test('validates the encoded PNG and ICO asset headers', () => {
+  const pngSignature = '89504e470d0a1a0a';
+  const expectedPngDimensions = new Map([
+    ['public/images/fin-ed-voice-ledger-v1.png', [1568, 1003]],
+    ['public/images/paper-practice-empty-v1.png', [1536, 1024]],
+    ['public/images/fined-saathi-logo-v1.png', [1254, 1254]],
+  ]);
+
+  for (const [asset, [width, height]] of expectedPngDimensions) {
+    const bytes = readBytes(asset);
+    assert.equal(
+      bytes.subarray(0, 8).toString('hex'),
+      pngSignature,
+      `${asset} has an invalid PNG signature`
+    );
+    assert.equal(
+      bytes.subarray(12, 16).toString('ascii'),
+      'IHDR',
+      `${asset} is missing its IHDR chunk`
+    );
+    assert.deepEqual(
+      [bytes.readUInt32BE(16), bytes.readUInt32BE(20)],
+      [width, height],
+      `${asset} has unexpected dimensions`
+    );
+  }
+
+  const favicon = readBytes('app/favicon.ico');
+  assert.deepEqual(
+    [favicon.readUInt16LE(0), favicon.readUInt16LE(2), favicon.readUInt16LE(4)],
+    [0, 1, 1],
+    'favicon must contain one ICO image entry'
+  );
+  assert.deepEqual(
+    [favicon[6] || 256, favicon[7] || 256],
+    [64, 64],
+    'favicon entry must be 64px square'
+  );
+  assert.equal(favicon.readUInt16LE(10), 1, 'favicon must declare one color plane');
+  assert.equal(favicon.readUInt16LE(12), 32, 'favicon must declare 32-bit color');
+  const imageSize = favicon.readUInt32LE(14);
+  const imageOffset = favicon.readUInt32LE(18);
+  assert.equal(imageOffset, 22, 'favicon image must begin after its header and directory');
+  assert.equal(
+    imageOffset + imageSize,
+    favicon.length,
+    'favicon directory size must match the encoded image'
+  );
+});
+
+test('keeps the flat brand mark legible at favicon size', () => {
+  const mark = read('public/fined-saathi-mark.svg');
+
+  includesAll(
+    mark,
+    [
+      'data-mark-part="voice-bars"',
+      'data-mark-part="finance-card"',
+      'fill="#FFFCF5"',
+      'stroke="#1F6B4F"',
+      'stroke-width="4"',
+    ],
+    'missing small-size brand geometry'
+  );
+  assert.equal(
+    (mark.match(/<circle\b/g) ?? []).length,
+    0,
+    'favicon mark must not use collapsing chart nodes'
+  );
+  assert.ok(
+    !/<(?:filter|mask|pattern)\b/i.test(mark),
+    'favicon mark must avoid small-size effects'
+  );
+  for (const match of mark.matchAll(/<rect\b[^>]*\bwidth="(\d+)"/g)) {
+    assert.ok(Number(match[1]) >= 4, `favicon rectangle is too narrow: ${match[1]}`);
   }
 });
 

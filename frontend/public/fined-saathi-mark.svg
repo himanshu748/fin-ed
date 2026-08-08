@@ -10,18 +10,20 @@
     fill="#15233B"
     d="M12 5h40a7 7 0 0 1 7 7v31a7 7 0 0 1-7 7H38L25 60V50H12a7 7 0 0 1-7-7V12a7 7 0 0 1 7-7Z"
   />
-  <rect width="4" height="14" x="15" y="24" fill="#1F6B4F" rx="2" />
-  <rect width="4" height="22" x="22" y="20" fill="#1F6B4F" rx="2" />
-  <rect width="4" height="12" x="29" y="25" fill="#1F6B4F" rx="2" />
-  <path
-    fill="none"
-    stroke="#FFFCF5"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-    stroke-width="4"
-    d="m37 37 7-8 7 3"
-  />
-  <circle cx="37" cy="37" r="3" fill="#174EA6" stroke="#FFFCF5" stroke-width="2" />
-  <circle cx="44" cy="29" r="3" fill="#174EA6" stroke="#FFFCF5" stroke-width="2" />
-  <circle cx="51" cy="32" r="3" fill="#174EA6" stroke="#FFFCF5" stroke-width="2" />
+  <g data-mark-part="voice-bars" fill="#FFFCF5">
+    <rect width="5" height="14" x="14" y="24" rx="2.5" />
+    <rect width="5" height="22" x="21" y="20" rx="2.5" />
+    <rect width="5" height="12" x="28" y="25" rx="2.5" />
+  </g>
+  <g data-mark-part="finance-card">
+    <rect width="18" height="25" x="36" y="17" fill="#FFFCF5" rx="4" />
+    <path
+      fill="none"
+      stroke="#1F6B4F"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      stroke-width="4"
+      d="m40 35 4-5 3 2 4-7"
+    />
+  </g>
 </svg>
