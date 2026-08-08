@@ -8,9 +8,11 @@ from pathlib import Path
 import pytest
 
 from fined.calculator import (
+    DeliveryFill,
     DeliveryTrade,
     ScheduleConfigurationError,
     UnsupportedScheduleError,
+    calculate_delivery_fill,
     calculate_delivery_trade,
     validate_schedule_data,
 )
@@ -231,6 +233,120 @@ def test_tool_result_serializes_decimals_dates_reasons_and_sources():
     assert tool_result["total_charges"] == "35.41"
     assert tool_result["schedule_effective_from"] == "2026-03-01"
     assert isinstance(tool_result["gst"], str)
+    assert tool_result["estimate_reasons"] == list(result.estimate_reasons)
+    assert tool_result["schedule_sources"][0]["title"]
+    assert tool_result["schedule_sources"][0]["url"].startswith("https://")
+
+
+def test_buy_fill_contains_no_dp_charge() -> None:
+    result = calculate_delivery_fill(
+        DeliveryFill(
+            side="buy",
+            trade_date=date(2026, 8, 8),
+            exchange="NSE",
+            quantity=1,
+            price=Decimal("100"),
+        )
+    )
+
+    assert result.notional == Decimal("100.00")
+    assert result.dp_charge == Decimal("0")
+    assert result.cash_effect == -(result.notional + result.total_charges)
+
+
+def test_sell_fill_contains_one_demat_debit() -> None:
+    result = calculate_delivery_fill(
+        DeliveryFill(
+            side="sell",
+            trade_date=date(2026, 8, 8),
+            exchange="NSE",
+            quantity=1,
+            price=Decimal("100"),
+        )
+    )
+
+    assert result.dp_charge == Decimal("20.00")
+    assert result.cash_effect == result.notional - result.total_charges
+
+
+def test_bse_fill_requires_a_scrip_group() -> None:
+    with pytest.raises(ValueError, match=r"BSE.*group"):
+        DeliveryFill(
+            side="buy",
+            trade_date=date(2026, 8, 8),
+            exchange="BSE",
+            quantity=1,
+            price=Decimal("100"),
+        )
+
+
+def test_fill_promotion_uncertainty_is_called_out_as_an_estimate() -> None:
+    result = calculate_delivery_fill(
+        DeliveryFill(
+            side="buy",
+            trade_date=date(2026, 8, 8),
+            exchange="NSE",
+            quantity=1,
+            price=Decimal("100"),
+            brokerage_promotion_applies=None,
+        )
+    )
+
+    assert result.brokerage == Decimal("5.00")
+    assert any("promotion" in reason.lower() for reason in result.estimate_reasons)
+
+
+def test_fill_side_must_be_buy_or_sell() -> None:
+    with pytest.raises(ValueError, match="side"):
+        DeliveryFill(
+            side="hold",  # type: ignore[arg-type]
+            trade_date=date(2026, 8, 8),
+            exchange="NSE",
+            quantity=1,
+            price=Decimal("100"),
+        )
+
+
+def test_fill_quantity_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="quantity"):
+        DeliveryFill(
+            side="buy",
+            trade_date=date(2026, 8, 8),
+            exchange="NSE",
+            quantity=0,
+            price=Decimal("100"),
+        )
+
+
+def test_fill_pre_schedule_date_is_not_silently_priced_at_current_rates() -> None:
+    with pytest.raises(UnsupportedScheduleError):
+        calculate_delivery_fill(
+            DeliveryFill(
+                side="buy",
+                trade_date=date(2026, 2, 28),
+                exchange="NSE",
+                quantity=1,
+                price=Decimal("100"),
+            )
+        )
+
+
+def test_fill_tool_result_serializes_decimals_dates_reasons_and_sources() -> None:
+    result = calculate_delivery_fill(
+        DeliveryFill(
+            side="sell",
+            trade_date=date(2026, 8, 8),
+            exchange="NSE",
+            quantity=1,
+            price=Decimal("100"),
+        )
+    )
+
+    tool_result = result.to_tool_result()
+
+    assert tool_result["notional"] == "100.00"
+    assert isinstance(tool_result["cash_effect"], str)
+    assert tool_result["schedule_effective_from"] == "2026-03-01"
     assert tool_result["estimate_reasons"] == list(result.estimate_reasons)
     assert tool_result["schedule_sources"][0]["title"]
     assert tool_result["schedule_sources"][0]["url"].startswith("https://")

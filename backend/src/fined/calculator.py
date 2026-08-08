@@ -113,6 +113,41 @@ class DeliveryTrade:
             raise ValueError("BSE trades require an allowlisted BSE scrip group")
 
 
+Side = Literal["buy", "sell"]
+
+
+@dataclass(frozen=True)
+class DeliveryFill:
+    side: Side
+    trade_date: date
+    exchange: Literal["NSE", "BSE"]
+    quantity: int
+    price: Decimal
+    brokerage_promotion_applies: bool | None = None
+    executed_orders: int = 1
+    demat_debits: int = 1
+    bse_group: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.side not in ("buy", "sell"):
+            raise ValueError("side must be buy or sell")
+        if self.exchange not in ("NSE", "BSE"):
+            raise ValueError("exchange must be NSE or BSE")
+        if (
+            not isinstance(self.quantity, int)
+            or isinstance(self.quantity, bool)
+            or self.quantity <= 0
+        ):
+            raise ValueError("quantity must be a positive integer")
+        _require_positive_decimal("price", self.price)
+        for name in ("executed_orders", "demat_debits"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        if self.exchange == "BSE" and not self.bse_group:
+            raise ValueError("BSE fills require an allowlisted BSE scrip group")
+
+
 @dataclass(frozen=True)
 class ChargeBreakdown:
     gross_buy_value: Decimal
@@ -130,6 +165,43 @@ class ChargeBreakdown:
     net_pnl: Decimal | None
     fee_to_investment_percent: Decimal
     break_even_sell_price: Decimal | None
+    is_estimate: bool
+    estimate_reasons: tuple[str, ...]
+    schedule_sources: tuple[ScheduleSource, ...]
+    schedule_effective_from: date
+    rounding_note: str
+
+    def to_tool_result(self) -> dict[str, Any]:
+        """Return a JSON-compatible representation without losing Decimal precision."""
+        result: dict[str, Any] = {}
+        for field_name, value in self.__dict__.items():
+            if isinstance(value, Decimal):
+                result[field_name] = _decimal_string(value)
+            elif isinstance(value, date):
+                result[field_name] = value.isoformat()
+            elif isinstance(value, tuple) and field_name == "schedule_sources":
+                result[field_name] = [
+                    {"title": source.title, "url": source.url} for source in value
+                ]
+            elif isinstance(value, tuple):
+                result[field_name] = list(value)
+            else:
+                result[field_name] = value
+        return result
+
+
+@dataclass(frozen=True)
+class FillChargeBreakdown:
+    notional: Decimal
+    brokerage: Decimal
+    dp_charge: Decimal
+    stt: Decimal
+    stamp_duty: Decimal
+    exchange_charge: Decimal
+    sebi_charge: Decimal
+    gst: Decimal
+    total_charges: Decimal
+    cash_effect: Decimal
     is_estimate: bool
     estimate_reasons: tuple[str, ...]
     schedule_sources: tuple[ScheduleSource, ...]
@@ -220,6 +292,66 @@ def calculate_delivery_trade(trade: DeliveryTrade) -> ChargeBreakdown:
         schedule_sources=sources,
         schedule_effective_from=_as_date(schedule["effective_from"]),
         rounding_note="Displayed gross P&L and charges are rounded to paise (₹0.01) using ROUND_HALF_UP; displayed net P&L is their difference. Levy and break-even calculations retain Decimal precision.",
+    )
+
+
+def calculate_delivery_fill(fill: DeliveryFill) -> FillChargeBreakdown:
+    """Calculate a schedule-backed illustrative delivery estimate for one fill."""
+    schedule = _schedule_for(fill.trade_date)
+    _validate_bse_group(fill, schedule)
+    notional = Decimal(fill.quantity) * fill.price
+    brokerage = _brokerage_for_leg(notional, fill.executed_orders, fill, schedule)
+    brokerage, _ = _apply_brokerage_promotion(brokerage, Decimal("0"), fill, schedule)
+    stt = notional * _decimal(schedule["stt_delivery_rate_each_side"])
+    stamp_duty = (
+        notional * _decimal(schedule["stamp_duty_delivery_buy_rate"])
+        if fill.side == "buy"
+        else Decimal("0")
+    )
+    transaction_rate, ipft_rate = _exchange_rates(fill, schedule)
+    exchange_charge = notional * (transaction_rate + ipft_rate)
+    sebi_charge = notional * _decimal(schedule["sebi_turnover_rate_each_side"])
+    dp_charge = (
+        _decimal(schedule["dp_charge_before_gst"]) * Decimal(fill.demat_debits)
+        if fill.side == "sell"
+        else Decimal("0")
+    )
+    gst_rate = _decimal(schedule["gst_rate"])
+    gst = (brokerage + exchange_charge + sebi_charge) * gst_rate + dp_charge * gst_rate
+    total_charges = (
+        brokerage + dp_charge + stt + stamp_duty + exchange_charge + sebi_charge + gst
+    )
+    displayed_notional = _money(notional)
+    displayed_total_charges = _money(total_charges)
+    cash_effect = (
+        -(displayed_notional + displayed_total_charges)
+        if fill.side == "buy"
+        else displayed_notional - displayed_total_charges
+    )
+    reasons = [
+        "Illustrative estimate: Angel One bills at contract-note and ledger aggregation levels that one paper fill does not reproduce."
+    ]
+    if fill.brokerage_promotion_applies is None:
+        reasons.append(
+            "Brokerage promotion applicability was not provided; this estimate uses standard post-promotion brokerage."
+        )
+    sources = tuple(ScheduleSource(**source) for source in schedule["sources"])
+    return FillChargeBreakdown(
+        notional=displayed_notional,
+        brokerage=brokerage,
+        dp_charge=dp_charge,
+        stt=stt,
+        stamp_duty=stamp_duty,
+        exchange_charge=exchange_charge,
+        sebi_charge=sebi_charge,
+        gst=gst,
+        total_charges=displayed_total_charges,
+        cash_effect=cash_effect,
+        is_estimate=True,
+        estimate_reasons=tuple(reasons),
+        schedule_sources=sources,
+        schedule_effective_from=_as_date(schedule["effective_from"]),
+        rounding_note="Displayed notional, charges, and cash effect are rounded to paise (₹0.01) using ROUND_HALF_UP. Levy calculations retain Decimal precision.",
     )
 
 
@@ -317,7 +449,7 @@ def _break_even_sell_price(trade: DeliveryTrade, schedule: dict[str, Any]) -> De
 def _brokerage_for_leg(
     turnover: Decimal,
     executed_orders: int,
-    trade: DeliveryTrade,
+    trade: DeliveryTrade | DeliveryFill,
     schedule: dict[str, Any],
 ) -> Decimal:
     per_order_turnover = turnover / Decimal(executed_orders)
@@ -332,7 +464,7 @@ def _brokerage_for_leg(
 def _apply_brokerage_promotion(
     brokerage_buy: Decimal,
     brokerage_sell: Decimal,
-    trade: DeliveryTrade,
+    trade: DeliveryTrade | DeliveryFill,
     schedule: dict[str, Any],
 ) -> tuple[Decimal, Decimal]:
     if trade.brokerage_promotion_applies is not True:
@@ -345,7 +477,7 @@ def _apply_brokerage_promotion(
 
 
 def _exchange_rates(
-    trade: DeliveryTrade, schedule: dict[str, Any]
+    trade: DeliveryTrade | DeliveryFill, schedule: dict[str, Any]
 ) -> tuple[Decimal, Decimal]:
     if trade.exchange == "NSE":
         return (
@@ -357,7 +489,9 @@ def _exchange_rates(
     ), Decimal("0")
 
 
-def _validate_bse_group(trade: DeliveryTrade, schedule: dict[str, Any]) -> None:
+def _validate_bse_group(
+    trade: DeliveryTrade | DeliveryFill, schedule: dict[str, Any]
+) -> None:
     if trade.exchange != "BSE":
         return
     group = trade.bse_group.upper() if trade.bse_group else ""
