@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import cast
 
@@ -18,6 +19,8 @@ from fined.agent import (
     parse_participant_profile,
 )
 from fined.knowledge.index import SearchHit
+from fined.market_data.models import MarketQuote, QuoteRequest
+from fined.market_data.provider import MarketDataUnavailableError
 from fined.modes import LearningMode
 
 
@@ -44,6 +47,18 @@ class FakeRetriever:
             }
         )
         return self.hits
+
+
+@dataclass
+class FakeMarketDataProvider:
+    quote: MarketQuote | None = None
+    calls: list[QuoteRequest] = field(default_factory=list)
+
+    async def get_quote(self, request: QuoteRequest) -> MarketQuote:
+        self.calls.append(request)
+        if self.quote is None:
+            raise MarketDataUnavailableError("provider detail must stay hidden")
+        return self.quote
 
 
 def _context(state: SessionState) -> RunContext[SessionState]:
@@ -344,6 +359,81 @@ def test_fined_assistant_defaults_to_general_and_exposes_exact_tool_names() -> N
         assistant.calculate_angel_one_trade_cost.info.name
         == "calculate_angel_one_trade_cost"
     )
+    assert assistant.get_market_quote.info.name == "get_market_quote"
+
+
+@pytest.mark.asyncio
+async def test_quote_tool_returns_timestamped_read_only_provenance() -> None:
+    provider = FakeMarketDataProvider(
+        MarketQuote(
+            exchange="NSE",
+            symbol_token="3045",
+            trading_symbol="SBIN-EQ",
+            last_traded_price=Decimal("812.35"),
+            close_price=Decimal("808.10"),
+            provider="Angel One SmartAPI",
+            exchange_time=datetime(2026, 8, 8, 3, 30, tzinfo=UTC),
+            received_time=datetime(2026, 8, 8, 3, 30, 1, tzinfo=UTC),
+        )
+    )
+    state = SessionState(
+        profile=ParticipantProfile(LearningMode.STOCKS),
+        retriever=FakeRetriever([]),
+        market_data=provider,
+    )
+
+    result = await FinEdAssistant().get_market_quote(
+        context=_context(state), exchange="NSE", symbol_token="3045"
+    )
+
+    assert provider.calls == [QuoteRequest("NSE", "3045")]
+    assert result["last_traded_price"] == "812.35"
+    assert result["provider"] == "Angel One SmartAPI"
+    assert result["is_order"] is False
+    assert "education" in str(result["message"]).casefold()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exchange", "symbol_token", "message"),
+    [
+        ("NFO", "3045", "NSE or BSE"),
+        ("NSE", "SBIN", "symbol token"),
+    ],
+)
+async def test_quote_tool_rejects_untrusted_instrument_inputs(
+    exchange: str, symbol_token: str, message: str
+) -> None:
+    provider = FakeMarketDataProvider()
+    state = SessionState(
+        profile=ParticipantProfile(),
+        retriever=FakeRetriever([]),
+        market_data=provider,
+    )
+
+    with pytest.raises(ToolError, match=message):
+        await FinEdAssistant().get_market_quote(
+            context=_context(state), exchange=exchange, symbol_token=symbol_token
+        )
+
+    assert provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_quote_tool_sanitizes_provider_failure() -> None:
+    state = SessionState(
+        profile=ParticipantProfile(),
+        retriever=FakeRetriever([]),
+        market_data=FakeMarketDataProvider(),
+    )
+
+    with pytest.raises(ToolError) as failure:
+        await FinEdAssistant().get_market_quote(
+            context=_context(state), exchange="NSE", symbol_token="3045"
+        )
+
+    assert str(failure.value) == "Live market data is temporarily unavailable."
+    assert "provider detail" not in str(failure.value)
 
 
 @pytest.mark.asyncio

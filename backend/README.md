@@ -121,6 +121,41 @@ bad build distinct from an index that has never been published.
 Generated index artifacts are rebuildable and ignored by Git; the source
 manifest remains in `data/knowledge/sources.json`.
 
+Build the allowlisted sources and publish a local hybrid index:
+
+```bash
+uv run python -m fined.knowledge.ingest
+```
+
+Verify that the published index returns attributable evidence for representative
+ETF, DP-charge, SIP, gold-tax, and F&O-risk questions:
+
+```bash
+uv run python -m fined.knowledge.verify
+```
+
+Both commands load `GOOGLE_API_KEY` from `.env.local`. A required source failure
+aborts publication, and generated builds remain excluded from Git.
+
+## Read-only Angel One market data and MCP
+
+The optional quote gateway uses Angel One SmartAPI's official LTP endpoint. Add
+all five `ANGEL_ONE_*` values shown in `.env.example` to `.env.local`; when any
+value is absent or invalid, quote lookup fails closed without affecting the
+voice tutor. Access tokens expire according to the broker's authentication
+policy and must be refreshed outside FinEd Saathi.
+
+Run the local stdio MCP server with:
+
+```bash
+uv run python -m fined.market_data.mcp_server
+```
+
+It exposes only `get_market_quote(exchange, symbol_token)`. The tool is marked
+read-only, includes provider and exchange timestamps, and has no account,
+holding, position, recommendation, or order capability. MCP supplies the tool
+interface; Angel One supplies the authenticated market data.
+
 ## Tests
 
 Run the deterministic suite without provider-backed evaluations:

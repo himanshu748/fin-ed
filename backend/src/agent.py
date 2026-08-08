@@ -32,6 +32,7 @@ from fined.agent import (
 from fined.chat_model import create_gemini_llm
 from fined.knowledge.embeddings import GeminiEmbedder
 from fined.knowledge.index import KnowledgeIndex, UnavailableKnowledgeRetriever
+from fined.market_data.angel_one import create_market_data_provider
 from fined.murf_falcon import install_current_websocket_serializer
 
 logger = logging.getLogger("agent")
@@ -113,7 +114,11 @@ async def my_agent(ctx: JobContext) -> None:
         embedder = GeminiEmbedder(embedding_client)
         index = _load_knowledge_retriever(KNOWLEDGE_DIRECTORY, embedder)
         session = AgentSession[SessionState](
-            userdata=SessionState(profile=profile, retriever=index),
+            userdata=SessionState(
+                profile=profile,
+                retriever=index,
+                market_data=create_market_data_provider(),
+            ),
             stt=deepgram.STT(
                 model="nova-3",
                 language="multi",

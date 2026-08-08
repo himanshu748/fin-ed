@@ -167,6 +167,17 @@
       "expected_terms": ["gold ETF"]
     },
     {
+      "source_id": "angel_gold_gst",
+      "publisher": "Angel One",
+      "authority": "broker_education",
+      "url": "https://www.angelone.in/knowledge-center/income-tax/gst-on-gold",
+      "topics": ["gold"],
+      "broker": "Angel One",
+      "verified_on": "2026-08-08",
+      "status": "required",
+      "expected_terms": ["3% GST", "Gold ETFs"]
+    },
+    {
       "source_id": "sebi_shares",
       "publisher": "SEBI Investor",
       "authority": "regulator",
@@ -266,17 +277,17 @@
       "expected_terms": ["digital gold"]
     },
     {
-      "source_id": "cbic_jewellery_gst_faq",
-      "publisher": "CBIC, Government of India",
+      "source_id": "gst_council_gold_gst",
+      "publisher": "Goods and Services Tax Council",
       "authority": "regulator",
-      "url": "https://cbic-gst.gov.in/hindi/sectoral-faq.html",
+      "url": "https://gstcouncil.gov.in/node/4685",
       "topics": ["gold"],
       "broker": null,
       "verified_on": "2026-08-06",
-      "status": "required",
+      "status": "optional",
       "expected_terms": [
-        "Gold, Diamond or Silver Jewellery",
-        "3% of the total transaction value of jewellery"
+        "Gold, silver, platinum",
+        "attracts 3% GST"
       ]
     },
     {

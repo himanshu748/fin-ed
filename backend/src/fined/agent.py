@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import AsyncIterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, DecimalException, InvalidOperation
 from typing import Protocol
@@ -28,6 +28,13 @@ from fined.calculator import (
 )
 from fined.guardrails import evaluate_guardrail, render_refusal
 from fined.knowledge.index import SearchHit
+from fined.market_data.models import QuoteRequest
+from fined.market_data.provider import (
+    MARKET_DATA_UNAVAILABLE_MESSAGE,
+    MarketDataProvider,
+    MarketDataUnavailableError,
+    UnavailableMarketDataProvider,
+)
 from fined.modes import LearningMode, parse_learning_mode
 from fined.speech import strip_markdown_links_for_speech
 
@@ -67,6 +74,9 @@ class ParticipantProfile:
 class SessionState:
     profile: ParticipantProfile
     retriever: KnowledgeRetriever
+    market_data: MarketDataProvider = field(
+        default_factory=UnavailableMarketDataProvider
+    )
 
 
 def parse_participant_profile(metadata: str | None) -> ParticipantProfile:
@@ -109,6 +119,7 @@ A successful call completes at least one objective:
 KNOWLEDGE
 - Explain general Indian-market concepts and use the available deterministic calculator only for its supported cases.
 - Use retrieval for facts that can change, including taxes, charges, prices, broker policies, and regulations.
+- Use the quote tool only for a timestamped current price. A quote is educational data, never an order or recommendation.
 - If current evidence is unavailable, say it could not be verified instead of guessing.
 
 LANGUAGE
@@ -270,6 +281,37 @@ class FinEdAssistant(Agent):
             "verified": True,
             "hits": [_search_hit_result(hit) for hit in hits],
         }
+
+    @function_tool(name="get_market_quote")
+    async def get_market_quote(
+        self,
+        context: RunContext[SessionState],
+        exchange: str,
+        symbol_token: str,
+    ) -> dict[str, object]:
+        """Get one attributable, timestamped read-only market quote.
+
+        Args:
+            exchange: Cash-market exchange, exactly NSE or BSE.
+            symbol_token: Angel One numeric instrument token, not a ticker name.
+        """
+        try:
+            request = QuoteRequest(exchange=exchange, symbol_token=symbol_token)
+        except (TypeError, ValueError) as exc:
+            message = str(exc)
+            raise ToolError(message) from None
+        try:
+            quote = await context.userdata.market_data.get_quote(request)
+        except MarketDataUnavailableError:
+            raise ToolError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
+        except Exception:
+            raise ToolError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
+        result = quote.to_public_dict()
+        result["message"] = (
+            "Read-only educational quote. This did not place, prepare, or recommend "
+            "an order. State the provider and exchange time when using it."
+        )
+        return result
 
     @function_tool(name="calculate_angel_one_trade_cost")
     async def calculate_angel_one_trade_cost(

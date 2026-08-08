@@ -73,19 +73,24 @@ class KnowledgeIndex:
     def __init__(
         self,
         chunks: list[KnowledgeChunk],
-        vectors: list[list[float]],
+        vectors: list[list[float]] | None,
         embedder: Embedder,
-        dimensions: int,
+        dimensions: int | None,
     ) -> None:
         self._chunks = tuple(chunks)
-        self._vectors = tuple(tuple(vector) for vector in vectors)
+        self._vectors = (
+            tuple(tuple(vector) for vector in vectors) if vectors is not None else None
+        )
         self._embedder = embedder
         self._dimensions = dimensions
 
     @classmethod
     def load(cls, directory: Path, embedder: Embedder) -> KnowledgeIndex:
         build_dir = resolve_current_build(directory)
-        build = _read_json_object(build_dir / "build.json")
+        build_path = build_dir / "build.json"
+        if not build_path.exists():
+            return cls(_load_snapshot_chunks(build_dir), None, embedder, None)
+        build = _read_json_object(build_path)
         schema_version = build.get("schema_version")
         if (
             isinstance(schema_version, bool)
@@ -211,9 +216,11 @@ class KnowledgeIndex:
             ),
         )
 
-        degraded = False
+        degraded = self._vectors is None or self._dimensions is None
         dense_scores: dict[int, float] = {}
         try:
+            if self._vectors is None or self._dimensions is None:
+                raise RuntimeError("dense retrieval is unavailable")
             query_vector = _query_vector(
                 await self._embedder.embed_query(query), self._dimensions
             )
@@ -281,6 +288,74 @@ class KnowledgeIndex:
                 )
             )
         return hits
+
+
+def _load_snapshot_chunks(build_dir: Path) -> list[KnowledgeChunk]:
+    index = _read_json_object(build_dir / "index.json")
+    sources = index.get("sources")
+    if not isinstance(sources, list) or not sources:
+        raise ValueError("knowledge snapshot index sources must be a non-empty list")
+    if len(sources) > MAX_KNOWLEDGE_ROWS:
+        raise ValueError("knowledge snapshot index exceeds source limit")
+
+    chunks: list[KnowledgeChunk] = []
+    expected_files = {"index.json"}
+    seen_sources: set[str] = set()
+    for source_index, row in enumerate(sources):
+        if not isinstance(row, dict):
+            raise ValueError(
+                f"knowledge snapshot source row {source_index} must be an object"
+            )
+        source_id = _text(row, "source_id")
+        if source_id in seen_sources:
+            raise ValueError("knowledge snapshot index contains duplicate source IDs")
+        seen_sources.add(source_id)
+        content_hash = _required_hash(row, "content_sha256")
+        chunk_count = row.get("chunk_count")
+        if (
+            isinstance(chunk_count, bool)
+            or not isinstance(chunk_count, int)
+            or chunk_count <= 0
+        ):
+            raise ValueError("knowledge snapshot chunk count is invalid")
+
+        snapshot_name = f"{source_id}.json"
+        expected_files.add(snapshot_name)
+        snapshot = _read_json_object(build_dir / snapshot_name)
+        normalized_text = snapshot.get("normalized_text")
+        if not isinstance(normalized_text, str) or not normalized_text.strip():
+            raise ValueError(f"knowledge snapshot {source_id} has invalid text")
+        actual_hash = hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
+        if (
+            actual_hash != content_hash
+            or snapshot.get("content_sha256") != content_hash
+        ):
+            raise ValueError(
+                f"knowledge snapshot {source_id} hash does not match index"
+            )
+        rows = snapshot.get("chunks")
+        if not isinstance(rows, list) or len(rows) != chunk_count:
+            raise ValueError(f"knowledge snapshot {source_id} chunk count is invalid")
+        parsed = [
+            _parse_chunk(item, len(chunks) + index)
+            for index, item in enumerate(rows)
+            if isinstance(item, dict)
+        ]
+        if len(parsed) != len(rows) or any(
+            chunk.source_id != source_id for chunk in parsed
+        ):
+            raise ValueError(f"knowledge snapshot {source_id} chunks are invalid")
+        chunks.extend(parsed)
+        if len(chunks) > MAX_KNOWLEDGE_ROWS:
+            raise ValueError("knowledge snapshot exceeds chunk limit")
+
+    actual_files = {path.name for path in build_dir.iterdir()}
+    if actual_files != expected_files:
+        raise ValueError("knowledge snapshot build has unexpected contents")
+    chunk_ids = [chunk.chunk_id for chunk in chunks]
+    if len(set(chunk_ids)) != len(chunk_ids):
+        raise ValueError("knowledge snapshot chunk IDs contain duplicates")
+    return chunks
 
 
 def _rrf_scores(first: list[int], second: list[int]) -> dict[int, float]:

@@ -773,6 +773,23 @@ async def test_embedding_artifacts_publish_inside_immutable_build(
 
 
 @pytest.mark.asyncio
+async def test_snapshot_only_build_loads_as_lexical_rag(tmp_path: Path) -> None:
+    manifest = tmp_path / "sources.json"
+    _manifest(manifest)
+    generated = tmp_path / "generated"
+    embedder = FakeEmbedder()
+
+    await build_snapshots(manifest, generated, FakeFetcher())
+
+    loaded = KnowledgeIndex.load(generated, embedder)
+    hits = await loaded.search("DP charge", LearningMode.STOCKS)
+
+    assert hits[0].source_id == "dp_charge"
+    assert hits[0].confidence == "degraded"
+    assert embedder.query_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_embedder_protocol_does_not_require_metadata_attributes(
     tmp_path: Path,
 ) -> None:

@@ -47,6 +47,9 @@ ANGEL_EDUCATION_URLS = {
         "https://www.angelone.in/knowledge-center/commodities-trading/"
         "how-to-invest-in-gold-etf"
     ),
+    "angel_gold_gst": (
+        "https://www.angelone.in/knowledge-center/income-tax/gst-on-gold"
+    ),
 }
 
 ANGEL_EDUCATION_TOPICS = {
@@ -56,6 +59,7 @@ ANGEL_EDUCATION_TOPICS = {
     "angel_bond_basics": (LearningMode.BONDS,),
     "angel_gold_basics": (LearningMode.GOLD,),
     "angel_gold_etf": (LearningMode.GOLD, LearningMode.ETFS),
+    "angel_gold_gst": (LearningMode.GOLD,),
 }
 
 SEBI_SOURCE_CONTRACT = {
@@ -243,7 +247,10 @@ def test_manifest_has_a_required_angel_etf_fallback_for_optional_nse() -> None:
     assert by_id["nse_etf"].required is False
     assert by_id["sebi_digital_gold_warning"].url.endswith("_97676.html")
     assert by_id["sebi_digital_gold_warning"].topics == (LearningMode.GOLD,)
-    assert all(source.verified_on == date(2026, 8, 6) for source in manifest)
+    assert all(
+        source.verified_on in {date(2026, 8, 6), date(2026, 8, 8)}
+        for source in manifest
+    )
     assert all(source.expected_terms for source in manifest)
 
 
@@ -313,21 +320,21 @@ def test_required_sebi_sources_match_the_official_topic_contract() -> None:
         assert source.required
 
 
-def test_required_cbic_jewellery_gst_source_is_scoped_to_physical_gold() -> None:
+def test_required_gst_council_gold_source_is_scoped_to_physical_gold() -> None:
     manifest = load_manifest(Path("data/knowledge/sources.json"))
     by_id = {source.source_id: source for source in manifest}
 
-    assert "cbic_jewellery_gst_faq" in by_id
-    source = by_id["cbic_jewellery_gst_faq"]
-    assert source.url == "https://cbic-gst.gov.in/hindi/sectoral-faq.html"
-    assert source.publisher == "CBIC, Government of India"
+    assert "gst_council_gold_gst" in by_id
+    source = by_id["gst_council_gold_gst"]
+    assert source.url == "https://gstcouncil.gov.in/node/4685"
+    assert source.publisher == "Goods and Services Tax Council"
     assert source.authority == "regulator"
     assert source.topics == (LearningMode.GOLD,)
     assert source.broker is None
-    assert source.required
+    assert source.required is False
     assert source.expected_terms == (
-        "Gold, Diamond or Silver Jewellery",
-        "3% of the total transaction value of jewellery",
+        "Gold, silver, platinum",
+        "attracts 3% GST",
     )
 
 
@@ -348,7 +355,10 @@ def test_manifest_metadata_is_current_https_and_extraction_verifiable() -> None:
 
     assert all(urlsplit(source.url).scheme == "https" for source in manifest)
     assert all(source.expected_terms for source in manifest)
-    assert all(source.verified_on == date(2026, 8, 6) for source in manifest)
+    assert all(
+        source.verified_on in {date(2026, 8, 6), date(2026, 8, 8)}
+        for source in manifest
+    )
 
 
 def test_manifest_source_ids_and_canonical_urls_are_unique() -> None:
