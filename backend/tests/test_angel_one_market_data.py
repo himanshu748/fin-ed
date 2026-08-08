@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import httpx
@@ -7,11 +8,12 @@ import pytest
 
 from fined.market_data.angel_one import (
     QUOTE_ENDPOINT,
+    SEARCH_SCRIP_ENDPOINT,
     AngelOneMarketDataConfig,
     AngelOneMarketDataProvider,
     create_market_data_provider,
 )
-from fined.market_data.models import QuoteRequest
+from fined.market_data.models import InstrumentSearchRequest, QuoteRequest
 from fined.market_data.provider import (
     MARKET_DATA_UNAVAILABLE_MESSAGE,
     MarketDataUnavailableError,
@@ -139,6 +141,158 @@ async def test_provider_maps_upstream_and_stale_failures_to_fixed_message(
 
     with pytest.raises(MarketDataUnavailableError) as failure:
         await provider.get_quote(QuoteRequest("NSE", "3045"))
+
+    assert str(failure.value) == MARKET_DATA_UNAVAILABLE_MESSAGE
+    assert "secret" not in str(failure.value)
+
+
+@pytest.mark.asyncio
+async def test_search_scrip_posts_only_to_read_only_endpoint() -> None:
+    captured_request: httpx.Request | None = None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal captured_request
+        captured_request = request
+        return httpx.Response(
+            200,
+            json={
+                "status": True,
+                "data": [
+                    {
+                        "exchange": "NSE",
+                        "tradingsymbol": "RELIANCE-EQ",
+                        "symboltoken": "2885",
+                    }
+                ],
+            },
+        )
+
+    provider = AngelOneMarketDataProvider(
+        config(), transport=httpx.MockTransport(handler)
+    )
+
+    results = await provider.search_instruments(
+        InstrumentSearchRequest(query="RELIANCE", exchange="NSE")
+    )
+
+    assert results[0].trading_symbol == "RELIANCE-EQ"
+    assert captured_request is not None
+    assert captured_request.url.path.endswith("/order/v1/searchScrip")
+    assert json.loads(captured_request.content) == {
+        "exchange": "NSE",
+        "searchscrip": "RELIANCE",
+    }
+    assert captured_request.url == httpx.URL(SEARCH_SCRIP_ENDPOINT)
+
+
+@pytest.mark.asyncio
+async def test_search_scrip_deduplicates_sorts_prefixes_and_honors_limit() -> None:
+    provider = AngelOneMarketDataProvider(
+        config(),
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={
+                    "status": True,
+                    "data": [
+                        {
+                            "exchange": "BSE",
+                            "tradingsymbol": "A RELIANCE",
+                            "symboltoken": "500325",
+                        },
+                        {
+                            "exchange": "NSE",
+                            "tradingsymbol": "RELIANCE-EQ",
+                            "symboltoken": "2885",
+                        },
+                        {
+                            "exchange": "NSE",
+                            "tradingsymbol": "RELIANCE-BE",
+                            "symboltoken": "2886",
+                        },
+                        {
+                            "exchange": "NSE",
+                            "tradingsymbol": "RELIANCE-EQ duplicate",
+                            "symboltoken": "2885",
+                        },
+                        {
+                            "exchange": "BSE",
+                            "tradingsymbol": "RELIANCE-B",
+                            "symboltoken": "500326",
+                        },
+                        {
+                            "exchange": "NSE",
+                            "tradingsymbol": "RELIANCE-C",
+                            "symboltoken": "2887",
+                        },
+                        {
+                            "exchange": "NSE",
+                            "tradingsymbol": "RELIANCE-D",
+                            "symboltoken": "2888",
+                        },
+                    ],
+                },
+            )
+        ),
+    )
+
+    results = await provider.search_instruments(
+        InstrumentSearchRequest(query="RELIANCE")
+    )
+
+    assert [(item.exchange, item.symbol_token) for item in results] == [
+        ("BSE", "500326"),
+        ("NSE", "2886"),
+        ("NSE", "2887"),
+        ("NSE", "2888"),
+        ("NSE", "2885"),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(500, content=b"secret upstream failure"),
+        httpx.Response(200, content=b"not json"),
+        httpx.Response(200, content=b"x" * (256 * 1024 + 1)),
+        httpx.Response(
+            200,
+            json={
+                "status": True,
+                "data": [
+                    {
+                        "exchange": "NFO",
+                        "tradingsymbol": "RELIANCE26AUGFUT",
+                        "symboltoken": "999",
+                    }
+                ],
+            },
+        ),
+        httpx.Response(
+            200,
+            json={
+                "status": True,
+                "data": [
+                    {
+                        "exchange": "NSE",
+                        "tradingsymbol": "RELIANCE-EQ",
+                        "symboltoken": "not-a-token",
+                    }
+                ],
+            },
+        ),
+    ],
+)
+async def test_search_scrip_sanitizes_rejected_or_invalid_responses(
+    response: httpx.Response,
+) -> None:
+    provider = AngelOneMarketDataProvider(
+        config(), transport=httpx.MockTransport(lambda request: response)
+    )
+
+    with pytest.raises(MarketDataUnavailableError) as failure:
+        await provider.search_instruments(InstrumentSearchRequest(query="RELIANCE"))
 
     assert str(failure.value) == MARKET_DATA_UNAVAILABLE_MESSAGE
     assert "secret" not in str(failure.value)

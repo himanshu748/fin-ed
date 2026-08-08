@@ -5,7 +5,7 @@ from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 
 from fined.market_data.angel_one import create_market_data_provider
-from fined.market_data.models import QuoteRequest
+from fined.market_data.models import InstrumentSearchRequest, QuoteRequest
 from fined.market_data.provider import (
     MARKET_DATA_UNAVAILABLE_MESSAGE,
     MarketDataProvider,
@@ -31,6 +31,22 @@ async def get_market_quote_result(
         "cancel orders."
     )
     return result
+
+
+async def search_market_instruments_result(
+    provider: MarketDataProvider,
+    query: str,
+    exchange: str | None = None,
+    limit: int = 5,
+) -> list[dict[str, object]]:
+    request = InstrumentSearchRequest(query=query, exchange=exchange, limit=limit)
+    try:
+        instruments = await provider.search_instruments(request)
+    except MarketDataUnavailableError:
+        raise RuntimeError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
+    except Exception:
+        raise RuntimeError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
+    return [instrument.to_public_dict() for instrument in instruments]
 
 
 def create_mcp_server(provider: MarketDataProvider | None = None) -> MCPServer:
@@ -59,6 +75,27 @@ def create_mcp_server(provider: MarketDataProvider | None = None) -> MCPServer:
     )
     async def get_market_quote(exchange: str, symbol_token: str) -> dict[str, object]:
         return await get_market_quote_result(selected_provider, exchange, symbol_token)
+
+    @server.tool(
+        name="search_market_instruments",
+        description=(
+            "Search NSE or BSE instrument symbols by name. Results are read-only "
+            "and cannot place, modify, or cancel orders."
+        ),
+        annotations=ToolAnnotations(
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+        structured_output=True,
+    )
+    async def search_market_instruments(
+        query: str, exchange: str | None = None, limit: int = 5
+    ) -> list[dict[str, object]]:
+        return await search_market_instruments_result(
+            selected_provider, query, exchange, limit
+        )
 
     return server
 

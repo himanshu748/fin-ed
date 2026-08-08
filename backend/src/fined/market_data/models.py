@@ -24,6 +24,49 @@ class QuoteRequest:
 
 
 @dataclass(frozen=True)
+class InstrumentSearchRequest:
+    query: str
+    exchange: str | None = None
+    limit: int = 5
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.query, str):
+            raise ValueError("query must be text")
+        query = self.query.strip()
+        if not query or len(query) > 128:
+            raise ValueError("query must contain 1 to 128 characters")
+        object.__setattr__(self, "query", query)
+        if self.exchange is not None and self.exchange not in SUPPORTED_EXCHANGES:
+            raise ValueError("exchange must be NSE or BSE")
+        if (
+            not isinstance(self.limit, int)
+            or isinstance(self.limit, bool)
+            or not 1 <= self.limit <= 5
+        ):
+            raise ValueError("limit must be between 1 and 5")
+
+
+@dataclass(frozen=True)
+class MarketInstrument:
+    exchange: str
+    symbol_token: str
+    trading_symbol: str
+
+    def __post_init__(self) -> None:
+        QuoteRequest(self.exchange, self.symbol_token)
+        if not isinstance(self.trading_symbol, str) or not self.trading_symbol.strip():
+            raise ValueError("trading symbol must be non-empty text")
+
+    def to_public_dict(self) -> dict[str, object]:
+        return {
+            "exchange": self.exchange,
+            "symbol_token": self.symbol_token,
+            "trading_symbol": self.trading_symbol,
+            "is_order": False,
+        }
+
+
+@dataclass(frozen=True)
 class MarketQuote:
     exchange: str
     symbol_token: str

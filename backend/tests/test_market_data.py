@@ -5,7 +5,12 @@ from decimal import Decimal
 
 import pytest
 
-from fined.market_data.models import MarketQuote, QuoteRequest
+from fined.market_data.models import (
+    InstrumentSearchRequest,
+    MarketInstrument,
+    MarketQuote,
+    QuoteRequest,
+)
 from fined.market_data.provider import (
     MARKET_DATA_UNAVAILABLE_MESSAGE,
     MarketDataUnavailableError,
@@ -54,6 +59,49 @@ def test_market_quote_serializes_attributable_decimal_data() -> None:
         "received_time": "2026-08-08T03:30:01+00:00",
         "is_order": False,
     }
+
+
+def test_instrument_search_rejects_blank_or_oversized_query() -> None:
+    with pytest.raises(ValueError):
+        InstrumentSearchRequest(query=" ")
+    with pytest.raises(ValueError):
+        InstrumentSearchRequest(query="A" * 129)
+
+
+def test_instrument_search_trims_query_and_bounds_limit() -> None:
+    request = InstrumentSearchRequest(query=" RELIANCE ", exchange="NSE", limit=5)
+
+    assert request.query == "RELIANCE"
+    assert request.exchange == "NSE"
+    with pytest.raises(ValueError, match="limit"):
+        InstrumentSearchRequest(query="RELIANCE", limit=0)
+    with pytest.raises(ValueError, match="limit"):
+        InstrumentSearchRequest(query="RELIANCE", limit=6)
+
+
+@pytest.mark.parametrize("exchange", ["NFO", "nse", " NSE "])
+def test_instrument_search_rejects_non_cash_exchange(exchange: str) -> None:
+    with pytest.raises(ValueError, match="exchange"):
+        InstrumentSearchRequest(query="RELIANCE", exchange=exchange)
+
+
+def test_market_instrument_requires_cash_exchange_and_numeric_token() -> None:
+    item = MarketInstrument(
+        exchange="NSE", symbol_token="2885", trading_symbol="RELIANCE-EQ"
+    )
+
+    assert item.to_public_dict() == {
+        "exchange": "NSE",
+        "symbol_token": "2885",
+        "trading_symbol": "RELIANCE-EQ",
+        "is_order": False,
+    }
+    with pytest.raises(ValueError, match="exchange"):
+        MarketInstrument(exchange="NFO", symbol_token="2885", trading_symbol="X")
+    with pytest.raises(ValueError, match="symbol token"):
+        MarketInstrument(exchange="NSE", symbol_token="X", trading_symbol="X")
+    with pytest.raises(ValueError, match="trading symbol"):
+        MarketInstrument(exchange="NSE", symbol_token="2885", trading_symbol=" ")
 
 
 @pytest.mark.asyncio

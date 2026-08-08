@@ -13,7 +13,12 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from fined.market_data.models import MarketQuote, QuoteRequest
+from fined.market_data.models import (
+    InstrumentSearchRequest,
+    MarketInstrument,
+    MarketQuote,
+    QuoteRequest,
+)
 from fined.market_data.provider import (
     MARKET_DATA_UNAVAILABLE_MESSAGE,
     MarketDataProvider,
@@ -23,6 +28,9 @@ from fined.market_data.provider import (
 
 QUOTE_ENDPOINT = (
     "https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote/"
+)
+SEARCH_SCRIP_ENDPOINT = (
+    "https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/searchScrip"
 )
 PROVIDER_NAME = "Angel One SmartAPI"
 MAX_RESPONSE_BYTES = 256 * 1024
@@ -69,17 +77,6 @@ class AngelOneMarketDataProvider:
             "mode": "LTP",
             "exchangeTokens": {request.exchange: [request.symbol_token]},
         }
-        headers = {
-            "X-PrivateKey": self._config.api_key,
-            "Authorization": f"Bearer {self._config.access_token}",
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "X-UserType": "USER",
-            "X-SourceID": "WEB",
-            "X-ClientLocalIP": self._config.client_local_ip,
-            "X-ClientPublicIP": self._config.client_public_ip,
-            "X-MACAddress": self._config.mac_address,
-        }
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(3.0),
@@ -89,7 +86,7 @@ class AngelOneMarketDataProvider:
                 response = await client.post(
                     QUOTE_ENDPOINT,
                     content=json.dumps(payload, separators=(",", ":")),
-                    headers=headers,
+                    headers=self._authenticated_headers(),
                 )
             if (
                 response.status_code != 200
@@ -101,6 +98,47 @@ class AngelOneMarketDataProvider:
         except Exception:
             raise MarketDataUnavailableError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
         return quote
+
+    async def search_instruments(
+        self, request: InstrumentSearchRequest
+    ) -> tuple[MarketInstrument, ...]:
+        payload: dict[str, str] = {"searchscrip": request.query}
+        if request.exchange is not None:
+            payload["exchange"] = request.exchange
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(3.0),
+                follow_redirects=False,
+                transport=self._transport,
+            ) as client:
+                # Angel One names this read-only instrument lookup under order/v1.
+                response = await client.post(
+                    SEARCH_SCRIP_ENDPOINT,
+                    content=json.dumps(payload, separators=(",", ":")),
+                    headers=self._authenticated_headers(),
+                )
+            if (
+                response.status_code != 200
+                or len(response.content) > MAX_RESPONSE_BYTES
+            ):
+                raise ValueError("invalid instrument search response")
+            results = self._parse_instruments(response.json(), request)
+        except Exception:
+            raise MarketDataUnavailableError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
+        return results
+
+    def _authenticated_headers(self) -> dict[str, str]:
+        return {
+            "X-PrivateKey": self._config.api_key,
+            "Authorization": f"Bearer {self._config.access_token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "X-UserType": "USER",
+            "X-SourceID": "WEB",
+            "X-ClientLocalIP": self._config.client_local_ip,
+            "X-ClientPublicIP": self._config.client_public_ip,
+            "X-MACAddress": self._config.mac_address,
+        }
 
     def _parse_quote(self, value: object, request: QuoteRequest) -> MarketQuote:
         if not isinstance(value, dict) or value.get("status") is not True:
@@ -137,6 +175,45 @@ class AngelOneMarketDataProvider:
             exchange_time=exchange_time,
             received_time=received_time,
         )
+
+    def _parse_instruments(
+        self, value: object, request: InstrumentSearchRequest
+    ) -> tuple[MarketInstrument, ...]:
+        if not isinstance(value, dict) or value.get("status") is not True:
+            raise ValueError("instrument search was not successful")
+        data = value.get("data")
+        if not isinstance(data, list):
+            raise ValueError("instrument search data is missing")
+
+        instruments: list[MarketInstrument] = []
+        seen: set[tuple[str, str]] = set()
+        for row in data:
+            if not isinstance(row, dict):
+                raise ValueError("instrument search row is invalid")
+            exchange = _required_text(row, "exchange")
+            if exchange not in {"NSE", "BSE"} or (
+                request.exchange is not None and exchange != request.exchange
+            ):
+                raise ValueError("instrument exchange is invalid")
+            instrument = MarketInstrument(
+                exchange=exchange,
+                trading_symbol=_required_text(row, "tradingsymbol"),
+                symbol_token=_required_text(row, "symboltoken"),
+            )
+            key = (instrument.exchange, instrument.symbol_token)
+            if key not in seen:
+                seen.add(key)
+                instruments.append(instrument)
+
+        instruments.sort(
+            key=lambda item: (
+                not item.trading_symbol.startswith(request.query),
+                item.trading_symbol,
+                item.exchange,
+                item.symbol_token,
+            )
+        )
+        return tuple(instruments[: request.limit])
 
 
 def create_market_data_provider(
