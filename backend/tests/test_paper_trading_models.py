@@ -1,0 +1,152 @@
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
+from fined.paper_trading.models import (
+    MAX_RPC_PAYLOAD_BYTES,
+    PaperOrderDraft,
+    PaperPortfolioSummary,
+    decode_paper_dashboard_ack,
+    decode_paper_portfolio_summary,
+)
+
+
+def paper_draft_fixture(**changes: object) -> PaperOrderDraft:
+    fields: dict[str, object] = {
+        "draft_id": "draft-1",
+        "side": "buy",
+        "exchange": "NSE",
+        "symbol_token": "2885",
+        "trading_symbol": "RELIANCE-EQ",
+        "quantity": 2,
+        "price_paise": 250_050,
+        "quote_provider": "Angel One SmartAPI",
+        "quote_time": datetime(2026, 8, 8, 9, 15, tzinfo=UTC),
+        "expires_at": datetime(2026, 8, 8, 9, 15, 30, tzinfo=UTC),
+        "notional_paise": 500_100,
+        "charge_paise": 123,
+        "cash_effect_paise": -500_223,
+        "charge_status": "estimated",
+    }
+    fields.update(changes)
+    return PaperOrderDraft(**fields)  # type: ignore[arg-type]
+
+
+def test_draft_serializes_only_public_fields() -> None:
+    draft = paper_draft_fixture()
+
+    payload = draft.to_rpc_payload()
+
+    assert payload["version"] == 1
+    assert payload["paper"] is True
+    assert payload["quote"]["provider"] == "Angel One SmartAPI"
+    assert set(payload) == {
+        "version",
+        "paper",
+        "draft_id",
+        "side",
+        "exchange",
+        "symbol_token",
+        "trading_symbol",
+        "quantity",
+        "price_paise",
+        "quote",
+        "expires_at",
+        "notional_paise",
+        "charge_paise",
+        "cash_effect_paise",
+        "charge_status",
+    }
+    assert "access_token" not in json.dumps(payload).lower()
+
+
+@pytest.mark.parametrize("side", ["BUY", "hold", "sell ", 1, ["buy"]])
+def test_draft_rejects_non_paper_side_values(side: object) -> None:
+    with pytest.raises(ValueError):
+        paper_draft_fixture(side=side)
+
+
+@pytest.mark.parametrize("quantity", [0, -1, 1.5, True])
+def test_draft_requires_a_positive_whole_quantity(quantity: object) -> None:
+    with pytest.raises(ValueError):
+        paper_draft_fixture(quantity=quantity)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("symbol_token", "28A5"),
+        ("exchange", "NFO"),
+        ("price_paise", 0),
+        ("price_paise", float("inf")),
+        ("quote_time", datetime(2026, 8, 8, 9, 15)),
+    ],
+)
+def test_draft_rejects_invalid_quote_contract(field: str, value: object) -> None:
+    with pytest.raises(ValueError):
+        paper_draft_fixture(**{field: value})
+
+
+def test_draft_requires_an_expiry_exactly_thirty_seconds_after_quote() -> None:
+    quote_time = datetime(2026, 8, 8, 9, 15, tzinfo=UTC)
+
+    with pytest.raises(ValueError):
+        paper_draft_fixture(expires_at=quote_time + timedelta(seconds=29))
+
+
+def test_draft_rejects_an_oversized_rpc_payload() -> None:
+    with pytest.raises(ValueError):
+        paper_draft_fixture(trading_symbol="R" * MAX_RPC_PAYLOAD_BYTES)
+
+
+def test_draft_rejects_boolean_notional() -> None:
+    with pytest.raises(ValueError):
+        paper_draft_fixture(
+            quantity=1,
+            price_paise=1,
+            notional_paise=True,
+            charge_paise=0,
+            cash_effect_paise=-1,
+        )
+
+
+def test_summary_rejects_negative_cash() -> None:
+    with pytest.raises(ValueError):
+        PaperPortfolioSummary(
+            cash_paise=-1, holdings_value_paise=0, total_value_paise=0
+        )
+
+
+def test_summary_rejects_an_inconsistent_total() -> None:
+    with pytest.raises(ValueError):
+        PaperPortfolioSummary(
+            cash_paise=100, holdings_value_paise=20, total_value_paise=121
+        )
+
+
+def test_decoders_reject_unknown_response_keys() -> None:
+    response = json.dumps(
+        {"version": 1, "paper": True, "opened": True, "access_token": "nope"}
+    )
+
+    with pytest.raises(ValueError):
+        decode_paper_dashboard_ack(response)
+
+
+def test_summary_decoder_accepts_only_the_versioned_public_shape() -> None:
+    summary = decode_paper_portfolio_summary(
+        json.dumps(
+            {
+                "version": 1,
+                "paper": True,
+                "cash_paise": 10_000_000,
+                "holdings_value_paise": 250_000,
+                "total_value_paise": 10_250_000,
+            }
+        )
+    )
+
+    assert summary.total_value_paise == 10_250_000
