@@ -12,12 +12,32 @@ export interface GsapRevealOptions {
   delay?: number;
 }
 
+const DEFAULT_ROOT_MARGIN = '0px 0px -14% 0px';
+const ROOT_MARGIN_VALUE = /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:px|%)$/;
+
 function observerMargin(start: string): string {
   const viewportStart = /^top\s+(\d+(?:\.\d+)?)%$/.exec(start.trim());
-  if (!viewportStart) return start;
+  if (viewportStart) {
+    const viewportPercent = Math.min(100, Math.max(0, Number(viewportStart[1])));
+    return `0px 0px -${100 - viewportPercent}% 0px`;
+  }
 
-  const viewportPercent = Math.min(100, Math.max(0, Number(viewportStart[1])));
-  return `0px 0px -${100 - viewportPercent}% 0px`;
+  const values = start.trim().split(/\s+/);
+  if (
+    values.length >= 1 &&
+    values.length <= 4 &&
+    values.every((value) => ROOT_MARGIN_VALUE.test(value))
+  ) {
+    return values.join(' ');
+  }
+
+  return DEFAULT_ROOT_MARGIN;
+}
+
+function isInitiallyInViewport(scope: HTMLElement): boolean {
+  const bounds = scope.getBoundingClientRect();
+  const viewportHeight = window.innerHeight || window.document?.documentElement.clientHeight || 0;
+  return bounds.bottom > 0 && bounds.top < viewportHeight;
 }
 
 export function useGsapReveal(
@@ -52,13 +72,18 @@ export function useGsapReveal(
             return;
           }
 
+          if (isInitiallyInViewport(scope)) {
+            gsap.set(targets, { autoAlpha: 1, y: 0 });
+            return;
+          }
+
           timeline = gsap.timeline({ paused: true }).fromTo(
             targets,
             { autoAlpha: 0, y },
             {
               autoAlpha: 1,
               y: 0,
-              duration: 0.55,
+              duration: 0.22,
               delay,
               ease: 'power2.out',
               stagger,
