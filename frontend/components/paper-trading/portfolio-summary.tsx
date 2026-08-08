@@ -1,3 +1,6 @@
+'use client';
+
+import { useAnimatedNumber } from '@/hooks/use-animated-number';
 import type { PaperPortfolio } from '@/lib/paper-trading/types';
 
 const currencyFormatter = new Intl.NumberFormat('en-IN', {
@@ -29,6 +32,8 @@ export function PortfolioSummary({ portfolio }: PortfolioSummaryProps) {
     (total, fill) => total + fill.realizedPnlPaise,
     0
   );
+  const animatedCashPaise = useAnimatedNumber(portfolio.cashPaise);
+  const animatedHoldingsCostBasisPaise = useAnimatedNumber(holdingsCostBasisPaise);
 
   return (
     <section aria-labelledby="portfolio-summary-heading">
@@ -38,14 +43,20 @@ export function PortfolioSummary({ portfolio }: PortfolioSummaryProps) {
       <dl className="grid overflow-hidden rounded-[10px] border border-[var(--ledger-rule)] bg-[var(--surface)] sm:grid-cols-3">
         <div className="border-b border-[var(--soft-rule)] px-[18px] py-5 sm:border-r sm:border-b-0 sm:px-6">
           <dt className="text-sm text-[var(--muted-ink)]">Virtual cash</dt>
-          <dd className="font-data mt-2 text-xl tabular-nums sm:text-2xl">
-            {formatPaperCurrency(portfolio.cashPaise)}
+          <dd
+            aria-label={`Virtual cash: ${formatPaperCurrency(portfolio.cashPaise)}`}
+            className="font-data mt-2 text-xl tabular-nums sm:text-2xl"
+          >
+            <span aria-hidden="true">{formatPaperCurrency(animatedCashPaise)}</span>
           </dd>
         </div>
         <div className="border-b border-[var(--soft-rule)] px-[18px] py-5 sm:border-r sm:border-b-0 sm:px-6">
           <dt className="text-sm text-[var(--muted-ink)]">Holdings historical cost basis</dt>
-          <dd className="font-data mt-2 text-xl tabular-nums sm:text-2xl">
-            {formatPaperCurrency(holdingsCostBasisPaise)}
+          <dd
+            aria-label={`Holdings historical cost basis: ${formatPaperCurrency(holdingsCostBasisPaise)}`}
+            className="font-data mt-2 text-xl tabular-nums sm:text-2xl"
+          >
+            <span aria-hidden="true">{formatPaperCurrency(animatedHoldingsCostBasisPaise)}</span>
           </dd>
         </div>
         <div className="px-[18px] py-5 sm:px-6">

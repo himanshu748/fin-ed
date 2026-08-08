@@ -1,4 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import Image from 'next/image';
+import { animate } from 'animejs';
+import { useReducedMotion } from 'motion/react';
 import type { PaperLedgerReadiness } from '@/components/paper-trading/paper-trading-provider';
 import {
   formatPaperCurrency,
@@ -15,6 +18,8 @@ const confirmLabels = {
   buy: 'Confirm paper buy',
   sell: 'Confirm paper sell',
 } as const;
+
+const FILLED_STATUS = 'Paper order filled in your practice portfolio.';
 
 export function paperQuoteExpiry(expiresAt: string, nowMs: number) {
   const remainingMs = Date.parse(expiresAt) - nowMs;
@@ -68,7 +73,11 @@ function reviewError(
 export function OrderReview({ draft, portfolio, readiness, onConfirm }: OrderReviewProps) {
   const [isConfirming, setIsConfirming] = useState(false);
   const [confirmationStatus, setConfirmationStatus] = useState<string | null>(null);
+  const [confirmedDraftId, setConfirmedDraftId] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const confirmationPathRef = useRef<SVGPathElement>(null);
+  const animatedConfirmationIdRef = useRef<string | null>(null);
+  const shouldReduceMotion = useReducedMotion();
   const draftExpiresAt = draft?.expiresAt;
 
   useEffect(() => {
@@ -103,6 +112,59 @@ export function OrderReview({ draft, portfolio, readiness, onConfirm }: OrderRev
     };
   }, [draftExpiresAt]);
 
+  const showFillConfirmation =
+    confirmationStatus === FILLED_STATUS &&
+    confirmedDraftId !== null &&
+    (!draft || confirmedDraftId === draft.draftId);
+
+  useEffect(() => {
+    const path = confirmationPathRef.current;
+    if (!showFillConfirmation || !confirmedDraftId || !path) return;
+    if (shouldReduceMotion || animatedConfirmationIdRef.current === confirmedDraftId) {
+      path.style.strokeDashoffset = '0';
+      return;
+    }
+
+    animatedConfirmationIdRef.current = confirmedDraftId;
+    const pathLength = path.getTotalLength();
+    path.style.strokeDasharray = String(pathLength);
+    path.style.strokeDashoffset = String(pathLength);
+    const animation = animate(path, {
+      strokeDashoffset: [pathLength, 0],
+      duration: 220,
+      ease: 'out(3)',
+    });
+
+    return () => {
+      animation.cancel();
+      path.style.strokeDashoffset = '0';
+    };
+  }, [confirmedDraftId, shouldReduceMotion, showFillConfirmation]);
+
+  const confirmationFeedback = (
+    <div
+      role="status"
+      aria-live="polite"
+      className="mt-2 flex min-h-6 items-center justify-center gap-2 text-center text-sm font-semibold"
+    >
+      {showFillConfirmation ? (
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          className="size-5 shrink-0 text-[var(--banknote-green)]"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.25"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path ref={confirmationPathRef} d="M4.5 12.5 9 17l10.5-11" />
+        </svg>
+      ) : null}
+      <span>{confirmationStatus}</span>
+    </div>
+  );
+
   if (!draft) {
     return (
       <section
@@ -112,10 +174,21 @@ export function OrderReview({ draft, portfolio, readiness, onConfirm }: OrderRev
         <h2 id="order-review-heading" className="font-display text-xl font-semibold">
           Order review
         </h2>
+        <div className="mt-5 overflow-hidden rounded-[8px] border border-[var(--soft-rule)] bg-[var(--blue-wash)]">
+          <Image
+            src="/images/paper-practice-empty-v1.png"
+            alt="Empty paper practice ledger"
+            width={1536}
+            height={1024}
+            sizes="(min-width: 1024px) 24rem, 100vw"
+            className="h-auto w-full"
+          />
+        </div>
         <p className="mt-5 font-semibold">No paper order to review</p>
         <p className="mt-2 text-sm leading-6 text-[var(--muted-ink)]">
           Ask FinEd Saathi to prepare an NSE equity practice order.
         </p>
+        {confirmationFeedback}
       </section>
     );
   }
@@ -125,15 +198,16 @@ export function OrderReview({ draft, portfolio, readiness, onConfirm }: OrderRev
   const charges = draft.chargePaise;
   const estimatedTotal = draft.cashEffectPaise === null ? null : Math.abs(draft.cashEffectPaise);
   const confirmLabel = confirmLabels[draft.side];
+  const currentDraftId = draft.draftId;
 
   async function handleConfirm() {
     if (error || isConfirming) return;
     setIsConfirming(true);
     setConfirmationStatus(null);
+    setConfirmedDraftId(null);
     const confirmed = await onConfirm();
-    setConfirmationStatus(
-      confirmed ? 'Paper order filled in your practice portfolio.' : 'Paper order was not filled.'
-    );
+    setConfirmationStatus(confirmed ? FILLED_STATUS : 'Paper order was not filled.');
+    setConfirmedDraftId(confirmed ? currentDraftId : null);
     setIsConfirming(false);
   }
 
@@ -242,9 +316,7 @@ export function OrderReview({ draft, portfolio, readiness, onConfirm }: OrderRev
       <p className="mt-2 text-center text-sm text-[var(--muted-ink)]">
         This updates only your practice portfolio.
       </p>
-      <p role="status" aria-live="polite" className="mt-2 text-center text-sm font-semibold">
-        {confirmationStatus}
-      </p>
+      {confirmationFeedback}
     </section>
   );
 }

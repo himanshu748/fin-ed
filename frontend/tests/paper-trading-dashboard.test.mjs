@@ -23,6 +23,7 @@ function includesAll(source, values, message) {
 
 const icon = ({ children, ...props }) => React.createElement('span', props, children);
 const iconModule = new Proxy({}, { get: () => icon });
+const image = ({ alt, ...props }) => React.createElement('img', { alt, ...props });
 
 function compile(relativePath, dependencies) {
   const source = read(relativePath);
@@ -48,10 +49,28 @@ function compile(relativePath, dependencies) {
   return compiledModule.exports;
 }
 
-function loadOrderReview(react = React) {
+function loadPortfolioSummary(react = React, useAnimatedNumber = (value) => value) {
+  return compile(
+    'components/paper-trading/portfolio-summary.tsx',
+    new Map([
+      ['react', react],
+      ['react/jsx-runtime', jsxRuntime],
+      ['@/hooks/use-animated-number', { useAnimatedNumber }],
+    ])
+  );
+}
+
+function loadOrderReview(
+  react = React,
+  { animate = () => ({ cancel() {} }), reduceMotion = true } = {}
+) {
   const common = new Map([
     ['react', react],
     ['react/jsx-runtime', jsxRuntime],
+    ['next/image', { default: image }],
+    ['animejs', { animate }],
+    ['motion/react', { useReducedMotion: () => reduceMotion }],
+    ['@/hooks/use-animated-number', { useAnimatedNumber: (value) => value }],
   ]);
   const portfolioSummary = compile('components/paper-trading/portfolio-summary.tsx', common);
   common.set('@/components/paper-trading/portfolio-summary', portfolioSummary);
@@ -397,6 +416,10 @@ function renderDashboard(overrides = {}) {
     ['react/jsx-runtime', jsxRuntime],
     ['lucide-react', iconModule],
     ['@radix-ui/react-dialog', Dialog],
+    ['next/image', { default: image }],
+    ['animejs', { animate: () => ({ cancel() {} }) }],
+    ['motion/react', { useReducedMotion: () => true }],
+    ['@/hooks/use-animated-number', { useAnimatedNumber: (value) => value }],
   ]);
   const portfolioSummary = compile('components/paper-trading/portfolio-summary.tsx', common);
   common.set('@/components/paper-trading/portfolio-summary', portfolioSummary);
@@ -435,6 +458,152 @@ test('paper dashboard states the safety boundary and exact confirmation', () => 
     ],
     'missing paper safety copy'
   );
+});
+
+test('the no-draft review reserves responsive space for concise empty-ledger artwork', () => {
+  const { OrderReview } = loadOrderReview();
+  const markup = renderToStaticMarkup(
+    React.createElement(OrderReview, {
+      draft: null,
+      portfolio: portfolio(),
+      readiness: 'ready',
+      onConfirm: async () => true,
+    })
+  );
+
+  assert.match(markup, /<img[^>]*src="\/images\/paper-practice-empty-v1\.png"/);
+  assert.match(markup, /<img[^>]*alt="Empty paper practice ledger"/);
+  assert.match(markup, /<img[^>]*width="1536"[^>]*height="1024"/);
+  assert.match(markup, /<img[^>]*sizes="\(min-width: 1024px\) 24rem, 100vw"/);
+  assert.match(markup, /No paper order to review/);
+  assert.match(markup, /Ask FinEd Saathi to prepare an NSE equity practice order/);
+});
+
+test('summary keeps final cash and historical cost values accessible during interpolation', () => {
+  const { PortfolioSummary } = loadPortfolioSummary(React, (value) => value / 2);
+  const markup = renderToStaticMarkup(
+    React.createElement(PortfolioSummary, { portfolio: portfolio() })
+  );
+
+  includesAll(
+    markup,
+    [
+      'aria-label="Virtual cash: ₹70,493.00"',
+      'aria-label="Holdings historical cost basis: ₹29,507.00"',
+      'aria-hidden="true">₹35,246.50',
+      'aria-hidden="true">₹14,753.50',
+      'Current/live value:',
+      'trusted current quote is required',
+    ],
+    'missing accessible animated summary behavior'
+  );
+});
+
+test('a provider-cleared fill draws one stroke-only confirmation and cancels it on cleanup', async () => {
+  const pathNode = {
+    style: {},
+    getTotalLength() {
+      return 42;
+    },
+  };
+  const hooks = statefulReact([pathNode]);
+  const animations = [];
+  const { OrderReview } = loadOrderReview(hooks.react, {
+    reduceMotion: false,
+    animate(target, options) {
+      const animation = {
+        cancelCalls: 0,
+        cancel() {
+          this.cancelCalls += 1;
+        },
+        options,
+        target,
+      };
+      animations.push(animation);
+      return animation;
+    },
+  });
+  const clock = fakeBrowserClock(Date.parse('2026-08-08T09:31:00.000Z'));
+  const props = {
+    draft: draft(),
+    portfolio: portfolio(),
+    readiness: 'ready',
+    onConfirm: async () => true,
+  };
+
+  try {
+    let tree = hooks.render(OrderReview, props);
+    const confirm = findElement(
+      tree,
+      (element) => element.type === 'button' && textContent(element) === 'Confirm paper buy'
+    );
+    await confirm.props.onClick();
+
+    tree = hooks.render(OrderReview, { ...props, draft: null });
+    assert.match(textContent(tree), /Paper order filled in your practice portfolio/);
+    const confirmation = findElement(tree, (element) => element.type === 'svg');
+    const confirmationPath = findElement(confirmation, (element) => element.type === 'path');
+    assert.equal(confirmation?.props['aria-hidden'], 'true');
+    assert.ok(confirmationPath, 'successful fill must render an SVG confirmation path');
+    assert.equal(animations.length, 1);
+    assert.equal(animations[0].target, pathNode);
+    assert.deepEqual(Object.keys(animations[0].options).sort(), [
+      'duration',
+      'ease',
+      'strokeDashoffset',
+    ]);
+    assert.deepEqual(animations[0].options.strokeDashoffset, [42, 0]);
+
+    hooks.strictModeReplayEffects();
+    assert.equal(animations.length, 1, 'Strict Mode replay must not redraw the confirmation');
+    assert.equal(animations[0].cancelCalls, 1);
+    assert.equal(pathNode.style.strokeDashoffset, '0');
+  } finally {
+    hooks.unmount();
+    clock.restore();
+  }
+});
+
+test('reduced motion renders the successful confirmation in its final state', async () => {
+  const pathNode = {
+    style: {},
+    getTotalLength() {
+      return 42;
+    },
+  };
+  const hooks = statefulReact([pathNode]);
+  let animateCalls = 0;
+  const { OrderReview } = loadOrderReview(hooks.react, {
+    reduceMotion: true,
+    animate() {
+      animateCalls += 1;
+      return { cancel() {} };
+    },
+  });
+  const clock = fakeBrowserClock(Date.parse('2026-08-08T09:31:00.000Z'));
+  const props = {
+    draft: draft(),
+    portfolio: portfolio(),
+    readiness: 'ready',
+    onConfirm: async () => true,
+  };
+
+  try {
+    let tree = hooks.render(OrderReview, props);
+    const confirm = findElement(
+      tree,
+      (element) => element.type === 'button' && textContent(element) === 'Confirm paper buy'
+    );
+    await confirm.props.onClick();
+    tree = hooks.render(OrderReview, props);
+
+    assert.ok(findElement(tree, (element) => element.type === 'path'));
+    assert.equal(animateCalls, 0);
+    assert.equal(pathNode.style.strokeDashoffset, '0');
+  } finally {
+    hooks.unmount();
+    clock.restore();
+  }
 });
 
 test('renders browser-owned safeguards and wires enabled buy and sell confirmations', async () => {

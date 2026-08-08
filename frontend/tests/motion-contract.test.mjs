@@ -417,3 +417,32 @@ test('animated numbers cancel the prior tween and return reduced-motion values d
 
   reactHarness.unmount();
 });
+
+test('animated numbers hydrate at the final value without an initial count-up', () => {
+  const reactHarness = createStatefulReactHarness();
+  const animations = [];
+  const { useAnimatedNumber } = loadHook(
+    'hooks/use-animated-number.ts',
+    new Map([
+      ['react', reactHarness.react],
+      [
+        'animejs',
+        {
+          animate(target, options) {
+            animations.push({ options, target });
+            return { cancel() {} };
+          },
+        },
+      ],
+      ['motion/react', { useReducedMotion: () => false }],
+    ])
+  );
+
+  reactHarness.beginRender();
+  assert.equal(useAnimatedNumber(7_049_300), 7_049_300);
+  reactHarness.flushEffects();
+  assert.equal(animations.length, 1);
+  assert.equal(animations[0].target.value, 7_049_300);
+
+  reactHarness.unmount();
+});
