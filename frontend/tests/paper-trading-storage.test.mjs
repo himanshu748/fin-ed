@@ -240,6 +240,42 @@ test('does not claim a safe save when cross-tab coordination is unavailable', as
   assert.deepEqual(loadPaperPortfolio(storage), { status: 'missing' });
 });
 
+test('aborts inside the exclusive lock before reading or writing when the commit guard fails', async () => {
+  const events = [];
+  const storage = {
+    getItem() {
+      events.push('read');
+      return null;
+    },
+    setItem() {
+      events.push('write');
+    },
+  };
+  const locks = {
+    async request(name, options, callback) {
+      assert.equal(name, PAPER_PORTFOLIO_STORAGE_KEY);
+      assert.deepEqual(options, { mode: 'exclusive' });
+      events.push('lock');
+      return callback();
+    },
+  };
+
+  const result = await savePaperPortfolio(
+    storage,
+    createPaperPortfolio(NOW, 'portfolio-1'),
+    locks,
+    {
+      canCommit() {
+        events.push('guard');
+        return false;
+      },
+    }
+  );
+
+  assert.deepEqual(result, { status: 'aborted', reason: 'commit-precondition' });
+  assert.deepEqual(events, ['lock', 'guard']);
+});
+
 test('serializes concurrent divergent revision-one saves through one exclusive lock', async () => {
   const storage = memoryStorage();
   const initial = createPaperPortfolio(NOW, 'portfolio-1');

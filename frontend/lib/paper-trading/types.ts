@@ -71,8 +71,13 @@ export type LoadResult =
 export type SaveResult =
   | { status: 'saved'; portfolio: PaperPortfolio }
   | { status: 'stale'; portfolio: PaperPortfolio }
+  | { status: 'aborted'; reason: 'commit-precondition' }
   | { status: 'corrupt'; raw: string | null }
   | { status: 'unavailable' };
+
+export interface SavePaperPortfolioOptions {
+  canCommit?(): boolean;
+}
 
 export interface PaperPortfolioStorage {
   getItem(key: string): string | null;

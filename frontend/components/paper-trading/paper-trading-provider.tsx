@@ -28,6 +28,7 @@ const ORDER_RESULT_METHOD = 'fined.paper.v1.order_result';
 const ORDER_RESULT_TIMEOUT_MS = 10_000;
 const PERSISTENCE_ERROR = 'Paper portfolio persistence is unavailable.';
 const STALE_ERROR = 'The paper portfolio changed in another tab. The latest portfolio was loaded.';
+const SESSION_ERROR = 'Paper draft belongs to a different agent session.';
 
 const RPC_METHODS = {
   openDashboard: 'fined.paper.v1.open_dashboard',
@@ -87,7 +88,7 @@ export interface ConfirmPaperDraftDependencies {
   preparedAgentIdentity: string;
   currentAgentIdentity: string;
   preparedAgentSessionKey: string;
-  currentAgentSessionKey: string;
+  getCurrentAgentSessionKey(): string | null;
   now: string;
   storage: PaperPortfolioStorage | null | undefined;
   coordinator?: PaperPortfolioLockCoordinator | null;
@@ -371,13 +372,14 @@ export function registerPaperRpcHandlers(
 export async function confirmPaperDraft(
   dependencies: ConfirmPaperDraftDependencies
 ): Promise<SaveResult> {
+  const currentAgentSessionKey = dependencies.getCurrentAgentSessionKey();
   if (
     !dependencies.preparedAgentIdentity.trim() ||
     dependencies.preparedAgentIdentity !== dependencies.currentAgentIdentity ||
     !dependencies.preparedAgentSessionKey.trim() ||
-    dependencies.preparedAgentSessionKey !== dependencies.currentAgentSessionKey
+    dependencies.preparedAgentSessionKey !== currentAgentSessionKey
   ) {
-    throw new Error('Paper draft belongs to a different agent session');
+    throw new Error(SESSION_ERROR);
   }
   const candidate = reducePaperPortfolio(dependencies.portfolio, {
     type: 'confirmDraft',
@@ -387,9 +389,16 @@ export async function confirmPaperDraft(
   const result = await savePaperPortfolio(
     dependencies.storage,
     candidate,
-    dependencies.coordinator
+    dependencies.coordinator,
+    {
+      canCommit: () =>
+        dependencies.getCurrentAgentSessionKey() === dependencies.preparedAgentSessionKey,
+    }
   );
   if (result.status !== 'saved') return result;
+  if (dependencies.getCurrentAgentSessionKey() !== dependencies.preparedAgentSessionKey) {
+    return result;
+  }
 
   const fill = result.portfolio.fills[result.portfolio.fills.length - 1];
   const payload: PaperOrderResultPayload = {
@@ -447,7 +456,10 @@ export async function initializePaperLedger(
   if (saved.status === 'saved' || saved.status === 'stale') {
     return { readiness: 'ready', portfolio: saved.portfolio };
   }
-  return { readiness: saved.status, portfolio: candidate };
+  return {
+    readiness: saved.status === 'corrupt' ? 'corrupt' : 'unavailable',
+    portfolio: candidate,
+  };
 }
 
 export function reconcilePaperSave(
@@ -455,6 +467,14 @@ export function reconcilePaperSave(
   result: SaveResult,
   operation: 'confirm' | 'reset'
 ): PaperLedgerState {
+  if (result.status === 'aborted') {
+    return {
+      readiness: 'ready',
+      portfolio: state.portfolio,
+      draft: null,
+      error: SESSION_ERROR,
+    };
+  }
   if (result.status === 'saved') {
     return {
       readiness: 'ready',
@@ -546,6 +566,8 @@ export function PaperTradingProvider({ children }: PropsWithChildren) {
   const agentSession = connectedAgentSession(agent);
   const expectedAgentIdentity = agentSession?.identity ?? null;
   const expectedAgentSessionKey = agentSession?.sessionKey ?? null;
+  const expectedAgentSessionKeyRef = useRef(expectedAgentSessionKey);
+  expectedAgentSessionKeyRef.current = expectedAgentSessionKey;
   useEffect(() => {
     updateLedger((current) => reconcileAgentSession(current, expectedAgentSessionKey));
   }, [expectedAgentSessionKey, updateLedger]);
@@ -594,7 +616,7 @@ export function PaperTradingProvider({ children }: PropsWithChildren) {
         preparedAgentIdentity: currentDraft.agentIdentity,
         currentAgentIdentity: expectedAgentIdentity,
         preparedAgentSessionKey: currentDraft.agentSessionKey,
-        currentAgentSessionKey: expectedAgentSessionKey,
+        getCurrentAgentSessionKey: () => expectedAgentSessionKeyRef.current,
         now: new Date().toISOString(),
         storage: browserStorage(),
         sendOrderResult: (payload) =>

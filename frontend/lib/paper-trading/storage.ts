@@ -4,6 +4,7 @@ import type {
   PaperPortfolio,
   PaperPortfolioLockCoordinator,
   PaperPortfolioStorage,
+  SavePaperPortfolioOptions,
   SaveResult,
 } from './types';
 
@@ -40,8 +41,12 @@ function browserLockCoordinator(): PaperPortfolioLockCoordinator | null {
 
 function saveWithinExclusiveLock(
   storage: PaperPortfolioStorage | null | undefined,
-  candidate: PaperPortfolio
+  candidate: PaperPortfolio,
+  options: SavePaperPortfolioOptions
 ): SaveResult {
+  if (options.canCommit && !options.canCommit()) {
+    return { status: 'aborted', reason: 'commit-precondition' };
+  }
   const current = loadPaperPortfolio(storage);
   if (current.status === 'unavailable' || current.status === 'corrupt') return current;
   if (current.status === 'ready' && existingWins(current.portfolio, candidate)) {
@@ -59,14 +64,15 @@ function saveWithinExclusiveLock(
 export async function savePaperPortfolio(
   storage: PaperPortfolioStorage | null | undefined,
   portfolio: PaperPortfolio,
-  coordinator: PaperPortfolioLockCoordinator | null | undefined = undefined
+  coordinator: PaperPortfolioLockCoordinator | null | undefined = undefined,
+  options: SavePaperPortfolioOptions = {}
 ): Promise<SaveResult> {
   const candidate = decodePaperPortfolio(portfolio);
   const locks = coordinator === undefined ? browserLockCoordinator() : coordinator;
   if (!locks || typeof locks.request !== 'function') return { status: 'unavailable' };
   try {
     return await locks.request(PAPER_PORTFOLIO_STORAGE_KEY, { mode: 'exclusive' }, () =>
-      saveWithinExclusiveLock(storage, candidate)
+      saveWithinExclusiveLock(storage, candidate, options)
     );
   } catch {
     return { status: 'unavailable' };

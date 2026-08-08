@@ -161,6 +161,28 @@ function locks() {
   };
 }
 
+function delayedLocks() {
+  let markEntered;
+  let release;
+  const entered = new Promise((resolve) => {
+    markEntered = resolve;
+  });
+  const released = new Promise((resolve) => {
+    release = resolve;
+  });
+  return {
+    entered,
+    release,
+    async request(name, options, callback) {
+      assert.equal(name, PAPER_PORTFOLIO_STORAGE_KEY);
+      assert.deepEqual(options, { mode: 'exclusive' });
+      markEntered();
+      await released;
+      return callback();
+    },
+  };
+}
+
 test('open dashboard accepts only an exact request from the connected agent', async () => {
   const state = harness();
 
@@ -418,7 +440,7 @@ test('a confirm write failure atomically downgrades readiness and closes later R
     preparedAgentIdentity: 'agent-1',
     currentAgentIdentity: 'agent-1',
     preparedAgentSessionKey: 'agent-1:sid-a',
-    currentAgentSessionKey: 'agent-1:sid-a',
+    getCurrentAgentSessionKey: () => 'agent-1:sid-a',
     now: NOW,
     storage: {
       getItem() {
@@ -552,7 +574,7 @@ test('confirmed fill persists through the lock and sends an exact result without
     preparedAgentIdentity: 'agent-1',
     currentAgentIdentity: 'agent-1',
     preparedAgentSessionKey: 'agent-1:sid-a',
-    currentAgentSessionKey: 'agent-1:sid-a',
+    getCurrentAgentSessionKey: () => 'agent-1:sid-a',
     now: NOW,
     storage,
     coordinator: locks(),
@@ -591,7 +613,7 @@ test('a replacement agent cannot confirm or receive a draft prepared by the prio
         preparedAgentIdentity: 'agent-1',
         currentAgentIdentity: 'agent-2',
         preparedAgentSessionKey: 'agent-1:sid-a',
-        currentAgentSessionKey: 'agent-2:sid-b',
+        getCurrentAgentSessionKey: () => 'agent-2:sid-b',
         now: NOW,
         storage,
         coordinator: locks(),
@@ -621,7 +643,7 @@ test('same-identity participant replacement cannot confirm the prior SID draft',
         preparedAgentIdentity: 'agent-1',
         currentAgentIdentity: 'agent-1',
         preparedAgentSessionKey: 'agent-1:sid-a',
-        currentAgentSessionKey: 'agent-1:sid-b',
+        getCurrentAgentSessionKey: () => 'agent-1:sid-b',
         now: NOW,
         storage,
         coordinator: locks(),
@@ -635,6 +657,102 @@ test('same-identity participant replacement cannot confirm the prior SID draft',
 
   assert.equal(storage.getItem(PAPER_PORTFOLIO_STORAGE_KEY), null);
   assert.equal(portfolio.revision, 0);
+  assert.equal(resultCalls, 0);
+});
+
+test('same-identity reconnect while confirm waits for the lock aborts before persistence', async () => {
+  const portfolio = createPaperPortfolio('2026-08-08T00:00:00.000Z', 'portfolio-1');
+  const draft = decodePaperOrderDraft(JSON.parse(draftPayload()));
+  let liveSessionKey = 'agent-1:sid-a';
+  let writes = 0;
+  let resultCalls = 0;
+  const storage = {
+    getItem() {
+      return null;
+    },
+    setItem() {
+      writes += 1;
+    },
+  };
+  const coordinator = delayedLocks();
+  const initialState = {
+    readiness: 'ready',
+    portfolio,
+    draft: {
+      draft,
+      agentIdentity: 'agent-1',
+      agentSessionKey: 'agent-1:sid-a',
+    },
+    error: null,
+  };
+
+  const pending = confirmPaperDraft({
+    portfolio,
+    draft,
+    preparedAgentIdentity: 'agent-1',
+    currentAgentIdentity: 'agent-1',
+    preparedAgentSessionKey: 'agent-1:sid-a',
+    getCurrentAgentSessionKey: () => liveSessionKey,
+    now: NOW,
+    storage,
+    coordinator,
+    sendOrderResult() {
+      resultCalls += 1;
+      return Promise.resolve('ack');
+    },
+  });
+  await coordinator.entered;
+  liveSessionKey = 'agent-1:sid-b';
+  const reconnectedState = reconcileAgentSession(initialState, liveSessionKey);
+  coordinator.release();
+  const result = await pending;
+  const finalState = reconcilePaperSave(reconnectedState, result, 'confirm');
+
+  assert.deepEqual(result, { status: 'aborted', reason: 'commit-precondition' });
+  assert.equal(result.status === 'saved', false);
+  assert.equal(writes, 0);
+  assert.equal(portfolio.revision, 0);
+  assert.equal(finalState.portfolio.fills.length, 0);
+  assert.equal(resultCalls, 0);
+  assert.equal(finalState.readiness, 'ready');
+  assert.equal(finalState.portfolio, portfolio);
+  assert.equal(finalState.draft, null);
+  assert.match(finalState.error, /different agent session/);
+});
+
+test('same-identity replacement after the locked write cannot receive the old result', async () => {
+  const portfolio = createPaperPortfolio('2026-08-08T00:00:00.000Z', 'portfolio-1');
+  const storage = memoryStorage();
+  let liveSessionKey = 'agent-1:sid-a';
+  let resultCalls = 0;
+  const coordinator = {
+    async request(name, options, callback) {
+      assert.equal(name, PAPER_PORTFOLIO_STORAGE_KEY);
+      assert.deepEqual(options, { mode: 'exclusive' });
+      const result = callback();
+      liveSessionKey = 'agent-1:sid-b';
+      return result;
+    },
+  };
+
+  const result = await confirmPaperDraft({
+    portfolio,
+    draft: decodePaperOrderDraft(JSON.parse(draftPayload())),
+    preparedAgentIdentity: 'agent-1',
+    currentAgentIdentity: 'agent-1',
+    preparedAgentSessionKey: 'agent-1:sid-a',
+    getCurrentAgentSessionKey: () => liveSessionKey,
+    now: NOW,
+    storage,
+    coordinator,
+    sendOrderResult() {
+      resultCalls += 1;
+      return Promise.resolve('ack');
+    },
+  });
+
+  assert.equal(result.status, 'saved');
+  assert.equal(result.portfolio.revision, 1);
   assert.equal(resultCalls, 0);
 });
 
@@ -709,7 +827,7 @@ test('a stale save returns the winning portfolio and never reports the losing dr
     preparedAgentIdentity: 'agent-1',
     currentAgentIdentity: 'agent-1',
     preparedAgentSessionKey: 'agent-1:sid-a',
-    currentAgentSessionKey: 'agent-1:sid-a',
+    getCurrentAgentSessionKey: () => 'agent-1:sid-a',
     now: NOW,
     storage,
     coordinator: locks(),
@@ -733,7 +851,7 @@ test('unavailable persistence fails safely without applying or reporting a fill'
     preparedAgentIdentity: 'agent-1',
     currentAgentIdentity: 'agent-1',
     preparedAgentSessionKey: 'agent-1:sid-a',
-    currentAgentSessionKey: 'agent-1:sid-a',
+    getCurrentAgentSessionKey: () => 'agent-1:sid-a',
     now: NOW,
     storage: memoryStorage(),
     coordinator: null,
