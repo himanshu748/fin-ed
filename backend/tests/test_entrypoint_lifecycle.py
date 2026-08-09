@@ -156,6 +156,7 @@ class LifecycleHarness:
     llm_kwargs: dict[str, object]
     stt_kwargs: dict[str, object]
     tts_kwargs: dict[str, object]
+    turn_detection_kwargs: dict[str, object]
 
 
 def _install_lifecycle_fakes(
@@ -173,6 +174,7 @@ def _install_lifecycle_fakes(
     llm_kwargs: dict[str, object] = {}
     stt_kwargs: dict[str, object] = {}
     tts_kwargs: dict[str, object] = {}
+    turn_detection_kwargs: dict[str, object] = {}
 
     knowledge_directory.mkdir(parents=True)
     if knowledge_available:
@@ -229,6 +231,14 @@ def _install_lifecycle_fakes(
         tts_kwargs.update(kwargs)
         return object()
 
+    def turn_detection_factory(*args: object, **kwargs: object) -> object:
+        assert not args
+        events.append("turn_detection")
+        if fail_at == "turn_detection":
+            raise LifecycleAbort("turn_detection")
+        turn_detection_kwargs.update(kwargs)
+        return object()
+
     class SessionFactory:
         @classmethod
         def __class_getitem__(cls, item: object) -> type[SessionFactory]:
@@ -261,9 +271,7 @@ def _install_lifecycle_fakes(
         entrypoint.tokenize.basic, "SentenceTokenizer", stage("tokenizer", object())
     )
     monkeypatch.setattr(entrypoint.murf, "TTS", tts_factory)
-    monkeypatch.setattr(
-        entrypoint, "MultilingualModel", stage("turn_detection", object())
-    )
+    monkeypatch.setattr(entrypoint.inference, "TurnDetector", turn_detection_factory)
     monkeypatch.setattr(entrypoint, "AgentSession", SessionFactory)
     monkeypatch.setattr(
         entrypoint.metrics,
@@ -280,6 +288,7 @@ def _install_lifecycle_fakes(
         llm_kwargs,
         stt_kwargs,
         tts_kwargs,
+        turn_detection_kwargs,
     )
 
 
@@ -404,6 +413,7 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
     assert harness.tts_kwargs["style"] == "Conversational"
     assert harness.tts_kwargs["model"] == "falcon-2"
     assert harness.tts_kwargs["locale"] == "en-IN"
+    assert harness.turn_detection_kwargs == {"version": "v1-mini"}
     assert harness.session.kwargs["llm"] is harness.llm
     assert "conn_options" not in harness.session.kwargs
 

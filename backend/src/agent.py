@@ -15,12 +15,12 @@ from livekit.agents import (
     JobProcess,
     MetricsCollectedEvent,
     cli,
+    inference,
     metrics,
     room_io,
     tokenize,
 )
 from livekit.plugins import deepgram, google, murf, noise_cancellation, silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 from fined.agent import (
     FinEdAssistant,
@@ -204,7 +204,7 @@ async def my_agent(ctx: JobContext) -> None:
                 tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
                 text_pacing=True,
             ),
-            turn_detection=MultilingualModel(),
+            turn_detection=inference.TurnDetector(version="v1-mini"),
             vad=ctx.proc.userdata["vad"],
             preemptive_generation=True,
         )
