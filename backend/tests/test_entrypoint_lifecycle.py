@@ -13,6 +13,7 @@ from livekit import rtc
 
 import agent as entrypoint
 from fined.knowledge.ingest import BuildError
+from fined.memory import CallerMemory
 from fined.modes import LearningMode
 from fined.paper_trading import PaperOrderDraft
 
@@ -291,7 +292,7 @@ def _install_lifecycle_fakes(
         "rpc_registration",
         "shutdown_registration",
         "start",
-        "generate_reply",
+        "say",
     ],
 )
 async def test_every_post_client_failure_closes_once_and_propagates(
@@ -304,9 +305,7 @@ async def test_every_post_client_failure_closes_once_and_propagates(
         await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
 
     assert harness.client.aio.close_attempts == 1
-    expected_unregistrations = int(
-        fail_at in {"shutdown_registration", "start", "generate_reply"}
-    )
+    expected_unregistrations = int(fail_at in {"shutdown_registration", "start", "say"})
     assert harness.events.count("rpc_unregistration") == expected_unregistrations
     for callback in harness.context.shutdown_callbacks:
         await callback("later shutdown")
@@ -362,7 +361,7 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
         "rpc_registration",
         "shutdown_registration",
         "start",
-        "generate_reply",
+        "say",
     ]
     assert harness.client.aio.close_attempts == 0
     assert harness.events.count("rpc_registration") == 1
@@ -372,20 +371,12 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
     assert state is not None
     assert state.profile.learning_mode is LearningMode.STOCKS  # type: ignore[union-attr]
     assert state.caller_id == "learner-1"  # type: ignore[union-attr]
-    assert harness.session.generated_replies == [
-        {
-            "instructions": (
-                "Look up this caller's saved learning memory, then greet them. "
-                "If found, use their name and one relevant saved learning fact. "
-                "If not found, introduce FinEd Saathi as an Indian markets "
-                "learning companion and ask what they want to understand. "
-                "State that this is education, not investment advice."
-            ),
-            "tool_choice": {
-                "type": "function",
-                "function": {"name": "lookup_caller_memory"},
-            },
-        }
+    assert harness.session.generated_replies == []
+    assert harness.session.spoken == [
+        "Hello, I'm FinEd Saathi, your Indian markets learning companion. "
+        "I can help you learn about Stocks in English, Hindi, or both. "
+        "I provide education, not investment advice. "
+        "What would you like to understand today?"
     ]
     assert state.paper_trading is not None  # type: ignore[union-attr]
     dashboard_ack = await state.paper_trading.open_dashboard()  # type: ignore[union-attr]
@@ -420,6 +411,30 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
     assert entrypoint.PAPER_ORDER_RESULT_METHOD not in (
         harness.context.local_participant.rpc_methods
     )
+
+
+def test_returning_caller_greeting_uses_one_safe_learning_fact() -> None:
+    memory = CallerMemory(
+        caller_id="learner-1",
+        name="Asha",
+        language_preference="english",
+        facts={
+            "experience_level": "beginner",
+            "learning_goal": "understand ETFs",
+        },
+        last_interaction=datetime(2026, 8, 8, tzinfo=UTC),
+    )
+
+    greeting = entrypoint.build_caller_greeting(
+        entrypoint.ParticipantProfile(LearningMode.ETFS), memory
+    )
+
+    assert greeting == (
+        "Welcome back, Asha. Your saved learning goal is understand ETFs. "
+        "This is education, not investment advice. "
+        "What would you like to understand today?"
+    )
+    assert "learner-1" not in greeting
 
 
 def _pending_draft(*, expired: bool = False) -> PaperOrderDraft:

@@ -34,7 +34,7 @@ def test_default_model_is_current_stable_flash_with_voice_limits() -> None:
     [
         ("gemini-3.6-flash", {"thinking_level": "minimal"}),
         ("gemini-3.5-flash-lite", {"thinking_level": "minimal"}),
-        ("gemini-2.5-flash", {"thinking_budget": 0}),
+        ("gemini-2.5-flash", {"thinking_budget": 128}),
     ],
 )
 def test_supported_explicit_model_builds_exact_livekit_kwargs(

@@ -26,6 +26,7 @@ from fined.agent import (
     FinEdAssistant,
     ParticipantProfile,
     SessionState,
+    build_greeting,
     build_system_prompt,
     parse_participant_profile,
 )
@@ -33,7 +34,7 @@ from fined.chat_model import create_gemini_llm
 from fined.knowledge.embeddings import GeminiEmbedder
 from fined.knowledge.index import KnowledgeIndex, UnavailableKnowledgeRetriever
 from fined.market_data.angel_one import create_market_data_provider
-from fined.memory import SQLiteCallerMemoryStore
+from fined.memory import CallerMemory, SQLiteCallerMemoryStore
 from fined.murf_falcon import install_current_websocket_serializer
 from fined.paper_trading import LiveKitPaperTradingBridge
 from fined.paper_trading.models import decode_paper_order_result
@@ -52,17 +53,46 @@ KNOWLEDGE_UNAVAILABLE_WARNING = (
 PAPER_ORDER_RESULT_METHOD = "fined.paper.v1.order_result"
 PAPER_RESULT_ACK = '{"version":1,"paper":true,"acknowledged":true}'
 PAPER_RESULT_SENTENCE = "The browser confirmed the simulated paper result."
-MEMORY_GREETING_INSTRUCTIONS = (
-    "Look up this caller's saved learning memory, then greet them. "
-    "If found, use their name and one relevant saved learning fact. "
-    "If not found, introduce FinEd Saathi as an Indian markets "
-    "learning companion and ask what they want to understand. "
-    "State that this is education, not investment advice."
-)
-MEMORY_LOOKUP_TOOL_CHOICE = {
-    "type": "function",
-    "function": {"name": "lookup_caller_memory"},
-}
+
+
+def build_caller_greeting(
+    profile: ParticipantProfile,
+    memory: CallerMemory | None,
+) -> str:
+    """Build the first turn after the server-side memory lookup.
+
+    Keeping this lookup outside the LLM avoids a provider tool round trip before
+    the first audio while preserving the same consented-memory behavior.
+    """
+    if memory is None:
+        return build_greeting(profile)
+    fact = next(
+        (
+            memory.facts[key]
+            for key in (
+                "learning_goal",
+                "topic_covered",
+                "experience_level",
+                "preferred_explanation_style",
+            )
+            if key in memory.facts
+        ),
+        "Indian market concepts",
+    )
+    if memory.language_preference == "hindi":
+        return (
+            f"फिर से स्वागत है, {memory.name}। "
+            f"पिछली बार आपका सीखने का लक्ष्य था: {fact}। "
+            "यह केवल शिक्षा है, निवेश सलाह नहीं। "
+            "आज आप क्या समझना चाहेंगे?"
+        )
+    return (
+        f"Welcome back, {memory.name}. "
+        f"Your saved learning goal is {fact}. "
+        "This is education, not investment advice. "
+        "What would you like to understand today?"
+    )
+
 
 # Preserve the starter's evaluation import and prompt seams.
 Assistant = FinEdAssistant
@@ -239,10 +269,12 @@ async def my_agent(ctx: JobContext) -> None:
                 ),
             ),
         )
-        await session.generate_reply(
-            instructions=MEMORY_GREETING_INSTRUCTIONS,
-            tool_choice=MEMORY_LOOKUP_TOOL_CHOICE,
-        )
+        try:
+            caller_memory = memory_store.lookup(participant.identity)
+        except Exception:
+            logger.warning("Caller memory lookup failed before greeting")
+            caller_memory = None
+        await session.say(build_caller_greeting(profile, caller_memory))
     except BaseException:
         try:
             unregister_paper_result_rpc_once()

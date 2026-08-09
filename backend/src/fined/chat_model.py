@@ -27,7 +27,9 @@ SAFE_CONFIGURATION_ERROR = "Invalid GEMINI_MODEL configuration"
 _THINKING_CONFIG_BY_MODEL: dict[str, dict[str, str | int]] = {
     "gemini-3.6-flash": {"thinking_level": "minimal"},
     "gemini-3.5-flash-lite": {"thinking_level": "minimal"},
-    "gemini-2.5-flash": {"thinking_budget": 0},
+    # Gemini 2.5 tool calls need a thought signature on the following turn.
+    # A zero budget omits that signature and makes the tool response fail with 400.
+    "gemini-2.5-flash": {"thinking_budget": 128},
 }
 
 
@@ -76,7 +78,7 @@ def create_gemini_llm(
     thinking = (
         "minimal"
         if config.thinking_config.get("thinking_level") == "minimal"
-        else "disabled"
+        else "bounded"
     )
     logger.info(
         "Gemini chat configured: model=%s max_output_tokens=%d "
