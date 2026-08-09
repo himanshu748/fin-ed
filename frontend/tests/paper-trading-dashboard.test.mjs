@@ -292,6 +292,9 @@ function loadSessionViewForFocus(react, paperTrading) {
           useSessionContext: () => ({
             connectionState: connectionState.Connected,
             isConnected: true,
+            room: {
+              name: 'voice_assistant_room_550e8400-e29b-41d4-a716-446655440000',
+            },
           }),
           useSessionMessages: () => ({ messages: [] }),
           useVoiceAssistant: () => ({ audioTrack: undefined }),
@@ -309,6 +312,15 @@ function loadSessionViewForFocus(react, paperTrading) {
         { usePaperTrading: () => paperTrading },
       ],
       ['@/lib/learning-modes', { LEARNING_MODES: [{ value: 'general', label: 'Ask Anything' }] }],
+      [
+        '@/lib/voice-session-history',
+        {
+          archiveVoiceSession: () => ({ status: 'unavailable' }),
+          browserVoiceSessionStorage: () => null,
+          loadVoiceSessions: () => ({ status: 'unavailable' }),
+          toArchivedVoiceMessages: () => [],
+        },
+      ],
     ])
   ).FinEdSessionView;
 }

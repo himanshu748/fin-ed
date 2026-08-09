@@ -1,9 +1,19 @@
 'use client';
 
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { gsap } from 'gsap';
 import { ConnectionState } from 'livekit-client';
-import { BookOpen, LayoutDashboard, Mic2, ShieldCheck } from 'lucide-react';
+import {
+  BookOpen,
+  Check,
+  Copy,
+  History,
+  LayoutDashboard,
+  Mic2,
+  Plus,
+  ShieldCheck,
+  X,
+} from 'lucide-react';
 import { useReducedMotion } from 'motion/react';
 import {
   type AgentState,
@@ -22,10 +32,25 @@ import {
   usePaperTrading,
 } from '@/components/paper-trading/paper-trading-provider';
 import { LEARNING_MODES, type LearningMode } from '@/lib/learning-modes';
+import {
+  type VoiceSessionArchive,
+  archiveVoiceSession,
+  browserVoiceSessionStorage,
+  loadVoiceSessions,
+  toArchivedVoiceMessages,
+} from '@/lib/voice-session-history';
 
 const SESSION_EDUCATION_BOUNDARY =
   'Education only. FinEd does not recommend or execute trades and never asks for your broker password, PIN or OTP. For personalised decisions, consult a SEBI-registered investment adviser.';
 const VOICE_LANGUAGES = 'English & Hindi';
+const SESSION_ROOM_PREFIX = 'voice_assistant_room_';
+const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function sessionIdFromRoomName(roomName: string): string | null {
+  if (!roomName.startsWith(SESSION_ROOM_PREFIX)) return null;
+  const sessionId = roomName.slice(SESSION_ROOM_PREFIX.length);
+  return SESSION_ID_PATTERN.test(sessionId) ? sessionId.toLowerCase() : null;
+}
 
 function statusFor(connectionState: ConnectionState, agentState: AgentState) {
   if (
@@ -70,9 +95,10 @@ function statusFor(connectionState: ConnectionState, agentState: AgentState) {
 interface FinEdSessionViewProps {
   appConfig: AppConfig;
   learningMode: LearningMode;
+  onNewSession?: () => Promise<void>;
 }
 
-export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewProps) {
+export function FinEdSessionView({ appConfig, learningMode, onNewSession }: FinEdSessionViewProps) {
   const session = useSessionContext();
   const agent = useAgent();
   const { audioTrack } = useVoiceAssistant();
@@ -80,6 +106,10 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
   const paperTrading = usePaperTrading();
   const shouldReduceMotion = useReducedMotion();
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(true);
+  const [isSessionIdCopied, setIsSessionIdCopied] = useState(false);
+  const [isSessionListOpen, setIsSessionListOpen] = useState(false);
+  const [savedSessions, setSavedSessions] = useState<VoiceSessionArchive[]>([]);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const paperTradingTriggerRef = useRef<HTMLButtonElement>(null);
   const committedPaperViewRef = useRef<{
     view: PaperTradingView | null;
@@ -88,8 +118,43 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
   const workspaceRef = useRef<HTMLDivElement>(null);
   const activeMode = LEARNING_MODES.find((mode) => mode.value === learningMode);
   const status = statusFor(session.connectionState, agent.state);
+  const sessionId = sessionIdFromRoomName(session.room.name);
+  const selectedSession = savedSessions.find(
+    (savedSession) =>
+      savedSession.sessionId === selectedSessionId && savedSession.sessionId !== sessionId
+  );
+  const displayedMessageCount = selectedSession?.messages.length ?? messages.length;
   const visualizerState: AgentState =
     shouldReduceMotion && agent.state === 'speaking' ? 'listening' : agent.state;
+
+  const copySessionId = async () => {
+    if (sessionId === null || navigator.clipboard === undefined) return;
+    try {
+      await navigator.clipboard.writeText(sessionId);
+      setIsSessionIdCopied(true);
+    } catch {
+      setIsSessionIdCopied(false);
+    }
+  };
+
+  useEffect(() => {
+    const result = loadVoiceSessions(browserVoiceSessionStorage());
+    if (result.status === 'ready') setSavedSessions(result.sessions);
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (sessionId === null) return;
+    const archivedMessages = toArchivedVoiceMessages(messages);
+    const now = Date.now();
+    const result = archiveVoiceSession(browserVoiceSessionStorage(), {
+      sessionId,
+      learningMode,
+      startedAt: archivedMessages[0]?.timestamp ?? now,
+      updatedAt: archivedMessages.at(-1)?.timestamp ?? now,
+      messages: archivedMessages,
+    });
+    if (result.status === 'saved') setSavedSessions(result.sessions);
+  }, [learningMode, messages, sessionId]);
 
   useLayoutEffect(() => {
     const targetView = paperTrading.view;
@@ -188,6 +253,45 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
                 Murf Falcon 2 · India voice · {VOICE_LANGUAGES}
               </p>
             </div>
+            <div className="flex min-h-11 min-w-0 items-center gap-2 rounded-[10px] border border-[var(--ledger-rule)] bg-[var(--surface)] px-2.5 py-1.5">
+              <div className="min-w-0">
+                <p className="font-data text-[10px] tracking-[0.08em] text-[var(--muted-ink)] uppercase">
+                  Session ID
+                </p>
+                <code
+                  data-session-id={sessionId ?? undefined}
+                  title={sessionId ?? 'Session ID pending'}
+                  className="font-data block max-w-28 truncate text-[11px] text-[var(--ledger-ink)] sm:max-w-44"
+                >
+                  {sessionId ?? 'Pending'}
+                </code>
+              </div>
+              <button
+                type="button"
+                aria-label="Copy session ID"
+                disabled={sessionId === null}
+                onClick={copySessionId}
+                className="flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-[8px] text-xs font-semibold text-[var(--ledger-blue)] transition-colors hover:bg-[var(--blue-wash)] focus-visible:outline-3 focus-visible:outline-offset-1 focus-visible:outline-[var(--ledger-blue)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isSessionIdCopied ? (
+                  <Check aria-hidden="true" className="size-4" />
+                ) : (
+                  <Copy aria-hidden="true" className="size-4" />
+                )}
+                <span className="hidden xl:inline">{isSessionIdCopied ? 'Copied' : 'Copy'}</span>
+                <span className="sr-only xl:hidden">{isSessionIdCopied ? 'Copied' : 'Copy'}</span>
+              </button>
+            </div>
+            <button
+              type="button"
+              aria-label={isSessionListOpen ? 'Close sessions' : 'Open sessions'}
+              aria-expanded={isSessionListOpen}
+              onClick={() => setIsSessionListOpen((isOpen) => !isOpen)}
+              className="flex min-h-11 min-w-11 items-center gap-2 rounded-[10px] border border-[var(--ledger-rule)] bg-[var(--surface)] px-3 text-sm font-semibold transition-colors hover:border-[var(--ledger-blue)] hover:bg-[var(--blue-wash)] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)]"
+            >
+              <History aria-hidden="true" className="size-5 text-[var(--ledger-blue)]" />
+              <span className="hidden sm:inline">Sessions</span>
+            </button>
             {paperTrading.view === 'dashboard' && (
               <span className="rounded-[8px] border border-[var(--banknote-green)] bg-[var(--green-wash)] px-3 py-2 text-xs font-semibold text-[var(--banknote-green)]">
                 Paper trading only
@@ -230,6 +334,98 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
           India voice · {VOICE_LANGUAGES}
         </div>
       </header>
+
+      {isSessionListOpen && (
+        <section
+          aria-label="Voice sessions"
+          className="border-b border-[var(--ledger-rule)] bg-[var(--surface)]"
+        >
+          <div className="section-shell py-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="font-display font-bold">Your voice sessions</p>
+                <p className="mt-1 text-sm text-[var(--muted-ink)]">
+                  Transcripts are saved only in this browser. Ended sessions are read-only.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {onNewSession && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setIsSessionListOpen(false);
+                      setSelectedSessionId(null);
+                      await onNewSession();
+                    }}
+                    className="flex min-h-11 items-center gap-2 rounded-[10px] bg-[var(--ledger-blue)] px-4 text-sm font-semibold text-white transition-[filter] hover:brightness-90 focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)]"
+                  >
+                    <Plus aria-hidden="true" className="size-4" />
+                    New session
+                  </button>
+                )}
+                <button
+                  type="button"
+                  aria-label="Close sessions"
+                  onClick={() => setIsSessionListOpen(false)}
+                  className="grid min-h-11 min-w-11 place-items-center rounded-[10px] border border-[var(--ledger-rule)] hover:bg-[var(--paper)] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)]"
+                >
+                  <X aria-hidden="true" className="size-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-4 flex gap-2 overflow-x-auto pb-1" role="list">
+              <button
+                type="button"
+                role="listitem"
+                aria-current={selectedSession === undefined ? 'page' : undefined}
+                onClick={() => {
+                  setSelectedSessionId(null);
+                  setIsSessionListOpen(false);
+                }}
+                className="min-w-56 rounded-[10px] border border-[var(--banknote-green)] bg-[var(--green-wash)] p-3 text-left focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)]"
+              >
+                <span className="font-data text-[10px] tracking-[0.08em] text-[var(--banknote-green)] uppercase">
+                  Live now
+                </span>
+                <code className="font-data mt-1 block truncate text-xs">
+                  {sessionId ?? 'Session pending'}
+                </code>
+              </button>
+              {savedSessions
+                .filter((savedSession) => savedSession.sessionId !== sessionId)
+                .map((savedSession) => (
+                  <button
+                    type="button"
+                    role="listitem"
+                    key={savedSession.sessionId}
+                    aria-current={
+                      selectedSession?.sessionId === savedSession.sessionId ? 'page' : undefined
+                    }
+                    onClick={() => {
+                      setSelectedSessionId(savedSession.sessionId);
+                      setIsSessionListOpen(false);
+                    }}
+                    className="min-w-56 rounded-[10px] border border-[var(--ledger-rule)] bg-[var(--paper)] p-3 text-left transition-colors hover:border-[var(--ledger-blue)] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)]"
+                  >
+                    <span className="font-data text-[10px] tracking-[0.08em] text-[var(--muted-ink)] uppercase">
+                      {savedSession.messages.length} messages
+                    </span>
+                    <code className="font-data mt-1 block truncate text-xs">
+                      {savedSession.sessionId}
+                    </code>
+                    <span className="mt-1 block text-xs text-[var(--muted-ink)]">
+                      {new Date(savedSession.updatedAt).toLocaleString('en-IN', {
+                        dateStyle: 'medium',
+                        timeStyle: 'short',
+                      })}
+                    </span>
+                  </button>
+                ))}
+            </div>
+          </div>
+        </section>
+      )}
 
       <div ref={workspaceRef} data-workspace-view={paperTrading.view}>
         {paperTrading.view === 'dashboard' ? (
@@ -280,22 +476,65 @@ export function FinEdSessionView({ appConfig, learningMode }: FinEdSessionViewPr
             <section className="flex min-h-[34rem] min-w-0 flex-col rounded-[12px] border border-[var(--ledger-rule)] bg-[var(--surface)] p-3 sm:p-5">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--soft-rule)] px-1 pb-4">
                 <div>
-                  <p className="font-display font-semibold">Conversation and sources</p>
+                  <p className="font-display font-semibold">
+                    {selectedSession ? 'Read-only browser history' : 'Conversation and sources'}
+                  </p>
                   <p className="mt-1 text-sm text-[var(--muted-ink)]">
-                    Voice answers appear here with clickable source links.
+                    {selectedSession
+                      ? `Session ${selectedSession.sessionId}`
+                      : 'Voice answers appear here with clickable source links.'}
                   </p>
                 </div>
-                <span className="font-data text-xs text-[var(--muted-ink)]">
-                  {messages.length} {messages.length === 1 ? 'message' : 'messages'}
-                </span>
+                <div className="flex items-center gap-3">
+                  {selectedSession && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSessionId(null)}
+                      className="min-h-11 rounded-[9px] border border-[var(--ledger-blue)] px-3 text-sm font-semibold text-[var(--ledger-blue)] hover:bg-[var(--blue-wash)] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)]"
+                    >
+                      Back to live
+                    </button>
+                  )}
+                  <span className="font-data text-xs text-[var(--muted-ink)]">
+                    {displayedMessageCount} {displayedMessageCount === 1 ? 'message' : 'messages'}
+                  </span>
+                </div>
               </div>
 
               <div hidden={!isTranscriptOpen} inert={!isTranscriptOpen} className="min-h-0 flex-1">
-                <AgentChatTranscript
-                  agentState={agent.state}
-                  messages={messages}
-                  className="min-h-0 flex-1"
-                />
+                {selectedSession ? (
+                  <ol className="flex max-h-[34rem] min-h-72 flex-col gap-4 overflow-y-auto px-1 py-5">
+                    {selectedSession.messages.length === 0 ? (
+                      <li className="grid min-h-64 place-items-center text-center text-sm text-[var(--muted-ink)]">
+                        No transcript was recorded for this session.
+                      </li>
+                    ) : (
+                      selectedSession.messages.map((message) => (
+                        <li
+                          key={message.id}
+                          className={`max-w-[88%] rounded-[12px] border p-4 ${
+                            message.role === 'user'
+                              ? 'ml-auto border-[var(--ledger-blue)] bg-[var(--blue-wash)]'
+                              : 'mr-auto border-[var(--ledger-rule)] bg-[var(--paper)]'
+                          }`}
+                        >
+                          <p className="font-data text-[10px] tracking-[0.08em] text-[var(--muted-ink)] uppercase">
+                            {message.role === 'user' ? 'You' : 'Nikhil'}
+                          </p>
+                          <p className="mt-2 text-sm leading-6 break-words whitespace-pre-wrap">
+                            {message.text}
+                          </p>
+                        </li>
+                      ))
+                    )}
+                  </ol>
+                ) : (
+                  <AgentChatTranscript
+                    agentState={agent.state}
+                    messages={messages}
+                    className="min-h-0 flex-1"
+                  />
+                )}
               </div>
               {!isTranscriptOpen && (
                 <div className="grid flex-1 place-items-center p-8 text-center">

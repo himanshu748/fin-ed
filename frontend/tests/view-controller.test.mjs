@@ -55,7 +55,11 @@ function dependenciesChanged(previous, next) {
   return previous.some((value, index) => !Object.is(value, next[index]));
 }
 
-function createSessionHarness({ initialView = 'session', reduceMotion = false } = {}) {
+function createSessionHarness({
+  initialView = 'session',
+  reduceMotion = false,
+  previousSessions = [],
+} = {}) {
   const states = [];
   const refs = [];
   const layoutEffects = [];
@@ -72,6 +76,7 @@ function createSessionHarness({ initialView = 'session', reduceMotion = false } 
   let sessionHeadingFocusCalls = 0;
   let contextReverts = 0;
   let timelineKills = 0;
+  let newSessionCalls = 0;
 
   const trigger = { focus: () => (triggerFocusCalls += 1) };
   const dashboardHeading = { focus: () => (dashboardFocusCalls += 1) };
@@ -201,6 +206,9 @@ function createSessionHarness({ initialView = 'session', reduceMotion = false } 
           useSessionContext: () => ({
             connectionState: connectionState.Connected,
             isConnected: true,
+            room: {
+              name: 'voice_assistant_room_550e8400-e29b-41d4-a716-446655440000',
+            },
           }),
           useSessionMessages: () => ({ messages: [] }),
           useVoiceAssistant: () => ({ audioTrack: undefined }),
@@ -218,6 +226,15 @@ function createSessionHarness({ initialView = 'session', reduceMotion = false } 
         { usePaperTrading: () => paperTrading },
       ],
       ['@/lib/learning-modes', { LEARNING_MODES: [{ value: 'general', label: 'Ask Anything' }] }],
+      [
+        '@/lib/voice-session-history',
+        {
+          archiveVoiceSession: () => ({ status: 'saved', sessions: previousSessions }),
+          browserVoiceSessionStorage: () => ({}),
+          loadVoiceSessions: () => ({ status: 'ready', sessions: previousSessions }),
+          toArchivedVoiceMessages: () => [],
+        },
+      ],
     ])
   ).FinEdSessionView;
 
@@ -234,9 +251,18 @@ function createSessionHarness({ initialView = 'session', reduceMotion = false } 
       passiveCursor = 0;
       pendingLayoutEffects = [];
       pendingPassiveEffects = [];
-      const tree = FinEdSessionView({ appConfig: {}, learningMode: 'general' });
+      const tree = FinEdSessionView({
+        appConfig: {},
+        learningMode: 'general',
+        onNewSession: async () => {
+          newSessionCalls += 1;
+        },
+      });
       flushEffects(layoutEffects, pendingLayoutEffects);
       return tree;
+    },
+    flushPassiveEffects() {
+      flushEffects(passiveEffects, pendingPassiveEffects);
     },
     unmount() {
       for (const record of [...layoutEffects, ...passiveEffects]) record?.cleanup?.();
@@ -259,6 +285,9 @@ function createSessionHarness({ initialView = 'session', reduceMotion = false } 
     cleanupCalls() {
       return { contextReverts, timelineKills };
     },
+    newSessionCalls() {
+      return newSessionCalls;
+    },
   };
 }
 
@@ -266,9 +295,11 @@ function loadViewController({ agentState, isConnected, startError, startPromise 
   const stateWrites = [];
   let stateIndex = 0;
   let endCalls = 0;
+  let startCalls = 0;
   const session = {
     isConnected,
     start: async () => {
+      startCalls += 1;
       if (startError) throw startError;
       if (startPromise) return startPromise;
     },
@@ -314,7 +345,10 @@ function loadViewController({ agentState, isConnected, startError, startPromise 
       '@livekit/components-react',
       { useAgent: () => ({ state: agentState }), useSessionContext: () => session },
     ],
-    ['@/components/app/fin-ed-session-view', { FinEdSessionView: () => null }],
+    [
+      '@/components/app/fin-ed-session-view',
+      { FinEdSessionView: (props) => jsxRuntime.jsx('session-view', props) },
+    ],
     ['@/components/app/welcome-view', { WelcomeView: () => null }],
   ]);
 
@@ -337,6 +371,9 @@ function loadViewController({ agentState, isConnected, startError, startPromise 
   return {
     get endCalls() {
       return endCalls;
+    },
+    get startCalls() {
+      return startCalls;
     },
     stateWrites,
     view,
@@ -386,6 +423,20 @@ test('generic startup failures report a voice connection failure', () => {
     result.exports.connectionErrorMessageFor(new Error('signalling timed out')),
     'Voice connection failed. Check your network and try again.'
   );
+});
+
+test('starting a new session ends the current room and connects a fresh room', async () => {
+  const result = loadViewController({ agentState: 'idle', isConnected: true });
+  const sessionView = findElement(
+    result.view,
+    (element) => typeof element.props?.onNewSession === 'function'
+  );
+  assert.ok(sessionView, 'connected view must receive the new session action');
+
+  await sessionView.props.onNewSession();
+
+  assert.equal(result.endCalls, 1);
+  assert.equal(result.startCalls, 1);
 });
 
 test('a stalled LiveKit start times out, ends the room, and unlocks retry', async () => {
@@ -481,6 +532,9 @@ test('opening the paper workspace does not end the live voice session', () => {
           useSessionContext: () => ({
             connectionState: connectionState.Connected,
             isConnected: true,
+            room: {
+              name: 'voice_assistant_room_550e8400-e29b-41d4-a716-446655440000',
+            },
             end() {
               endCalls += 1;
             },
@@ -501,6 +555,15 @@ test('opening the paper workspace does not end the live voice session', () => {
         { usePaperTrading: () => paperTrading },
       ],
       ['@/lib/learning-modes', { LEARNING_MODES: [{ value: 'general', label: 'Ask Anything' }] }],
+      [
+        '@/lib/voice-session-history',
+        {
+          archiveVoiceSession: () => ({ status: 'unavailable' }),
+          browserVoiceSessionStorage: () => null,
+          loadVoiceSessions: () => ({ status: 'unavailable' }),
+          toArchivedVoiceMessages: () => [],
+        },
+      ],
     ])
   ).FinEdSessionView;
 
@@ -514,6 +577,110 @@ test('opening the paper workspace does not end the live voice session', () => {
 
   assert.equal(openDashboardCalls, 1);
   assert.equal(endCalls, 0);
+});
+
+test('the connected workspace shows and copies a safe ChatGPT-style session ID', async () => {
+  // Catches hidden session identity or accidental exposure of the persistent learner ID.
+  const harness = createSessionHarness({ reduceMotion: true });
+  let view = harness.render();
+  const sessionCode = findElement(view, (element) => element.props?.['data-session-id']);
+  const copyButton = findElement(
+    view,
+    (element) => element.type === 'button' && element.props?.['aria-label'] === 'Copy session ID'
+  );
+
+  assert.ok(sessionCode, 'connected workspace must expose its support-safe session ID');
+  assert.equal(textContent(sessionCode), '550e8400-e29b-41d4-a716-446655440000');
+  assert.ok(copyButton, 'session ID must have a keyboard-accessible copy action');
+  assert.doesNotMatch(textContent(view), /voice_assistant_user_/);
+
+  const writes = [];
+  const nativeClipboard = globalThis.navigator.clipboard;
+  Object.defineProperty(globalThis.navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: async (value) => writes.push(value) },
+  });
+  try {
+    await copyButton.props.onClick();
+    view = harness.render();
+  } finally {
+    Object.defineProperty(globalThis.navigator, 'clipboard', {
+      configurable: true,
+      value: nativeClipboard,
+    });
+  }
+
+  assert.deepEqual(writes, ['550e8400-e29b-41d4-a716-446655440000']);
+  const copiedButton = findElement(
+    view,
+    (element) => element.type === 'button' && element.props?.['aria-label'] === 'Copy session ID'
+  );
+  assert.match(textContent(copiedButton), /Copied/);
+});
+
+test('the connected workspace switches between live and saved browser sessions', async () => {
+  const previousSession = {
+    sessionId: '67e55044-10b1-426f-9247-bb680e5fe0c8',
+    learningMode: 'stocks',
+    startedAt: 1_754_638_000_000,
+    updatedAt: 1_754_638_001_000,
+    messages: [
+      {
+        id: 'saved-1',
+        role: 'user',
+        text: 'Explain delivery trading charges',
+        timestamp: 1_754_638_000_000,
+      },
+      {
+        id: 'saved-2',
+        role: 'assistant',
+        text: 'Delivery brokerage and statutory charges are separate.',
+        timestamp: 1_754_638_001_000,
+      },
+    ],
+  };
+  const harness = createSessionHarness({ reduceMotion: true, previousSessions: [previousSession] });
+  let view = harness.render();
+  harness.flushPassiveEffects();
+  view = harness.render();
+
+  const sessionsButton = findElement(
+    view,
+    (element) => element.type === 'button' && element.props?.['aria-label'] === 'Open sessions'
+  );
+  assert.ok(sessionsButton, 'the live workspace must expose the session switcher');
+  sessionsButton.props.onClick();
+  view = harness.render();
+
+  const savedSessionButton = findElement(
+    view,
+    (element) => element.type === 'button' && textContent(element).includes('67e55044')
+  );
+  assert.ok(savedSessionButton, 'saved session must be selectable by its safe session ID');
+  savedSessionButton.props.onClick();
+  view = harness.render();
+  assert.match(textContent(view), /Read-only browser history/);
+  assert.match(textContent(view), /Explain delivery trading charges/);
+  assert.match(textContent(view), /Delivery brokerage and statutory charges are separate/);
+
+  const liveButton = findElement(
+    view,
+    (element) => element.type === 'button' && textContent(element).includes('Back to live')
+  );
+  assert.ok(liveButton, 'archived transcript must provide a way back to the live call');
+  liveButton.props.onClick();
+  view = harness.render();
+  assert.doesNotMatch(textContent(view), /Read-only browser history/);
+
+  sessionsButton.props.onClick();
+  view = harness.render();
+  const newSessionButton = findElement(
+    view,
+    (element) => element.type === 'button' && textContent(element).includes('New session')
+  );
+  assert.ok(newSessionButton, 'session switcher must expose a new session action');
+  await newSessionButton.props.onClick();
+  assert.equal(harness.newSessionCalls(), 1);
 });
 
 test('a collapsed transcript uses native hidden semantics instead of leaving links tabbable', () => {

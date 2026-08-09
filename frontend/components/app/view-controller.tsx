@@ -89,6 +89,22 @@ export function ViewController({
     }
   };
 
+  const handleNewSession = async () => {
+    if (isStarting) return;
+
+    setConnectionError(null);
+    setIsStarting(true);
+    try {
+      await session.end();
+      await startSessionWithTimeout(() => session.start());
+    } catch (error) {
+      setConnectionError(connectionErrorMessageFor(error));
+      await session.end().catch(() => undefined);
+    } finally {
+      setIsStarting(false);
+    }
+  };
+
   const motionProps = {
     initial: shouldReduceMotion ? false : { opacity: 0, y: 12 },
     animate: { opacity: 1, y: 0 },
@@ -119,7 +135,11 @@ export function ViewController({
       )}
       {session.isConnected && (
         <motion.div key="session-view" {...motionProps}>
-          <FinEdSessionView appConfig={appConfig} learningMode={learningMode} />
+          <FinEdSessionView
+            appConfig={appConfig}
+            learningMode={learningMode}
+            onNewSession={handleNewSession}
+          />
         </motion.div>
       )}
     </AnimatePresence>
