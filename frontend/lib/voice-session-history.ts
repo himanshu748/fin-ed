@@ -39,7 +39,7 @@ export type LoadVoiceSessionsResult =
 
 export type ArchiveVoiceSessionResult =
   | { status: 'saved'; sessions: VoiceSessionArchive[] }
-  | { status: 'corrupt' | 'unavailable' };
+  | { status: 'corrupt' | 'empty' | 'unavailable' };
 
 function finiteTimestamp(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
@@ -136,7 +136,12 @@ export function loadVoiceSessions(
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return { status: 'corrupt' };
-    return { status: 'ready', sessions: newestFirst(parsed.map(decodeSession)) };
+    return {
+      status: 'ready',
+      sessions: newestFirst(
+        parsed.map(decodeSession).filter((session) => session.messages.length > 0)
+      ),
+    };
   } catch {
     return { status: 'corrupt' };
   }
@@ -153,6 +158,7 @@ export function archiveVoiceSession(
   } catch {
     return { status: 'corrupt' };
   }
+  if (candidate.messages.length === 0) return { status: 'empty' };
   const loaded = loadVoiceSessions(storage);
   if (loaded.status === 'corrupt') return { status: 'corrupt' };
   if (loaded.status === 'unavailable') return { status: 'unavailable' };

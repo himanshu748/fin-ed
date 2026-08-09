@@ -388,6 +388,9 @@ export function FinEdSessionView({ appConfig, learningMode, onNewSession }: FinE
                 <span className="font-data text-[10px] tracking-[0.08em] text-[var(--banknote-green)] uppercase">
                   Live now
                 </span>
+                <span className="font-data mt-1 block text-[10px] text-[var(--muted-ink)] uppercase">
+                  {messages.length} {messages.length === 1 ? 'message' : 'messages'}
+                </span>
                 <code className="font-data mt-1 block truncate text-xs">
                   {sessionId ?? 'Session pending'}
                 </code>

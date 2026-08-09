@@ -59,6 +59,7 @@ function createSessionHarness({
   initialView = 'session',
   reduceMotion = false,
   previousSessions = [],
+  messages = [],
 } = {}) {
   const states = [];
   const refs = [];
@@ -210,7 +211,7 @@ function createSessionHarness({
               name: 'voice_assistant_room_550e8400-e29b-41d4-a716-446655440000',
             },
           }),
-          useSessionMessages: () => ({ messages: [] }),
+          useSessionMessages: () => ({ messages }),
           useVoiceAssistant: () => ({ audioTrack: undefined }),
         },
       ],
@@ -681,6 +682,41 @@ test('the connected workspace switches between live and saved browser sessions',
   assert.ok(newSessionButton, 'session switcher must expose a new session action');
   await newSessionButton.props.onClick();
   assert.equal(harness.newSessionCalls(), 1);
+});
+
+test('the live session card shows its current transcript message count', () => {
+  const harness = createSessionHarness({
+    messages: [
+      {
+        id: 'live-1',
+        type: 'userTranscript',
+        message: 'What is an ETF?',
+        timestamp: 1_754_637_000_000,
+        from: { isLocal: true },
+      },
+      {
+        id: 'live-2',
+        type: 'agentTranscript',
+        message: 'An ETF is a basket of assets.',
+        timestamp: 1_754_637_001_000,
+        from: { isLocal: false },
+      },
+    ],
+  });
+  let view = harness.render();
+
+  const sessionsButton = findElement(
+    view,
+    (element) => element.type === 'button' && element.props?.['aria-label'] === 'Open sessions'
+  );
+  sessionsButton.props.onClick();
+  view = harness.render();
+
+  const liveSession = findElement(
+    view,
+    (element) => element.type === 'button' && textContent(element).includes('Live now')
+  );
+  assert.match(textContent(liveSession), /2 messages/);
 });
 
 test('a collapsed transcript uses native hidden semantics instead of leaving links tabbable', () => {

@@ -74,14 +74,28 @@ test('saves browser sessions newest first and updates an existing session in pla
     learningMode: 'general',
     startedAt: 1_754_637_000_000,
     updatedAt: 1_754_637_001_000,
-    messages: [],
+    messages: [
+      {
+        id: 'first-message',
+        role: 'user',
+        text: 'What is an ETF?',
+        timestamp: 1_754_637_000_000,
+      },
+    ],
   };
   const second = {
     sessionId: '67e55044-10b1-426f-9247-bb680e5fe0c8',
     learningMode: 'stocks',
     startedAt: 1_754_638_000_000,
     updatedAt: 1_754_638_001_000,
-    messages: [],
+    messages: [
+      {
+        id: 'second-message',
+        role: 'user',
+        text: 'What is a stock?',
+        timestamp: 1_754_638_000_000,
+      },
+    ],
   };
 
   assert.equal(archiveVoiceSession(storage, first).status, 'saved');
@@ -104,6 +118,75 @@ test('saves browser sessions newest first and updates an existing session in pla
     [first.sessionId, second.sessionId]
   );
   assert.equal(result.sessions[0].messages[0].text, 'Updated question');
+});
+
+test('ignores empty snapshots so a disconnect cannot erase a recorded transcript', () => {
+  const storage = memoryStorage();
+  const sessionId = '550e8400-e29b-41d4-a716-446655440000';
+  const recorded = {
+    sessionId,
+    learningMode: 'general',
+    startedAt: 1_754_637_000_000,
+    updatedAt: 1_754_637_001_000,
+    messages: [
+      {
+        id: 'm1',
+        role: 'user',
+        text: 'What is an ETF?',
+        timestamp: 1_754_637_000_000,
+      },
+    ],
+  };
+
+  assert.equal(archiveVoiceSession(storage, recorded).status, 'saved');
+  assert.equal(
+    archiveVoiceSession(storage, {
+      ...recorded,
+      updatedAt: 1_754_638_000_000,
+      messages: [],
+    }).status,
+    'empty'
+  );
+
+  const result = loadVoiceSessions(storage);
+  assert.equal(result.status, 'ready');
+  assert.equal(result.sessions.length, 1);
+  assert.equal(result.sessions[0].messages[0].text, 'What is an ETF?');
+});
+
+test('hides legacy connection attempts that have no transcript messages', () => {
+  const storage = memoryStorage({
+    [VOICE_SESSION_STORAGE_KEY]: JSON.stringify([
+      {
+        sessionId: '550e8400-e29b-41d4-a716-446655440000',
+        learningMode: 'general',
+        startedAt: 1_754_637_000_000,
+        updatedAt: 1_754_637_001_000,
+        messages: [],
+      },
+      {
+        sessionId: '67e55044-10b1-426f-9247-bb680e5fe0c8',
+        learningMode: 'stocks',
+        startedAt: 1_754_638_000_000,
+        updatedAt: 1_754_638_001_000,
+        messages: [
+          {
+            id: 'm1',
+            role: 'assistant',
+            text: 'An ETF is a basket of assets.',
+            timestamp: 1_754_638_001_000,
+          },
+        ],
+      },
+    ]),
+  });
+
+  const result = loadVoiceSessions(storage);
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(
+    result.sessions.map((session) => session.sessionId),
+    ['67e55044-10b1-426f-9247-bb680e5fe0c8']
+  );
 });
 
 test('fails closed for corrupt history and unavailable browser storage', () => {
