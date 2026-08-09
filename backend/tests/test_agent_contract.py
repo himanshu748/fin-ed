@@ -28,6 +28,7 @@ from fined.market_data.models import (
     QuoteRequest,
 )
 from fined.market_data.provider import MarketDataUnavailableError
+from fined.memory import SQLiteCallerMemoryStore
 from fined.modes import LearningMode
 from fined.paper_trading import (
     PaperDashboardAck,
@@ -464,6 +465,22 @@ def test_fined_assistant_defaults_to_general_and_exposes_exact_tool_names() -> N
     assert (
         assistant.get_paper_portfolio_summary.info.name == "get_paper_portfolio_summary"
     )
+    assert assistant.lookup_caller_memory.info.name == "lookup_caller_memory"
+    assert assistant.save_caller_memory.info.name == "save_caller_memory"
+    assert assistant.forget_caller_memory.info.name == "forget_caller_memory"
+
+
+def test_prompt_requires_lookup_and_explicit_consent_before_memory_writes() -> None:
+    # Catches memory being injected into the prompt or saved on ambiguous consent.
+    prompt = build_system_prompt(ParticipantProfile(LearningMode.STOCKS)).casefold()
+
+    for required in (
+        "call lookup_caller_memory at the start of every new session",
+        "ask for explicit consent immediately before every save",
+        "silence, ambiguity or earlier consent do not count",
+        "never save broker credentials, account numbers, pan or aadhaar",
+    ):
+        assert required in prompt
 
 
 def test_prompt_defines_browser_only_paper_trading_safety_contract() -> None:
@@ -1379,3 +1396,102 @@ async def test_fno_session_cannot_reach_the_delivery_calculator() -> None:
 
     assert "educational payoff examples only" in str(failure.value)
     assert "simulation only" not in str(failure.value)
+
+
+@pytest.mark.asyncio
+async def test_memory_tools_lookup_and_save_safe_learning_context(tmp_path) -> None:
+    # Catches tools using prompt state instead of the caller-scoped persistent store.
+    store = SQLiteCallerMemoryStore(tmp_path / "memory.sqlite3")
+    state = SessionState(
+        profile=ParticipantProfile(LearningMode.ETFS),
+        retriever=FakeRetriever([]),
+        caller_id="voice_assistant_user_learner-7",
+        memory_store=store,
+    )
+    assistant = FinEdAssistant()
+
+    first_lookup = await assistant.lookup_caller_memory(context=_context(state))
+    saved = await assistant.save_caller_memory(
+        context=_context(state),
+        name="Himanshu",
+        language_preference="bilingual",
+        experience_level="beginner",
+        learning_goal="understand ETFs before paper practice",
+        consent_confirmed=True,
+    )
+    second_lookup = await assistant.lookup_caller_memory(context=_context(state))
+
+    assert first_lookup == {
+        "found": False,
+        "message": "No saved caller memory was found.",
+    }
+    assert saved["saved"] is True
+    assert saved["name"] == "Himanshu"
+    assert saved["facts"] == {
+        "experience_level": "beginner",
+        "learning_goal": "understand ETFs before paper practice",
+    }
+    assert second_lookup["found"] is True
+    assert second_lookup["name"] == "Himanshu"
+    assert second_lookup["facts"] == saved["facts"]
+    assert "caller_id" not in second_lookup
+
+
+@pytest.mark.asyncio
+async def test_memory_tool_refuses_save_without_current_explicit_consent(
+    tmp_path,
+) -> None:
+    # Catches the model calling the write tool before a clear yes from the caller.
+    store = SQLiteCallerMemoryStore(tmp_path / "memory.sqlite3")
+    state = SessionState(
+        profile=ParticipantProfile(),
+        retriever=FakeRetriever([]),
+        caller_id="voice_assistant_user_learner-7",
+        memory_store=store,
+    )
+
+    with pytest.raises(ToolError, match="explicit yes"):
+        await FinEdAssistant().save_caller_memory(
+            context=_context(state),
+            name="Himanshu",
+            language_preference="english",
+            experience_level="beginner",
+            learning_goal="learn about SIPs",
+            consent_confirmed=False,
+        )
+
+    assert store.lookup("voice_assistant_user_learner-7") is None
+
+
+@pytest.mark.asyncio
+async def test_forget_tool_requires_consent_then_removes_memory(tmp_path) -> None:
+    # Catches a forget request deleting data without explicit confirmation.
+    store = SQLiteCallerMemoryStore(tmp_path / "memory.sqlite3")
+    state = SessionState(
+        profile=ParticipantProfile(),
+        retriever=FakeRetriever([]),
+        caller_id="voice_assistant_user_learner-7",
+        memory_store=store,
+    )
+    assistant = FinEdAssistant()
+    await assistant.save_caller_memory(
+        context=_context(state),
+        name="Himanshu",
+        language_preference="english",
+        experience_level="beginner",
+        learning_goal="learn about SIPs",
+        consent_confirmed=True,
+    )
+
+    with pytest.raises(ToolError, match="explicit yes"):
+        await assistant.forget_caller_memory(
+            context=_context(state), consent_confirmed=False
+        )
+    assert store.lookup("voice_assistant_user_learner-7") is not None
+
+    result = await assistant.forget_caller_memory(
+        context=_context(state), consent_confirmed=True
+    )
+
+    assert result == {"forgotten": True, "message": "Saved caller memory was deleted."}
+    assert store.lookup("voice_assistant_user_learner-7") is None

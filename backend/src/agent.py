@@ -26,7 +26,6 @@ from fined.agent import (
     FinEdAssistant,
     ParticipantProfile,
     SessionState,
-    build_greeting,
     build_system_prompt,
     parse_participant_profile,
 )
@@ -34,6 +33,7 @@ from fined.chat_model import create_gemini_llm
 from fined.knowledge.embeddings import GeminiEmbedder
 from fined.knowledge.index import KnowledgeIndex, UnavailableKnowledgeRetriever
 from fined.market_data.angel_one import create_market_data_provider
+from fined.memory import SQLiteCallerMemoryStore
 from fined.murf_falcon import install_current_websocket_serializer
 from fined.paper_trading import LiveKitPaperTradingBridge
 from fined.paper_trading.models import decode_paper_order_result
@@ -43,12 +43,26 @@ logger = logging.getLogger("agent")
 KNOWLEDGE_DIRECTORY = (
     Path(__file__).resolve().parents[1] / "data" / "knowledge" / "generated"
 )
+MEMORY_DATABASE_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "memory" / "fined.sqlite3"
+)
 KNOWLEDGE_UNAVAILABLE_WARNING = (
     "Knowledge index is unavailable; starting in evidence-unavailable mode"
 )
 PAPER_ORDER_RESULT_METHOD = "fined.paper.v1.order_result"
 PAPER_RESULT_ACK = '{"version":1,"paper":true,"acknowledged":true}'
 PAPER_RESULT_SENTENCE = "The browser confirmed the simulated paper result."
+MEMORY_GREETING_INSTRUCTIONS = (
+    "Look up this caller's saved learning memory, then greet them. "
+    "If found, use their name and one relevant saved learning fact. "
+    "If not found, introduce FinEd Saathi as an Indian markets "
+    "learning companion and ask what they want to understand. "
+    "State that this is education, not investment advice."
+)
+MEMORY_LOOKUP_TOOL_CHOICE = {
+    "type": "function",
+    "function": {"name": "lookup_caller_memory"},
+}
 
 # Preserve the starter's evaluation import and prompt seams.
 Assistant = FinEdAssistant
@@ -105,6 +119,8 @@ async def my_agent(ctx: JobContext) -> None:
     }
 
     load_dotenv(".env.local")
+    memory_path = Path(os.getenv("FINED_MEMORY_DB_PATH", str(MEMORY_DATABASE_PATH)))
+    memory_store = SQLiteCallerMemoryStore(memory_path)
     embedding_client = genai.Client()
     client_closed = False
     paper_result_rpc_registered = False
@@ -139,6 +155,8 @@ async def my_agent(ctx: JobContext) -> None:
             retriever=index,
             market_data=create_market_data_provider(),
             paper_trading=paper_trading,
+            caller_id=participant.identity,
+            memory_store=memory_store,
         )
         session = AgentSession[SessionState](
             userdata=state,
@@ -221,7 +239,10 @@ async def my_agent(ctx: JobContext) -> None:
                 ),
             ),
         )
-        await session.say(build_greeting(profile))
+        await session.generate_reply(
+            instructions=MEMORY_GREETING_INSTRUCTIONS,
+            tool_choice=MEMORY_LOOKUP_TOOL_CHOICE,
+        )
     except BaseException:
         try:
             unregister_paper_result_rpc_once()

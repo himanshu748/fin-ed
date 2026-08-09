@@ -24,6 +24,9 @@ const ALLOW_UNAUTHENTICATED_PUBLIC_ENDPOINT =
 const TOKEN_ERROR_MESSAGE = 'Unable to issue connection details.';
 const TOKEN_ERROR_LOG = 'Token request failed.';
 const NO_STORE_HEADERS = { 'Cache-Control': 'no-store' };
+const LEARNER_COOKIE = 'fined_learner_id';
+const LEARNER_COOKIE_MAX_AGE_SECONDS = 31_536_000;
+const LEARNER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const NEXT_FORWARDED_HEADERS = new Set([
   'x-forwarded-for',
   'x-forwarded-host',
@@ -66,9 +69,12 @@ export async function POST(req: Request) {
       { ignoreUnknownFields: true }
     );
 
-    // Generate participant token
+    // The server creates an anonymous learner ID once. Its HttpOnly cookie gives
+    // Day 4 memory a stable caller key without accepting identity in the body.
+    const savedLearnerId = readLearnerId(req.headers);
+    const learnerId = savedLearnerId ?? randomUUID();
     const participantName = 'user';
-    const participantIdentity = `voice_assistant_user_${randomUUID()}`;
+    const participantIdentity = `voice_assistant_user_${learnerId}`;
     const roomName = `voice_assistant_room_${randomUUID()}`;
 
     const participantToken = await createParticipantToken(
@@ -84,11 +90,42 @@ export async function POST(req: Request) {
       participantName,
       participantToken,
     };
-    return NextResponse.json(data, { headers: NO_STORE_HEADERS });
+    const headers: Record<string, string> = { ...NO_STORE_HEADERS };
+    if (savedLearnerId === undefined) {
+      headers['Set-Cookie'] = learnerCookie(learnerId, new URL(req.url).protocol === 'https:');
+    }
+    return NextResponse.json(data, { headers });
   } catch {
     console.error(TOKEN_ERROR_LOG);
     return tokenErrorResponse(500);
   }
+}
+
+function readLearnerId(headers: Headers): string | undefined {
+  const cookie = headers.get('cookie');
+  if (cookie === null || cookie.length === 0 || cookie.length > 4096) {
+    return undefined;
+  }
+  const matches = cookie
+    .split(';')
+    .map((part) => part.trim())
+    .filter((part) => part.startsWith(`${LEARNER_COOKIE}=`))
+    .map((part) => part.slice(LEARNER_COOKIE.length + 1));
+  if (matches.length !== 1 || !LEARNER_ID.test(matches[0])) {
+    return undefined;
+  }
+  return matches[0].toLowerCase();
+}
+
+function learnerCookie(learnerId: string, secure: boolean): string {
+  return [
+    `${LEARNER_COOKIE}=${learnerId}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    `Max-Age=${LEARNER_COOKIE_MAX_AGE_SECONDS}`,
+    ...(secure ? ['Secure'] : []),
+  ].join('; ');
 }
 
 function tokenErrorResponse(status: number) {

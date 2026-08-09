@@ -43,6 +43,12 @@ from fined.market_data.provider import (
     MarketDataUnavailableError,
     UnavailableMarketDataProvider,
 )
+from fined.memory import (
+    CallerMemoryInput,
+    CallerMemoryStore,
+    MemoryConsentRequiredError,
+    MemoryValidationError,
+)
 from fined.modes import LearningMode, parse_learning_mode
 from fined.paper_trading import (
     PAPER_DRAFT_LIFETIME,
@@ -106,6 +112,20 @@ class _UnavailablePaperTradingBridge:
         raise PaperTradingUIUnavailableError()
 
 
+class _UnavailableCallerMemoryStore:
+    def lookup(self, caller_id: str):
+        del caller_id
+        return None
+
+    def save(self, memory: CallerMemoryInput, *, consent_confirmed: bool):
+        del memory, consent_confirmed
+        raise MemoryValidationError("Caller memory is unavailable.")
+
+    def forget(self, caller_id: str, *, consent_confirmed: bool):
+        del caller_id, consent_confirmed
+        raise MemoryValidationError("Caller memory is unavailable.")
+
+
 @dataclass
 class SessionState:
     profile: ParticipantProfile
@@ -120,6 +140,10 @@ class SessionState:
         default_factory=dict
     )
     pending_paper_drafts: dict[str, PaperOrderDraft] = field(default_factory=dict)
+    caller_id: str = "anonymous"
+    memory_store: CallerMemoryStore = field(
+        default_factory=_UnavailableCallerMemoryStore
+    )
 
 
 def parse_participant_profile(metadata: str | None) -> ParticipantProfile:
@@ -158,6 +182,17 @@ A successful call completes at least one objective:
 - Help investigate a confusing charge or loss by identifying the correct record and collecting one missing input at a time.
 - Give a safe next step, official source, or escalation route without recommending an investment decision.
 - Stay on the selected learning mode unless the learner explicitly changes the topic.
+
+MEMORY
+- Call lookup_caller_memory at the start of every new session before greeting the caller.
+- If memory is found, welcome the caller by name and mention one relevant learning fact before asking whether to continue.
+- If memory is not found, greet them normally. Learn their name, language preference and two to four safe learning facts over the conversation.
+- Tell the caller exactly what you want to remember and ask for explicit consent immediately before every save.
+- Silence, ambiguity or earlier consent do not count. Call save_caller_memory only after the caller clearly says yes to that save.
+- If the caller says no, do not call the save tool. Continue without saving and do not pressure them.
+- Never save broker credentials, account numbers, PAN or Aadhaar. Never save holdings, trade history, income, bank details or financial IDs.
+- Use memory only for learning continuity such as experience level, learning goal, preferred explanation style and topic covered.
+- If the caller asks to be forgotten, explain that their saved learning memory will be deleted, ask for explicit consent and call forget_caller_memory only after a clear yes.
 
 KNOWLEDGE
 - Explain general Indian-market concepts and use the available deterministic calculator only for its supported cases.
@@ -284,6 +319,132 @@ class FinEdAssistant(Agent):
             strip_markdown_links_for_speech(text),
             model_settings,
         )
+
+    @function_tool(name="lookup_caller_memory")
+    async def lookup_caller_memory(
+        self,
+        context: RunContext[SessionState],
+    ) -> dict[str, object]:
+        """Look up the current caller's saved learning memory before greeting."""
+        try:
+            memory = context.userdata.memory_store.lookup(context.userdata.caller_id)
+        except Exception:
+            raise ToolError("Caller memory is temporarily unavailable.") from None
+        if memory is None:
+            return {
+                "found": False,
+                "message": "No saved caller memory was found.",
+            }
+        return {
+            "found": True,
+            "name": memory.name,
+            "language_preference": memory.language_preference,
+            "facts": memory.facts,
+            "last_interaction": memory.last_interaction.isoformat(),
+            "message": (
+                "Welcome the caller by name and continue from one relevant saved "
+                "learning fact. Do not claim to remember anything else."
+            ),
+        }
+
+    @function_tool(name="save_caller_memory")
+    async def save_caller_memory(
+        self,
+        context: RunContext[SessionState],
+        name: str,
+        language_preference: str,
+        experience_level: str,
+        learning_goal: str,
+        consent_confirmed: bool,
+        preferred_explanation_style: str | None = None,
+        topic_covered: str | None = None,
+    ) -> dict[str, object]:
+        """Save only consented learning continuity for the current caller.
+
+        Args:
+            name: The caller's preferred name.
+            language_preference: Exact value english, hindi or bilingual.
+            experience_level: A short self-described learning level.
+            learning_goal: A short educational goal without financial identifiers.
+            consent_confirmed: True only after a clear yes to this exact save.
+            preferred_explanation_style: Optional safe teaching-style preference.
+            topic_covered: Optional short concept covered in this conversation.
+        """
+        if consent_confirmed is not True:
+            raise ToolError(
+                "Do not save. Ask for an explicit yes immediately before saving."
+            )
+        facts = {
+            "experience_level": experience_level,
+            "learning_goal": learning_goal,
+        }
+        if preferred_explanation_style is not None:
+            facts["preferred_explanation_style"] = preferred_explanation_style
+        if topic_covered is not None:
+            facts["topic_covered"] = topic_covered
+        try:
+            memory = context.userdata.memory_store.save(
+                CallerMemoryInput(
+                    caller_id=context.userdata.caller_id,
+                    name=name,
+                    language_preference=language_preference,
+                    facts=facts,
+                ),
+                consent_confirmed=True,
+            )
+        except MemoryConsentRequiredError:
+            raise ToolError(
+                "Do not save. Ask for an explicit yes immediately before saving."
+            ) from None
+        except MemoryValidationError:
+            raise ToolError(
+                "That memory is not safe to store. Keep only the name, language "
+                "preference and two to four non-sensitive learning facts."
+            ) from None
+        except Exception:
+            raise ToolError("Caller memory is temporarily unavailable.") from None
+        return {
+            "saved": True,
+            "name": memory.name,
+            "language_preference": memory.language_preference,
+            "facts": memory.facts,
+            "message": "The caller's consented learning memory was saved.",
+        }
+
+    @function_tool(name="forget_caller_memory")
+    async def forget_caller_memory(
+        self,
+        context: RunContext[SessionState],
+        consent_confirmed: bool,
+    ) -> dict[str, object]:
+        """Delete the current caller's memory after explicit consent.
+
+        Args:
+            consent_confirmed: True only after a clear yes to delete saved memory.
+        """
+        if consent_confirmed is not True:
+            raise ToolError(
+                "Do not delete. Ask for an explicit yes immediately before deletion."
+            )
+        try:
+            forgotten = context.userdata.memory_store.forget(
+                context.userdata.caller_id,
+                consent_confirmed=True,
+            )
+        except MemoryConsentRequiredError:
+            raise ToolError(
+                "Do not delete. Ask for an explicit yes immediately before deletion."
+            ) from None
+        except Exception:
+            raise ToolError("Caller memory is temporarily unavailable.") from None
+        return {
+            "forgotten": forgotten,
+            "message": (
+                "Saved caller memory was deleted."
+                if forgotten
+                else "No saved caller memory was found."
+            ),
+        }
 
     @function_tool(name="search_market_knowledge")
     async def search_market_knowledge(

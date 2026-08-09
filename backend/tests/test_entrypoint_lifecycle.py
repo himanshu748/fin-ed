@@ -56,6 +56,7 @@ class FakeSession:
         self.userdata: object | None = None
         self.kwargs: dict[str, object] = {}
         self.spoken: list[str] = []
+        self.generated_replies: list[dict[str, object]] = []
 
     def on(self, event_name: str):
         assert event_name == "metrics_collected"
@@ -79,9 +80,13 @@ class FakeSession:
         self.spoken.append(greeting)
         if self.fail_at == "say":
             raise LifecycleAbort("say")
-        if len(self.spoken) == 1:
-            assert "Indian markets learning companion" in greeting
-            assert "track" not in greeting.casefold()
+
+    async def generate_reply(self, **kwargs: object) -> None:
+        self.events.append("generate_reply")
+        self.generated_replies.append(kwargs)
+        self.spoken.append("generated caller-memory greeting")
+        if self.fail_at == "generate_reply":
+            raise LifecycleAbort("generate_reply")
 
 
 class FakeLocalParticipant:
@@ -235,6 +240,11 @@ def _install_lifecycle_fakes(
 
     monkeypatch.setattr(entrypoint, "load_dotenv", load_environment)
     monkeypatch.setattr(entrypoint, "KNOWLEDGE_DIRECTORY", knowledge_directory)
+    monkeypatch.setattr(
+        entrypoint,
+        "MEMORY_DATABASE_PATH",
+        knowledge_directory.parent / "memory" / "fined.sqlite3",
+    )
     monkeypatch.setattr(entrypoint.logger, "info", log_info)
     monkeypatch.setattr(entrypoint.genai, "Client", client_factory)
     monkeypatch.setattr(entrypoint, "GeminiEmbedder", stage("embedder", object()))
@@ -281,7 +291,7 @@ def _install_lifecycle_fakes(
         "rpc_registration",
         "shutdown_registration",
         "start",
-        "say",
+        "generate_reply",
     ],
 )
 async def test_every_post_client_failure_closes_once_and_propagates(
@@ -294,7 +304,9 @@ async def test_every_post_client_failure_closes_once_and_propagates(
         await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
 
     assert harness.client.aio.close_attempts == 1
-    expected_unregistrations = int(fail_at in {"shutdown_registration", "start", "say"})
+    expected_unregistrations = int(
+        fail_at in {"shutdown_registration", "start", "generate_reply"}
+    )
     assert harness.events.count("rpc_unregistration") == expected_unregistrations
     for callback in harness.context.shutdown_callbacks:
         await callback("later shutdown")
@@ -350,7 +362,7 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
         "rpc_registration",
         "shutdown_registration",
         "start",
-        "say",
+        "generate_reply",
     ]
     assert harness.client.aio.close_attempts == 0
     assert harness.events.count("rpc_registration") == 1
@@ -359,6 +371,22 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
     state = harness.session.userdata
     assert state is not None
     assert state.profile.learning_mode is LearningMode.STOCKS  # type: ignore[union-attr]
+    assert state.caller_id == "learner-1"  # type: ignore[union-attr]
+    assert harness.session.generated_replies == [
+        {
+            "instructions": (
+                "Look up this caller's saved learning memory, then greet them. "
+                "If found, use their name and one relevant saved learning fact. "
+                "If not found, introduce FinEd Saathi as an Indian markets "
+                "learning companion and ask what they want to understand. "
+                "State that this is education, not investment advice."
+            ),
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "lookup_caller_memory"},
+            },
+        }
+    ]
     assert state.paper_trading is not None  # type: ignore[union-attr]
     dashboard_ack = await state.paper_trading.open_dashboard()  # type: ignore[union-attr]
     assert dashboard_ack.opened is True

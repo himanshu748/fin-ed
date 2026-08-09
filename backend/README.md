@@ -31,6 +31,7 @@ Complete `.env.local` with your own credentials:
 | `DEEPGRAM_API_KEY`   | Deepgram speech recognition                                    |
 | `GOOGLE_API_KEY`     | Gemini conversation and optional knowledge embeddings          |
 | `GEMINI_MODEL`       | Optional exact model selection; defaults to `gemini-3.6-flash` |
+| `FINED_MEMORY_DB_PATH` | Optional Day 4 SQLite path; defaults inside `data/memory`     |
 
 Do not commit `.env.local` or paste credentials into issues, logs, or docs.
 
@@ -105,6 +106,22 @@ and is not used for intraday or F&O charges. The canonical Day 1 prompt is:
 
 The remembered ₹50 stays unresolved until the user identifies whether it came
 from the contract note, ledger or available funds, or P&L.
+
+## Persistent caller memory
+
+The token endpoint creates one anonymous learner ID and keeps it in an HttpOnly
+browser cookie. The backend uses that ID only as the key for a local SQLite
+record. At the start of every call, Gemini must invoke `lookup_caller_memory`
+before it greets the learner.
+
+`save_caller_memory` requires an explicit yes for that exact save. It accepts a
+name, an English or Hindi preference and two to four allowlisted learning facts.
+The schema does not accept account or identity fields. `forget_caller_memory`
+also requires a clear yes before it deletes the record.
+
+The default database is `data/memory/fined.sqlite3`. It is excluded from Git and
+persists across agent restarts. Set `FINED_MEMORY_DB_PATH` only when a different
+private local path is needed.
 
 ## Knowledge-index behavior
 

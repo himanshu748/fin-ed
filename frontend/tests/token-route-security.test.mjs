@@ -272,8 +272,48 @@ test('localhost passes and uses collision-resistant participant and room identif
   assert.equal(body.roomName, `voice_assistant_room_${TEST_UUIDS[1]}`);
   assert.equal(harness.accessTokens[0].options.identity, `voice_assistant_user_${TEST_UUIDS[0]}`);
   assert.equal(harness.accessTokens[0].options.metadata, '{"learning_mode":"general"}');
+  assert.equal(
+    response.headers.get('set-cookie'),
+    `fined_learner_id=${TEST_UUIDS[0]}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`
+  );
   assert.equal(harness.remainingUuids.length, 0);
   assert.deepEqual(harness.errorLogs, []);
+});
+
+test('a server-issued learner cookie keeps caller identity stable across calls', async () => {
+  // Catches a fresh participant identity wiping Day 4 memory on every connection.
+  const harness = loadRoute({ uuidValues: [TEST_UUIDS[1]] });
+  const response = await harness.POST(
+    tokenRequest(
+      'http://127.0.0.1:3000/api/token',
+      {},
+      { cookie: `theme=light; fined_learner_id=${TEST_UUIDS[0]}` }
+    )
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(harness.accessTokens[0].options.identity, `voice_assistant_user_${TEST_UUIDS[0]}`);
+  assert.equal(response.headers.get('set-cookie'), null);
+  assert.equal(harness.remainingUuids.length, 0);
+});
+
+test('a malformed learner cookie is replaced instead of becoming an identity', async () => {
+  // Catches caller-controlled or delimiter-bearing identities entering LiveKit tokens.
+  const harness = loadRoute();
+  const response = await harness.POST(
+    tokenRequest(
+      'http://127.0.0.1:3000/api/token',
+      {},
+      { cookie: 'fined_learner_id=../../another-user' }
+    )
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(harness.accessTokens[0].options.identity, `voice_assistant_user_${TEST_UUIDS[0]}`);
+  assert.equal(
+    response.headers.get('set-cookie'),
+    `fined_learner_id=${TEST_UUIDS[0]}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`
+  );
 });
 
 test('only the exact unsafe demo opt-in permits a proxied public production request', async () => {

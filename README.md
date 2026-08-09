@@ -2,7 +2,7 @@
 
 FinEd Saathi is a voice-first English and Hindi tutor for beginner concepts in
 the Indian financial market. It follows the language style the user chooses,
-including user-led code-mixing. It is the **Financial Services** track project for Days 1 and 2 of
+including user-led code-mixing. It is the **Financial Services** track project for Days 1 to 4 of
 **10 Days of Voice Agents — VoiceForBharat Edition**.
 
 The agent explains products, fees, taxes, and risks; it does not place trades or
@@ -15,7 +15,7 @@ FinEd separates price profit and loss from transaction costs, treats the
 remembered ₹50 as unresolved, and asks where that amount appeared before trying
 to reconcile it.
 
-## Days 1 and 2 build
+## Days 1 to 4 build
 
 - Eight learning modes: Stocks, Mutual Funds & SIPs, ETFs, Gold, F&O, IPOs,
   Bonds, and Ask Anything.
@@ -28,6 +28,11 @@ to reconcile it.
   (`en-IN`).
 - Indian locale metadata and transcript-time formatting (`en-IN`).
 - LiveKit Cloud for the real-time browser-to-agent session.
+- A polished Day 3 frontend with visible voice states, responsive controls,
+  accessible motion and an integrated paper-practice workspace.
+- Day 4 persistent caller memory backed by SQLite and a server-issued anonymous
+  learner ID that remains stable across calls.
+- Tool-based lookup, consent-gated saving and a caller-controlled forget tool.
 
 The F&O mode teaches mechanics and risk only. It does not provide calls or a
 strategy for a live trade.
@@ -43,6 +48,20 @@ strategy for a live trade.
 - Every refusal states the boundary, gives a short reason, and offers a safe
   educational, official-support, professional, or SEBI-registered next step.
 - Ten completed adversarial checks are recorded in [RED_TEAM.md](RED_TEAM.md).
+
+### Day 4 privacy and memory
+
+- Every call begins with the agent invoking `lookup_caller_memory` before it
+  greets the learner.
+- A new learner can choose to save their name, English or Hindi preference and
+  two to four learning facts such as experience level or a topic covered.
+- The save tool requires a fresh explicit yes. Silence, ambiguous language or a
+  previous yes cannot authorize a later write.
+- Broker credentials, account numbers, PAN, Aadhaar, holdings, income and bank
+  details are outside the memory schema.
+- Memory lives in `backend/data/memory/fined.sqlite3` by default. The database is
+  ignored by Git and survives a full agent restart.
+- A consent-gated `forget_caller_memory` tool deletes the learner's record.
 
 ## Conversation flow
 
@@ -133,6 +152,17 @@ the configured LiveKit Cloud project; a local LiveKit server is not required.
 4. Keep OTPs, PINs, passwords, account numbers, and other real private data out
    of the recording.
 5. Capture both the transcript and Nikhil's Murf Falcon 2 audio.
+
+## Day 4 recording check
+
+1. Start a first call in any learning mode and confirm that the agent does not
+   know your name.
+2. Share your preferred name, language, experience level and learning goal.
+3. When the agent asks whether it may remember those details, say yes clearly.
+4. End the call, disconnect fully and start a second call from the same browser.
+5. Record the second greeting using your name and one saved learning fact.
+6. Do not share account numbers, PAN, Aadhaar, broker credentials or real
+   financial details in the recording.
 
 ## Knowledge-index behavior
 

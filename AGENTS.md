@@ -29,6 +29,11 @@ and updates its tests:
 - Gemini 3.x uses minimal thinking, Gemini 2.5 uses a zero thinking budget, and
   all choices cap output at 320 tokens. Keep provider errors behind the fixed
   safe error boundary.
+- Day 4 caller memory uses a server-issued anonymous browser ID and SQLite. The
+  agent must look memory up through its tool before greeting. Every save and
+  forget operation requires fresh explicit consent. Never add account numbers,
+  PAN, Aadhaar, broker credentials, holdings, income, bank details or financial
+  IDs to the memory schema.
 
 ## Repository map
 
@@ -40,6 +45,7 @@ fin-ed/
 │   ├── src/fined/calculator.py       # Delivery-charge calculation
 │   ├── src/fined/chat_model.py       # Gemini policy
 │   ├── src/fined/provider_safety.py  # Provider-error sanitization
+│   ├── src/fined/memory.py           # Consent-gated SQLite caller memory
 │   ├── src/fined/knowledge/          # Ingestion and retrieval
 │   ├── data/knowledge/sources.json   # Curated source manifest
 │   └── tests/                        # Unit, contract, lifecycle, and eval tests
