@@ -22,6 +22,11 @@ class LifecycleAbort(BaseException):
     """Sentinel proving BaseException cleanup does not suppress the original failure."""
 
 
+def test_development_worker_keeps_one_job_process_warm() -> None:
+    """Prevent the first caller from waiting for a cold Python job process."""
+    assert entrypoint.server._num_idle_processes == 1
+
+
 class FakeAsyncClient:
     def __init__(self, events: list[str]) -> None:
         self.events = events

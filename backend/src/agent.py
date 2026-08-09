@@ -98,7 +98,7 @@ def build_caller_greeting(
 Assistant = FinEdAssistant
 SYSTEM_PROMPT = build_system_prompt(ParticipantProfile())
 
-server = AgentServer()
+server = AgentServer(num_idle_processes=1)
 
 
 def prewarm(proc: JobProcess) -> None:
