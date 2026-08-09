@@ -160,7 +160,17 @@ The optional quote gateway uses Angel One SmartAPI's official LTP endpoint. Add
 all five `ANGEL_ONE_*` values shown in `.env.example` to `.env.local`; when any
 value is absent or invalid, quote lookup fails closed without affecting the
 voice tutor. Access tokens expire according to the broker's authentication
-policy and must be refreshed outside FinEd Saathi.
+policy. Generate the current token locally from the `backend` directory:
+
+```bash
+uv run python -m fined.market_data.session_setup
+```
+
+The command reads the API key and network headers from `.env.local`, prompts
+without echo for the Angel One PIN and TOTP, sends them directly to Angel One,
+and atomically saves only the returned access token. It never stores the client
+ID, PIN, TOTP, refresh token, or feed token. Restart the agent worker after a
+successful refresh.
 
 Run the local stdio MCP server with:
 
