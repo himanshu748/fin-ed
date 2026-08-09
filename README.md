@@ -1,188 +1,204 @@
 # FinEd Saathi
 
-FinEd Saathi is a voice-first English and Hindi tutor for beginner concepts in
-the Indian financial market. It follows the language style the user chooses,
-including user-led code-mixing. It is the **Financial Services** track project for Days 1 to 4 of
-**10 Days of Voice Agents — VoiceForBharat Edition**.
+FinEd Saathi is a voice-first financial literacy tutor for Indian market concepts. It listens in English, Hindi or both then replies in the learner's language style through Murf Falcon 2 and the Indian voice Nikhil.
 
-The agent explains products, fees, taxes, and risks; it does not place trades or
-give personalized investment advice. Its first worked example starts from a real
-beginner question:
+The project is built for the Financial Services track of **10 Days of Voice Agents - VoiceForBharat Edition**. It teaches market mechanics, charges, taxes and risks. It does not recommend securities, promise returns or place real trades.
 
-> Maine ₹6 mein stock liya, ₹6 mein hi bech diya, phir bhi mujhe ₹50 ka loss hua.
+## What works today
 
-FinEd separates price profit and loss from transaction costs, treats the
-remembered ₹50 as unresolved, and asks where that amount appeared before trying
-to reconcile it.
+- Eight learning modes: Stocks, Mutual Funds & SIPs, ETFs, Gold, F&O, IPOs, Bonds and Ask Anything
+- Deepgram Nova-3 multilingual speech recognition
+- Google Gemini conversation and tool use with a strict model allowlist
+- Murf Falcon 2 speech using `Nikhil`, `Conversational` and locale `en-IN`
+- LiveKit Cloud transport with a prewarmed Python worker
+- Optional Angel One SmartAPI quotes through read-only tools
+- A browser-owned paper trading ledger with ₹1,00,000 virtual cash
+- Voice tools that can open the paper dashboard, prepare a simulated order and read the paper portfolio
+- Visible session IDs with separate transcript history for each meaningful session
+- Consent-gated caller memory backed by SQLite
+- An optional local knowledge index with fail-closed evidence behavior
+- Guardrails for credentials, personalised recommendations, guaranteed outcomes, wrongdoing and prompt extraction
+- An accessible responsive interface with reduced-motion support
 
-## Days 1 to 4 build
+## Safety model
 
-- Eight learning modes: Stocks, Mutual Funds & SIPs, ETFs, Gold, F&O, IPOs,
-  Bonds, and Ask Anything.
-- A responsive Next.js interface with a visible ₹6 delivery-charge illustration
-  and an education-only F&O warning.
-- Deepgram Nova-3 multilingual speech recognition with 100 ms endpointing for
-  English, Hindi, and user-led code-switching.
-- Google Gemini for the conversation and tool calls.
-- Murf Falcon 2 speech with `Nikhil`, `Conversational`, and Indian English
-  (`en-IN`).
-- Indian locale metadata and transcript-time formatting (`en-IN`).
-- LiveKit Cloud for the real-time browser-to-agent session.
-- A polished Day 3 frontend with visible voice states, responsive controls,
-  accessible motion and an integrated paper-practice workspace.
-- Day 4 persistent caller memory backed by SQLite and a server-issued anonymous
-  learner ID that remains stable across calls.
-- Tool-based lookup, consent-gated saving and a caller-controlled forget tool.
+FinEd Saathi is an educational product. It never asks for a broker password, PIN, OTP, PAN, Aadhaar or bank details. Angel One credentials stay in the backend environment and are never sent to the browser.
 
-The F&O mode teaches mechanics and risk only. It does not provide calls or a
-strategy for a live trade.
+Paper orders are simulated. A learner must review and confirm each draft in the browser. No broker order API is called and no real money is used.
 
-### Day 2 persona and guardrails
+The F&O mode explains mechanics, margin and loss risk. It does not provide signals or live strategies. Personalised decisions belong with a SEBI-registered investment adviser.
 
-- A named Indian financial-literacy tutor with explicit identity, objectives,
-  knowledge boundaries, speaking style, and an education-only greeting.
-- English input receives English, Hindi input receives Devanagari Hindi, and a
-  code-mixed turn receives a matching code-mixed response.
-- A deterministic pre-LLM layer stops credentials, personalised investment
-  recommendations, guaranteed outcomes, wrongdoing, and prompt extraction.
-- Every refusal states the boundary, gives a short reason, and offers a safe
-  educational, official-support, professional, or SEBI-registered next step.
-- Ten completed adversarial checks are recorded in [RED_TEAM.md](RED_TEAM.md).
+Ten adversarial checks are documented in [RED_TEAM.md](RED_TEAM.md).
 
-### Day 4 privacy and memory
-
-- Every call begins with the agent invoking `lookup_caller_memory` before it
-  greets the learner.
-- A new learner can choose to save their name, English or Hindi preference and
-  two to four learning facts such as experience level or a topic covered.
-- The save tool requires a fresh explicit yes. Silence, ambiguous language or a
-  previous yes cannot authorize a later write.
-- Broker credentials, account numbers, PAN, Aadhaar, holdings, income and bank
-  details are outside the memory schema.
-- Memory lives in `backend/data/memory/fined.sqlite3` by default. The database is
-  ignored by Git and survives a full agent restart.
-- A consent-gated `forget_caller_memory` tool deletes the learner's record.
-
-## Conversation flow
+## Architecture
 
 ```text
-Browser microphone
+Browser microphone or typed question
   -> LiveKit Cloud
-  -> Deepgram STT
-  -> Gemini + FinEd tools
-  -> Murf Falcon 2 TTS
+  -> Deepgram Nova-3 STT
+  -> Gemini + FinEd tools and guardrails
+  -> Murf Falcon 2 TTS with Nikhil
   -> LiveKit Cloud
-  -> Browser audio and transcript
+  -> Browser audio, transcript and session archive
+
+Optional tool paths
+  -> Angel One SmartAPI for read-only NSE quotes
+  -> Browser paper ledger for simulated orders
+  -> SQLite for consented caller memory
+  -> Local knowledge index for cited educational evidence
 ```
 
-## Run locally with LiveKit Cloud
+## Run locally
 
-### Prerequisites
+### Requirements
 
-- Python 3.10–3.14
+- Python 3.10 to 3.14
 - [uv](https://docs.astral.sh/uv/)
-- Node.js and pnpm 9
-- LiveKit Cloud, Murf, Deepgram, and Google AI API credentials
+- Node.js
+- pnpm 9
+- LiveKit Cloud, Murf, Deepgram and Google AI credentials
 
-### 1. Configure the environment
+Angel One SmartAPI credentials are optional. The voice tutor still works when live quotes are unavailable.
+
+### 1. Configure environment files
 
 ```bash
 cp backend/.env.example backend/.env.local
 cp frontend/.env.example frontend/.env.local
 ```
 
-Fill the templates locally. The backend needs `LIVEKIT_URL`,
-`LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `MURF_API_KEY`, `DEEPGRAM_API_KEY`, and
-`GOOGLE_API_KEY`. The frontend needs the same LiveKit project credentials and
-`AGENT_NAME=my-agent`.
+The backend requires:
+
+```text
+LIVEKIT_URL
+LIVEKIT_API_KEY
+LIVEKIT_API_SECRET
+MURF_API_KEY
+DEEPGRAM_API_KEY
+GOOGLE_API_KEY
+```
+
+The frontend requires the same LiveKit project credentials plus:
+
+```text
+AGENT_NAME=my-agent
+```
 
 Never commit either `.env.local` file.
 
-### 2. Install dependencies and voice models
+### 2. Install dependencies and local voice models
 
 ```bash
 cd backend
 uv sync
-uv run python src/agent.py download-files
+uv run -m livekit.agents download-files
 ```
+
+The backend pins LiveKit Agents `1.6.6` and LiveKit RTC `1.1.13`. It uses the current built-in local `v1-mini` turn detector instead of the deprecated turn detector plugin.
 
 ```bash
 cd frontend
 pnpm install
 ```
 
-### 3. Start both processes
+### 3. Start the voice worker
 
-Backend terminal:
+For a stable demo or recording:
 
 ```bash
 cd backend
+uv run dotenv -f .env.local run -- python src/agent.py start
+```
+
+The production-mode worker listens for health checks on port `8081`, keeps one process warm and registers as `my-agent`.
+
+Use `dev` instead of `start` only when you need backend file watching:
+
+```bash
 uv run dotenv -f .env.local run -- python src/agent.py dev
 ```
 
-Frontend terminal:
+Restart the worker after changing Python dependencies. Do not rely on hot reload after replacing the LiveKit SDK inside a running process.
+
+### 4. Start the frontend
 
 ```bash
 cd frontend
 pnpm dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000), select a learning mode,
-choose **Talk to FinEd Saathi**, and allow microphone access. Both processes use
-the configured LiveKit Cloud project; a local LiveKit server is not required.
+Open [http://127.0.0.1:3000](http://127.0.0.1:3000). If port 3000 is occupied, use:
 
-## Day 1 recording check
+```bash
+pnpm dev --port 3001
+```
 
-1. Keep the backend and frontend running and select **Stocks**.
-2. Start the voice session and say that your track is **Financial Services**.
-3. Ask: “Maine ₹6 mein stock liya, ₹6 mein hi bech diya, phir bhi mujhe ₹50 ka
-   loss hua.”
-4. Capture the transcript and Nikhil's spoken response in the screen recording.
-5. Confirm the recording contains a connected session, your voice, and the
-   agent's audio before posting it for the challenge.
+Then open [http://127.0.0.1:3001](http://127.0.0.1:3001), select a learning mode, choose **Talk to FinEd Saathi** and allow microphone access.
 
-## Day 2 recording check
+## Optional Angel One live quotes
 
-1. Start in **Stocks** mode and let the agent introduce itself and its
-   education-only boundary.
-2. Ask the ₹6/₹50 question in Hindi or code-mixed speech, then ask one follow-up
-   in English to demonstrate user-led language matching.
-3. Ask for a “guaranteed F&O strategy and best stock” and record the refusal,
-   risk explanation, and SEBI-registered adviser escalation.
-4. Keep OTPs, PINs, passwords, account numbers, and other real private data out
-   of the recording.
-5. Capture both the transcript and Nikhil's Murf Falcon 2 audio.
+Create an Angel One SmartAPI app of type **Trading**. The app type provides the authenticated market data endpoints used by this project. FinEd only calls quote and instrument search paths. It does not call broker order paths.
 
-## Day 4 recording check
+Add these values to `backend/.env.local`:
 
-1. Start a first call in any learning mode and confirm that the agent does not
-   know your name.
-2. Share your preferred name, language, experience level and learning goal.
-3. When the agent asks whether it may remember those details, say yes clearly.
-4. End the call, disconnect fully and start a second call from the same browser.
-5. Record the second greeting using your name and one saved learning fact.
-6. Do not share account numbers, PAN, Aadhaar, broker credentials or real
-   financial details in the recording.
+```text
+ANGEL_ONE_API_KEY
+ANGEL_ONE_ACCESS_TOKEN
+ANGEL_ONE_CLIENT_LOCAL_IP
+ANGEL_ONE_CLIENT_PUBLIC_IP
+ANGEL_ONE_MAC_ADDRESS
+```
 
-## Knowledge-index behavior
+The access token must be current. If a credential is missing, expired or rejected, quote tools fail closed and say live data is unavailable. The rest of the voice session remains usable.
 
-The curated knowledge index is optional for the Day 1 conversation. If
-`backend/data/knowledge/generated/current` has never been published, the backend
-starts in a fixed evidence-unavailable mode. Voice interaction remains
-available, while a knowledge search returns no evidence and the agent must say
-that the fact could not be verified instead of inventing an answer.
+Market data availability depends on Angel One access, exchange hours and the active account's entitlements. Every accepted quote is returned with its provider and exchange timestamp. Paper order drafts expire 30 seconds after the quote.
 
-If `current` exists but is broken, malformed, or points to corrupt artifacts,
-startup fails. A damaged index is never silently treated as an intentionally
-absent index.
+## Paper trading
+
+The paper portfolio starts with ₹1,00,000 in virtual cash and lives in browser storage. It supports simulated NSE equity buys and sells with:
+
+- Whole positive quantities
+- Fresh Angel One quote validation
+- Charge estimation based on the bundled Angel One schedules
+- Cash and holding checks
+- A 30-second review window
+- Explicit browser confirmation
+- Holdings, available cash and fill history
+- A reset control that restores the original virtual balance
+
+Ask the agent to open paper trading or prepare a paper order. The LiveKit RPC bridge opens the dashboard and transfers the draft to the browser. The browser remains the source of truth for the simulated ledger.
+
+## Session history and memory
+
+These are separate features:
+
+- **Session history** stores meaningful transcripts in browser storage under their visible session IDs. Open **Sessions** during a call to switch between archived conversations. Empty connection attempts are not saved.
+- **Caller memory** stores only consented profile facts in `backend/data/memory/fined.sqlite3`. A learner can ask what is remembered or ask FinEd to forget it.
+
+The anonymous learner ID remains stable in the same browser. Clearing browser storage creates a new local identity and removes browser session history. The SQLite database is ignored by Git and survives agent restarts.
+
+## Knowledge index
+
+The curated knowledge index is optional. If `backend/data/knowledge/generated/current` has never been published, the agent starts in evidence-unavailable mode and keeps voice interaction available. A knowledge search then returns no evidence instead of inventing an answer.
+
+If `current` exists but is broken, malformed or points to corrupt artifacts, startup fails. A damaged index is never treated as an intentionally absent index.
 
 ## Gemini model policy
 
-The configured default is `gemini-3.6-flash`. `GEMINI_MODEL` may explicitly
-select `gemini-3.5-flash-lite` or `gemini-2.5-flash`; other values fail safely,
-and the app does not silently switch models. Gemini 3.x uses minimal thinking,
-Gemini 2.5 uses a zero thinking budget, and every allowed model caps output at
-320 tokens. Availability and quotas depend on the active Google project.
+The configured default is `gemini-3.6-flash`. `GEMINI_MODEL` can explicitly select `gemini-3.5-flash-lite` or `gemini-2.5-flash`. Other values fail safely and the app does not silently switch models.
+
+Gemini 3.x uses minimal thinking. Gemini 2.5 uses a zero thinking budget. Every allowed model caps output at 320 tokens. Availability and quota depend on the active Google project.
+
+## Recording checklist
+
+1. Start the backend in `start` mode and wait for `registered worker` in the log.
+2. Start the frontend and open the active port.
+3. Choose a learning mode then start a voice session.
+4. Confirm the UI shows a session ID and the state changes to **Listening** or **Speaking**.
+5. Ask one Indian market concept such as "What is an ETF?"
+6. Ask FinEd to open paper trading and prepare one simulated order if live quotes are configured.
+7. Show the transcript, cited sources, Nikhil's audio and the education-only boundary.
+8. Keep real credentials and financial identifiers out of the recording.
 
 ## Verify the project
 
@@ -195,7 +211,7 @@ uv run ruff check .
 uv run ruff format --check .
 ```
 
-Frontend contract tests, types, formatting, and production build:
+Frontend contract tests, types, formatting and production build:
 
 ```bash
 cd frontend
@@ -205,37 +221,38 @@ pnpm format:check
 pnpm build
 ```
 
-`backend/tests/test_agent.py` is a separate provider-backed evaluation suite and
-requires LiveKit Inference access.
+`backend/tests/test_agent.py` is a provider-backed evaluation suite and requires LiveKit Inference access.
 
 ## Project layout
 
 ```text
 fin-ed/
 ├── backend/
-│   ├── src/agent.py                  # LiveKit session and STT/LLM/TTS pipeline
-│   ├── src/fined/                    # Prompt, modes, calculator, safety, knowledge
+│   ├── src/agent.py                  # LiveKit session and voice pipeline
+│   ├── src/fined/                    # Tutor, tools, safety, memory and market data
 │   ├── data/knowledge/               # Source manifest and ignored generated index
-│   └── tests/                        # Deterministic tests and provider-backed evals
+│   └── tests/                        # Deterministic tests and provider evaluations
 ├── frontend/
 │   ├── app/                          # Next.js routes and token endpoint
-│   ├── components/app/               # FinEd landing and live-session interface
-│   ├── lib/learning-modes.ts         # Shared eight-mode browser contract
-│   └── tests/                        # Design and participant-metadata contracts
-├── RED_TEAM.md                       # Ten completed Day 2 adversarial checks
+│   ├── components/app/               # Landing page and live voice workspace
+│   ├── components/paper-trading/     # Simulated portfolio interface
+│   ├── lib/voice-session-history.ts  # Per-session transcript archive
+│   └── tests/                        # UI, motion and contract tests
+├── RED_TEAM.md                       # Day 2 adversarial checks
 └── docs/DESIGN.md                    # Finance product design system
 ```
 
-More detail is available in the [backend README](backend/README.md),
-[frontend README](frontend/README.md), and [design system](docs/DESIGN.md).
+More detail is available in the [backend README](backend/README.md), [frontend README](frontend/README.md) and [design system](docs/DESIGN.md).
 
 ## References
 
 - [Murf Falcon 2](https://murf.ai/api/docs/text-to-speech-models/falcon-2)
 - [Murf voice library](https://murf.ai/api/docs/voices-styles/voice-library)
 - [LiveKit Agents](https://docs.livekit.io/agents/)
+- [LiveKit server options](https://docs.livekit.io/agents/server/options/)
 - [Gemini model catalog](https://ai.google.dev/gemini-api/docs/models)
 - [Deepgram Nova-3](https://developers.deepgram.com/docs/models-languages-overview)
+- [Angel One SmartAPI](https://smartapi.angelone.in/)
 
 ## License
 
