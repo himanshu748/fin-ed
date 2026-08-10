@@ -46,6 +46,7 @@ PROVIDER_NAME = "Angel One SmartAPI"
 MAX_RESPONSE_BYTES = 256 * 1024
 DEFAULT_MAX_AGE_SECONDS = 120
 HISTORICAL_WINDOW_DAYS = 14
+READ_ONLY_SEARCH_ATTEMPTS = 2
 _MAC_ADDRESS = re.compile(r"^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 _INDIA_TIME = ZoneInfo("Asia/Kolkata")
 _ReadOnlyRequest = tuple[str, Mapping[str, object]]
@@ -110,30 +111,35 @@ class AngelOneMarketDataProvider:
                 for exchange in ("NSE", "BSE")
             )
         )
-        instruments: list[MarketInstrument] = []
-        try:
-            # Angel One names this read-only instrument lookup under order/v1.
-            responses = await self._post_read_only_batch(
-                tuple(
-                    (
-                        SEARCH_SCRIP_ENDPOINT,
-                        {
-                            "exchange": search_request.exchange,
-                            "searchscrip": search_request.query,
-                        },
+        for attempt in range(READ_ONLY_SEARCH_ATTEMPTS):
+            instruments: list[MarketInstrument] = []
+            try:
+                # Angel One names this read-only instrument lookup under order/v1.
+                responses = await self._post_read_only_batch(
+                    tuple(
+                        (
+                            SEARCH_SCRIP_ENDPOINT,
+                            {
+                                "exchange": search_request.exchange,
+                                "searchscrip": search_request.query,
+                            },
+                        )
+                        for search_request in search_requests
                     )
-                    for search_request in search_requests
                 )
-            )
-            for search_request, response in zip(
-                search_requests, responses, strict=True
-            ):
-                instruments.extend(
-                    self._parse_instruments(response.json(), search_request)
-                )
-        except Exception:
-            raise MarketDataUnavailableError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
-        return self._rank_instruments(instruments, request)
+                for search_request, response in zip(
+                    search_requests, responses, strict=True
+                ):
+                    instruments.extend(
+                        self._parse_instruments(response.json(), search_request)
+                    )
+                return self._rank_instruments(instruments, request)
+            except Exception:
+                if attempt + 1 == READ_ONLY_SEARCH_ATTEMPTS:
+                    raise MarketDataUnavailableError(
+                        MARKET_DATA_UNAVAILABLE_MESSAGE
+                    ) from None
+        raise MarketDataUnavailableError(MARKET_DATA_UNAVAILABLE_MESSAGE)
 
     async def get_historical_prices(
         self, request: HistoricalPriceRequest

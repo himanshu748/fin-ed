@@ -486,6 +486,54 @@ async def test_search_scrip_posts_only_to_read_only_endpoint(
 
 
 @pytest.mark.asyncio
+async def test_search_scrip_retries_one_transient_provider_rejection() -> None:
+    # Catches a single transient Angel rejection ending an otherwise valid voice turn.
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "status": False,
+                    "message": "temporary provider failure",
+                    "errorcode": "TRANSIENT",
+                    "data": None,
+                },
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            json={
+                "status": True,
+                "message": "SUCCESS",
+                "errorcode": "",
+                "data": [
+                    {
+                        "exchange": "NSE",
+                        "tradingsymbol": "RELIANCE-EQ",
+                        "symboltoken": "2885",
+                    }
+                ],
+            },
+            request=request,
+        )
+
+    provider = AngelOneMarketDataProvider(
+        config(), transport=httpx.MockTransport(handler)
+    )
+
+    results = await provider.search_instruments(
+        InstrumentSearchRequest(query="RELIANCE", exchange="NSE")
+    )
+
+    assert attempts == 2
+    assert [item.trading_symbol for item in results] == ["RELIANCE-EQ"]
+
+
+@pytest.mark.asyncio
 async def test_search_scrip_without_exchange_queries_nse_and_bse_and_merges_results(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
