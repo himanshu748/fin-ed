@@ -19,12 +19,12 @@ def chat_model_module() -> ModuleType:
         pytest.fail("fined.chat_model is required", pytrace=False)
 
 
-def test_default_model_is_current_stable_flash_with_voice_limits() -> None:
+def test_default_model_is_available_flash_lite_with_voice_limits() -> None:
     chat_model = chat_model_module()
 
     config = chat_model.resolve_gemini_chat_model({})
 
-    assert config.model == "gemini-3.6-flash"
+    assert config.model == "gemini-3.5-flash-lite"
     assert config.thinking_config == {"thinking_level": "minimal"}
     assert config.max_output_tokens == 320
 

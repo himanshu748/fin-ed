@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import UTC, datetime
@@ -11,6 +12,7 @@ from livekit import rtc
 from livekit.agents import (
     AgentServer,
     AgentSession,
+    ErrorEvent,
     JobContext,
     JobProcess,
     MetricsCollectedEvent,
@@ -53,6 +55,9 @@ KNOWLEDGE_UNAVAILABLE_WARNING = (
 PAPER_ORDER_RESULT_METHOD = "fined.paper.v1.order_result"
 PAPER_RESULT_ACK = '{"version":1,"paper":true,"acknowledged":true}'
 PAPER_RESULT_SENTENCE = "The browser confirmed the simulated paper result."
+LLM_UNAVAILABLE_SENTENCE = (
+    "The language model is temporarily busy. Please wait a moment, then ask again."
+)
 
 
 def build_caller_greeting(
@@ -155,6 +160,7 @@ async def my_agent(ctx: JobContext) -> None:
     client_closed = False
     paper_result_rpc_registered = False
     paper_result_rpc_unregistered = False
+    llm_fallback_task: asyncio.Task[None] | None = None
 
     async def close_client_once() -> None:
         nonlocal client_closed
@@ -216,6 +222,25 @@ async def my_agent(ctx: JobContext) -> None:
             metrics.log_metrics(event.metrics, logger=logger)
             usage.collect(event.metrics)
             _log_latency_components(event.metrics)
+
+        @session.on("error")
+        def on_error(event: ErrorEvent) -> None:
+            nonlocal llm_fallback_task
+            error = event.error
+            if (
+                getattr(error, "type", None) != "llm_error"
+                or getattr(error, "recoverable", True)
+                or (llm_fallback_task is not None and not llm_fallback_task.done())
+            ):
+                return
+
+            async def speak_llm_fallback() -> None:
+                try:
+                    await session.say(LLM_UNAVAILABLE_SENTENCE)
+                except Exception:
+                    logger.warning("LLM fallback speech failed")
+
+            llm_fallback_task = asyncio.create_task(speak_llm_fallback())
 
         async def on_paper_order_result(data: rtc.RpcInvocationData) -> str:
             if data.caller_identity != participant.identity:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -63,14 +64,21 @@ class FakeSession:
         self.kwargs: dict[str, object] = {}
         self.spoken: list[str] = []
         self.generated_replies: list[dict[str, object]] = []
+        self.callbacks: dict[str, list[Any]] = {}
 
     def on(self, event_name: str):
-        assert event_name == "metrics_collected"
-        self.events.append("metrics_registration")
-        if self.fail_at == "metrics_registration":
-            raise LifecycleAbort("metrics_registration")
+        assert event_name in {"metrics_collected", "error"}
+        registration_name = (
+            "metrics_registration"
+            if event_name == "metrics_collected"
+            else "error_registration"
+        )
+        self.events.append(registration_name)
+        if self.fail_at == registration_name:
+            raise LifecycleAbort(registration_name)
 
-        def register(callback: object) -> object:
+        def register(callback: Any) -> Any:
+            self.callbacks.setdefault(event_name, []).append(callback)
             return callback
 
         return register
@@ -303,6 +311,7 @@ def _install_lifecycle_fakes(
         "session",
         "usage",
         "metrics_registration",
+        "error_registration",
         "rpc_registration",
         "shutdown_registration",
         "start",
@@ -372,6 +381,7 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
         "session",
         "usage",
         "metrics_registration",
+        "error_registration",
         "rpc_registration",
         "shutdown_registration",
         "start",
@@ -400,7 +410,7 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
         == "learner-1"
     )
     assert harness.llm_kwargs == {
-        "model": "gemini-3.6-flash",
+        "model": "gemini-3.5-flash-lite",
         "thinking_config": {"thinking_level": "minimal"},
         "max_output_tokens": 320,
     }
@@ -426,6 +436,35 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
     assert entrypoint.PAPER_ORDER_RESULT_METHOD not in (
         harness.context.local_participant.rpc_methods
     )
+
+
+@pytest.mark.asyncio
+async def test_exhausted_llm_retries_speak_one_safe_fallback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    harness = _install_lifecycle_fakes(monkeypatch, None, tmp_path / "generated")
+    await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
+
+    callback = harness.session.callbacks["error"][0]
+    retrying = SimpleNamespace(
+        error=SimpleNamespace(type="llm_error", recoverable=True)
+    )
+    exhausted = SimpleNamespace(
+        error=SimpleNamespace(type="llm_error", recoverable=False)
+    )
+
+    callback(retrying)
+    callback(exhausted)
+    callback(exhausted)
+    await asyncio.sleep(0)
+
+    assert harness.session.spoken == [
+        "Hello, I'm FinEd Saathi, your Indian markets learning companion. "
+        "I can help you learn about Stocks in English, Hindi, or both. "
+        "I provide education, not investment advice. "
+        "What would you like to understand today?",
+        "The language model is temporarily busy. Please wait a moment, then ask again.",
+    ]
 
 
 def test_returning_caller_greeting_uses_one_safe_learning_fact() -> None:

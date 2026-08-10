@@ -12,12 +12,13 @@ from fined.provider_safety import ProviderErrorSanitizingLLM, sanitize_provider_
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_GEMINI_MODEL = "gemini-3.6-flash"
+DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite"
 GEMINI_MAX_OUTPUT_TOKENS = 320
 LIVEKIT_MAX_RETRY = DEFAULT_API_CONNECT_OPTIONS.max_retry
 SUPPORTED_GEMINI_MODELS = frozenset(
     {
         DEFAULT_GEMINI_MODEL,
+        "gemini-3.6-flash",
         "gemini-3.5-flash-lite",
         "gemini-2.5-flash",
     }

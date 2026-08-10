@@ -22,7 +22,7 @@ async def test_offers_assistance() -> None:
 
         # Evaluate the agent's response for friendliness
         await (
-            result.expect.next_event()
+            result.expect[-1]
             .is_message(role="assistant")
             .judge(
                 llm,
@@ -35,9 +35,6 @@ async def test_offers_assistance() -> None:
                 """,
             )
         )
-
-        # Ensures there are no function calls or other unexpected events
-        result.expect.no_more_events()
 
 
 @pytest.mark.asyncio

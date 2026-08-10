@@ -233,9 +233,9 @@ If `current` exists but is broken, malformed or points to corrupt artifacts, sta
 
 ## Gemini model policy
 
-The configured default is `gemini-3.6-flash`. `GEMINI_MODEL` can explicitly select `gemini-3.5-flash-lite` or `gemini-2.5-flash`. Other values fail safely and the app does not silently switch models.
+The configured default is the quota-efficient `gemini-3.5-flash-lite`. `GEMINI_MODEL` can explicitly select `gemini-3.6-flash` or `gemini-2.5-flash`. Other values fail safely and the app does not silently switch models.
 
-Gemini 3.x uses minimal thinking. Gemini 2.5 uses a zero thinking budget. Every allowed model caps output at 320 tokens. Availability and quota depend on the active Google project.
+Gemini 3.x uses minimal thinking. Gemini 2.5 uses a bounded 128-token thinking budget so tool-call thought signatures remain valid. Every allowed model caps output at 320 tokens. Availability and quota depend on the active Google project.
 
 ## Recording checklist
 

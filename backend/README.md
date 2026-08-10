@@ -30,7 +30,7 @@ Complete `.env.local` with your own credentials:
 | `MURF_API_KEY`       | Murf speech synthesis                                          |
 | `DEEPGRAM_API_KEY`   | Deepgram speech recognition                                    |
 | `GOOGLE_API_KEY`     | Gemini conversation and optional knowledge embeddings          |
-| `GEMINI_MODEL`       | Optional exact model selection; defaults to `gemini-3.6-flash` |
+| `GEMINI_MODEL`       | Optional exact model selection; defaults to `gemini-3.5-flash-lite` |
 | `FINED_MEMORY_DB_PATH` | Optional Day 4 SQLite path; defaults inside `data/memory`     |
 
 Do not commit `.env.local` or paste credentials into issues, logs, or docs.
@@ -76,14 +76,15 @@ endpointing for English/Hindi code-switching. The agent answers in concise
 Indian English and Hindi.
 
 The Gemini policy lives in `src/fined/chat_model.py`. Its default is
-`gemini-3.6-flash`; the only explicit alternatives are
-`gemini-3.5-flash-lite` and `gemini-2.5-flash`. Empty, padded, or unknown model
+`gemini-3.5-flash-lite`; the only explicit alternatives are
+`gemini-3.6-flash` and `gemini-2.5-flash`. Empty, padded, or unknown model
 values fail safely. The service does not silently fall back to another model.
 
-Both Gemini 3.x choices use minimal thinking. Gemini 2.5 uses a thinking budget
-of zero. Every choice caps output at 320 tokens, and deprecated Gemini 3.x
-sampling fields are not sent. Provider errors are converted to fixed safe
-messages before they reach application logs or agent error events.
+Both Gemini 3.x choices use minimal thinking. Gemini 2.5 uses a bounded
+128-token thinking budget so tool-call thought signatures remain valid. Every
+choice caps output at 320 tokens, and deprecated Gemini 3.x sampling fields are
+not sent. Provider errors are converted to fixed safe messages before they
+reach application logs or agent error events.
 
 ## FinEd behavior
 
