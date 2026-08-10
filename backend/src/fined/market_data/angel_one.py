@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Literal, overload
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -46,7 +46,7 @@ PROVIDER_NAME = "Angel One SmartAPI"
 MAX_RESPONSE_BYTES = 256 * 1024
 DEFAULT_MAX_AGE_SECONDS = 120
 HISTORICAL_WINDOW_DAYS = 14
-READ_ONLY_SEARCH_ATTEMPTS = 2
+READ_ONLY_ATTEMPTS = 2
 _MAC_ADDRESS = re.compile(r"^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 _INDIA_TIME = ZoneInfo("Asia/Kolkata")
 _ReadOnlyRequest = tuple[str, Mapping[str, object]]
@@ -87,16 +87,21 @@ class AngelOneMarketDataProvider:
 
     async def get_quote(self, request: QuoteRequest) -> MarketQuote:
         payload = {
-            "mode": "LTP",
+            "mode": "FULL",
             "exchangeTokens": {request.exchange: [request.symbol_token]},
         }
-        try:
-            (response,) = await self._post_read_only_batch(((QUOTE_ENDPOINT, payload),))
-            data = response.json()
-            quote = self._parse_quote(data, request)
-        except Exception:
-            raise MarketDataUnavailableError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
-        return quote
+        for attempt in range(READ_ONLY_ATTEMPTS):
+            try:
+                (response,) = await self._post_read_only_batch(
+                    ((QUOTE_ENDPOINT, payload),)
+                )
+                return self._parse_quote(response.json(), request)
+            except Exception:
+                if attempt + 1 == READ_ONLY_ATTEMPTS:
+                    raise MarketDataUnavailableError(
+                        MARKET_DATA_UNAVAILABLE_MESSAGE
+                    ) from None
+        raise MarketDataUnavailableError(MARKET_DATA_UNAVAILABLE_MESSAGE)
 
     async def search_instruments(
         self, request: InstrumentSearchRequest
@@ -111,7 +116,7 @@ class AngelOneMarketDataProvider:
                 for exchange in ("NSE", "BSE")
             )
         )
-        for attempt in range(READ_ONLY_SEARCH_ATTEMPTS):
+        for attempt in range(READ_ONLY_ATTEMPTS):
             instruments: list[MarketInstrument] = []
             try:
                 # Angel One names this read-only instrument lookup under order/v1.
@@ -125,20 +130,30 @@ class AngelOneMarketDataProvider:
                             },
                         )
                         for search_request in search_requests
-                    )
+                    ),
+                    allow_partial=True,
                 )
+                successful_searches = 0
                 for search_request, response in zip(
                     search_requests, responses, strict=True
                 ):
-                    instruments.extend(
-                        self._parse_instruments(response.json(), search_request)
-                    )
-                return self._rank_instruments(instruments, request)
+                    if response is None:
+                        continue
+                    try:
+                        instruments.extend(
+                            self._parse_instruments(response.json(), search_request)
+                        )
+                        successful_searches += 1
+                    except Exception:
+                        continue
+                if successful_searches:
+                    return self._rank_instruments(instruments, request)
             except Exception:
-                if attempt + 1 == READ_ONLY_SEARCH_ATTEMPTS:
-                    raise MarketDataUnavailableError(
-                        MARKET_DATA_UNAVAILABLE_MESSAGE
-                    ) from None
+                pass
+            if attempt + 1 == READ_ONLY_ATTEMPTS:
+                raise MarketDataUnavailableError(
+                    MARKET_DATA_UNAVAILABLE_MESSAGE
+                ) from None
         raise MarketDataUnavailableError(MARKET_DATA_UNAVAILABLE_MESSAGE)
 
     async def get_historical_prices(
@@ -154,36 +169,64 @@ class AngelOneMarketDataProvider:
             request.valuation_date - timedelta(days=HISTORICAL_WINDOW_DAYS),
             request.purchase_date,
         )
-        try:
-            entry_response, valuation_response = await self._post_read_only_batch(
-                (
-                    (
-                        HISTORICAL_CANDLE_ENDPOINT,
-                        _historical_payload(request, entry_start, entry_end),
-                    ),
-                    (
-                        HISTORICAL_CANDLE_ENDPOINT,
-                        _historical_payload(request, valuation_start, valuation_end),
-                    ),
+        entry_lookup = (
+            HISTORICAL_CANDLE_ENDPOINT,
+            _historical_payload(request, entry_start, entry_end),
+        )
+        valuation_lookup = (
+            HISTORICAL_CANDLE_ENDPOINT,
+            _historical_payload(request, valuation_start, valuation_end),
+        )
+        lookups = (
+            (entry_lookup,)
+            if entry_lookup == valuation_lookup
+            else (entry_lookup, valuation_lookup)
+        )
+        for attempt in range(READ_ONLY_ATTEMPTS):
+            try:
+                responses = await self._post_read_only_batch(lookups)
+                entry_response = responses[0]
+                valuation_response = responses[-1]
+                entry_closes = _parse_historical_closes(
+                    entry_response.json(), entry_start, entry_end
                 )
-            )
-            entry_closes = _parse_historical_closes(
-                entry_response.json(), entry_start, entry_end
-            )
-            valuation_closes = _parse_historical_closes(
-                valuation_response.json(), valuation_start, valuation_end
-            )
-            return HistoricalPricePair(
-                entry=entry_closes[0],
-                valuation=valuation_closes[-1],
-                provider=PROVIDER_NAME,
-            )
-        except Exception:
-            raise MarketDataUnavailableError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
+                valuation_closes = _parse_historical_closes(
+                    valuation_response.json(), valuation_start, valuation_end
+                )
+                return HistoricalPricePair(
+                    entry=entry_closes[0],
+                    valuation=valuation_closes[-1],
+                    provider=PROVIDER_NAME,
+                )
+            except Exception:
+                if attempt + 1 == READ_ONLY_ATTEMPTS:
+                    raise MarketDataUnavailableError(
+                        MARKET_DATA_UNAVAILABLE_MESSAGE
+                    ) from None
+        raise MarketDataUnavailableError(MARKET_DATA_UNAVAILABLE_MESSAGE)
+
+    @overload
+    async def _post_read_only_batch(
+        self,
+        requests: tuple[_ReadOnlyRequest, ...],
+        *,
+        allow_partial: Literal[False] = False,
+    ) -> tuple[httpx.Response, ...]: ...
+
+    @overload
+    async def _post_read_only_batch(
+        self,
+        requests: tuple[_ReadOnlyRequest, ...],
+        *,
+        allow_partial: Literal[True],
+    ) -> tuple[httpx.Response | None, ...]: ...
 
     async def _post_read_only_batch(
-        self, requests: tuple[_ReadOnlyRequest, ...]
-    ) -> tuple[httpx.Response, ...]:
+        self,
+        requests: tuple[_ReadOnlyRequest, ...],
+        *,
+        allow_partial: bool = False,
+    ) -> tuple[httpx.Response | None, ...]:
         invalid_endpoints = tuple(
             endpoint for endpoint, _ in requests if endpoint not in _READ_ONLY_ENDPOINTS
         )
@@ -197,17 +240,26 @@ class AngelOneMarketDataProvider:
                 follow_redirects=False,
                 transport=self._transport,
             ) as client:
-                responses: list[httpx.Response] = []
+                responses: list[httpx.Response | None] = []
                 for endpoint, payload in requests:
-                    response = await client.post(
-                        endpoint,
-                        content=json.dumps(payload, separators=(",", ":")),
-                        headers=self._authenticated_headers(),
-                    )
+                    try:
+                        response = await client.post(
+                            endpoint,
+                            content=json.dumps(payload, separators=(",", ":")),
+                            headers=self._authenticated_headers(),
+                        )
+                    except Exception:
+                        if allow_partial:
+                            responses.append(None)
+                            continue
+                        raise
                     if (
                         response.status_code != 200
                         or len(response.content) > MAX_RESPONSE_BYTES
                     ):
+                        if allow_partial:
+                            responses.append(None)
+                            continue
                         raise ValueError("invalid read-only response")
                     responses.append(response)
             return tuple(responses)
@@ -247,7 +299,7 @@ class AngelOneMarketDataProvider:
         trading_symbol = _required_text(row, "tradingSymbol")
         ltp = _positive_decimal(row.get("ltp"))
         close = _positive_decimal(row.get("close"))
-        exchange_time = _exchange_time(_required_text(row, "exchangeFeedTime"))
+        exchange_time = _exchange_time(_required_text(row, "exchFeedTime"))
         received_time = self._now().astimezone(UTC)
         age = (received_time - exchange_time).total_seconds()
         if age < -5 or age > self._max_age_seconds:

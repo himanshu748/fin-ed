@@ -224,7 +224,7 @@ async def test_batch_gate_rejects_every_request_before_constructing_client(
 
 
 @pytest.mark.asyncio
-async def test_angel_one_provider_posts_ltp_request_and_normalizes_quote(
+async def test_angel_one_provider_posts_full_request_and_normalizes_quote(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     seen: dict[str, object] = {}
@@ -248,7 +248,7 @@ async def test_angel_one_provider_posts_ltp_request_and_normalizes_quote(
                             "symbolToken": "3045",
                             "ltp": 812.35,
                             "close": 808.1,
-                            "exchangeFeedTime": "08-Aug-2026 09:00:00",
+                            "exchFeedTime": "08-Aug-2026 09:00:00",
                         }
                     ],
                     "unfetched": [],
@@ -270,11 +270,52 @@ async def test_angel_one_provider_posts_ltp_request_and_normalizes_quote(
     assert isinstance(headers, dict)
     assert headers["x-privatekey"] == "test-api-key"
     assert headers["authorization"] == "Bearer token"
-    assert seen["body"] == '{"mode":"LTP","exchangeTokens":{"NSE":["3045"]}}'
+    assert seen["body"] == '{"mode":"FULL","exchangeTokens":{"NSE":["3045"]}}'
     assert quote.trading_symbol == "SBIN-EQ"
     assert str(quote.last_traded_price) == "812.35"
     assert str(quote.close_price) == "808.1"
     assert quote.exchange_time == datetime(2026, 8, 8, 3, 30, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_quote_retries_one_transient_provider_failure() -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(503, request=request)
+        return httpx.Response(
+            200,
+            json={
+                "status": True,
+                "data": {
+                    "fetched": [
+                        {
+                            "exchange": "NSE",
+                            "tradingSymbol": "SBIN-EQ",
+                            "symbolToken": "3045",
+                            "ltp": 812.35,
+                            "close": 808.1,
+                            "exchFeedTime": "08-Aug-2026 09:00:00",
+                        }
+                    ]
+                },
+            },
+            request=request,
+        )
+
+    provider = AngelOneMarketDataProvider(
+        config(),
+        transport=httpx.MockTransport(handler),
+        now=lambda: datetime(2026, 8, 8, 3, 30, 1, tzinfo=UTC),
+    )
+
+    quote = await provider.get_quote(QuoteRequest("NSE", "3045"))
+
+    assert attempts == 2
+    assert quote.trading_symbol == "SBIN-EQ"
 
 
 @pytest.mark.asyncio
@@ -337,6 +378,74 @@ async def test_historical_prices_use_two_bounded_daily_windows_and_available_clo
     assert prices.valuation.trading_date == date(2026, 8, 7)
     assert prices.valuation.close_price == Decimal("125")
     assert prices.provider == "Angel One SmartAPI"
+
+
+@pytest.mark.asyncio
+async def test_historical_prices_use_one_request_for_the_same_short_window() -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(
+            200,
+            json={
+                "status": True,
+                "data": [
+                    ["2026-08-04T00:00:00+05:30", 99, 102, 98, 100, 1500],
+                    ["2026-08-07T00:00:00+05:30", 123, 126, 122, 125, 1700],
+                ],
+            },
+            request=request,
+        )
+
+    provider = AngelOneMarketDataProvider(
+        config(), transport=httpx.MockTransport(handler)
+    )
+
+    prices = await provider.get_historical_prices(
+        HistoricalPriceRequest("NSE", "2885", date(2026, 8, 3), date(2026, 8, 7))
+    )
+
+    assert attempts == 1
+    assert prices.entry.close_price == Decimal("100")
+    assert prices.valuation.close_price == Decimal("125")
+
+
+@pytest.mark.asyncio
+async def test_historical_prices_retry_one_transient_provider_failure() -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(503, request=request)
+        body = json.loads(request.content)
+        close = 100 if body["fromdate"] == "2024-01-06 09:15" else 125
+        timestamp = (
+            "2024-01-08T00:00:00+05:30" if close == 100 else "2026-08-07T00:00:00+05:30"
+        )
+        return httpx.Response(
+            200,
+            json={
+                "status": True,
+                "data": [[timestamp, close, close, close, close, 1500]],
+            },
+            request=request,
+        )
+
+    provider = AngelOneMarketDataProvider(
+        config(), transport=httpx.MockTransport(handler)
+    )
+
+    prices = await provider.get_historical_prices(
+        HistoricalPriceRequest("NSE", "2885", date(2024, 1, 6), date(2026, 8, 9))
+    )
+
+    assert attempts == 3
+    assert prices.entry.close_price == Decimal("100")
+    assert prices.valuation.close_price == Decimal("125")
 
 
 @pytest.mark.asyncio
@@ -417,7 +526,7 @@ def test_provider_factory_fails_closed_when_credentials_are_incomplete(
                             "tradingSymbol": "SBIN-EQ",
                             "ltp": 812.35,
                             "close": 808.1,
-                            "exchangeFeedTime": "01-Jan-2020 09:00:00",
+                            "exchFeedTime": "01-Jan-2020 09:00:00",
                         }
                     ]
                 },
@@ -597,6 +706,40 @@ async def test_search_scrip_without_exchange_queries_nse_and_bse_and_merges_resu
         ("BSE", "500326"),
         ("NSE", "2889"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_search_scrip_keeps_nse_results_when_bse_is_unavailable() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        exchange = json.loads(request.content)["exchange"]
+        if exchange == "BSE":
+            return httpx.Response(403, request=request)
+        return httpx.Response(
+            200,
+            json={
+                "status": True,
+                "data": [
+                    {
+                        "exchange": "NSE",
+                        "tradingsymbol": "RELIANCE-EQ",
+                        "symboltoken": "2885",
+                    }
+                ],
+            },
+            request=request,
+        )
+
+    provider = AngelOneMarketDataProvider(
+        config(), transport=httpx.MockTransport(handler)
+    )
+
+    results = await provider.search_instruments(
+        InstrumentSearchRequest(query="RELIANCE")
+    )
+
+    assert [
+        (item.exchange, item.trading_symbol, item.symbol_token) for item in results
+    ] == [("NSE", "RELIANCE-EQ", "2885")]
 
 
 @pytest.mark.asyncio
