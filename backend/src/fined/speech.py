@@ -66,12 +66,17 @@ async def strip_markdown_links_for_speech(
                 pending = pending[1:]
                 continue
             label = pending[1:label_end]
-            if label:
+            if label and not _is_url_shaped_label(label):
                 yield label
             pending = pending[link_end + 1 :]
 
     if pending:
         yield pending
+
+
+def _is_url_shaped_label(value: str) -> bool:
+    normalized = value.strip().casefold()
+    return normalized.startswith(("https://", "http://", "www."))
 
 
 def _trailing_escape_length(value: str) -> int:

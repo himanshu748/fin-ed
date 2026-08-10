@@ -638,9 +638,14 @@ class FinEdAssistant(Agent):
         """Find supported cash-market instruments without selecting one implicitly.
 
         Args:
-            query: Instrument name or trading-symbol text, from 1 to 128 characters.
+            query: Latin-script instrument name or trading symbol, 1 to 128 characters.
             exchange: Optional exact cash exchange, NSE or BSE.
         """
+        if not isinstance(query, str) or not query.isascii():
+            raise ToolError(
+                "Retry with the Latin-script company name or trading symbol. "
+                "Keep the learner-facing reply in their chosen language."
+            )
         try:
             request = InstrumentSearchRequest(query=query, exchange=exchange)
         except (TypeError, ValueError) as exc:

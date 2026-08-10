@@ -604,6 +604,23 @@ async def test_instrument_search_preserves_ambiguous_choices_for_the_learner() -
 
 
 @pytest.mark.asyncio
+async def test_instrument_search_requests_a_latin_retry_for_devanagari_query() -> None:
+    provider = FakeMarketDataProvider()
+    state = SessionState(
+        profile=ParticipantProfile(LearningMode.STOCKS),
+        retriever=FakeRetriever([]),
+        market_data=provider,
+    )
+
+    with pytest.raises(ToolError, match="Latin-script company name or trading symbol"):
+        await FinEdAssistant().search_market_instruments(
+            _context(state), query="रिलायंस"
+        )
+
+    assert provider.search_calls == []
+
+
+@pytest.mark.asyncio
 async def test_bse_cash_instrument_remains_searchable_for_education() -> None:
     instrument = MarketInstrument(
         exchange="BSE",

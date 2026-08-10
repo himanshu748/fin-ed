@@ -47,6 +47,16 @@ async def test_single_character_chunks_preserve_punctuation_and_multiple_labels(
 
 
 @pytest.mark.asyncio
+async def test_url_shaped_markdown_label_is_not_spoken() -> None:
+    text = (
+        "Angel One reports ₹1,327 "
+        "([https://www.angelone.in/](https://www.angelone.in/))."
+    )
+
+    assert await _spoken(*text) == "Angel One reports ₹1,327 ()."
+
+
+@pytest.mark.asyncio
 async def test_escaped_opening_bracket_is_not_treated_as_a_link_at_any_boundary() -> (
     None
 ):
