@@ -108,6 +108,7 @@ class FakePaperTradingBridge:
     fail: bool = False
     prepared: bool = True
     prepare_calls: int = 0
+    confirm_calls: list[str] = field(default_factory=list)
 
     async def open_dashboard(self) -> PaperDashboardAck:
         self.open_calls += 1
@@ -121,6 +122,20 @@ class FakePaperTradingBridge:
         if self.fail:
             raise PaperTradingUIUnavailableError()
         return PaperDraftAck(prepared=self.prepared, draft_id=draft.draft_id)
+
+    async def confirm_order(self, draft_id: str):
+        self.confirm_calls.append(draft_id)
+        if self.fail or self.draft is None or self.draft.draft_id != draft_id:
+            raise PaperTradingUIUnavailableError()
+        return SimpleNamespace(
+            draft_id=self.draft.draft_id,
+            side=self.draft.side,
+            trading_symbol=self.draft.trading_symbol,
+            quantity=self.draft.quantity,
+            fill_price_paise=self.draft.price_paise,
+            simulated_at=datetime.now(UTC),
+            cash_paise=9_749_900,
+        )
 
     async def get_portfolio_summary(self) -> PaperPortfolioSummary:
         self.summary_calls += 1
@@ -311,7 +326,7 @@ def test_prompt_defines_day_two_persona_objectives_and_limits() -> None:
         "never ask for an otp",
         "never recommend buying, selling, or holding",
         "never provide targets, signals, guaranteed returns",
-        "never execute a trade",
+        "never execute a real broker trade",
         "sebi-registered investment adviser",
         "official broker support",
         "qualified tax professional",
@@ -481,6 +496,7 @@ def test_fined_assistant_defaults_to_general_and_exposes_exact_tool_names() -> N
     )
     assert assistant.search_market_instruments.info.name == "search_market_instruments"
     assert assistant.prepare_paper_order.info.name == "prepare_paper_order"
+    assert assistant.confirm_paper_order.info.name == "confirm_paper_order"
     assert (
         assistant.get_paper_portfolio_summary.info.name == "get_paper_portfolio_summary"
     )
@@ -510,6 +526,8 @@ def test_prompt_defines_browser_only_paper_trading_safety_contract() -> None:
         "use open_paper_trading_dashboard",
         "use prepare_paper_order only after side, supported instrument, and positive whole quantity are known",
         "the tool prepares a draft",
+        "use confirm_paper_order only after explicit confirmation",
+        "same pending paper draft",
         "never say it filled until the browser reports a confirmed paper result",
         "never provide a recommendation or convert a paper request into a real broker action",
         "paper fills are currently limited to nse eq cash equity and etf delivery",
@@ -517,6 +535,41 @@ def test_prompt_defines_browser_only_paper_trading_safety_contract() -> None:
         "f&o simulation means educational payoff examples only, never a paper order",
     ):
         assert required in prompt
+
+
+@pytest.mark.asyncio
+async def test_confirm_paper_order_fills_only_the_matching_pending_draft() -> None:
+    bridge = FakePaperTradingBridge()
+    state = _paper_state(
+        provider=FakeMarketDataProvider(quote=_paper_quote()),
+        bridge=bridge,
+    )
+    prepared = await FinEdAssistant().prepare_paper_order(
+        _context(state), side="buy", exchange="NSE", symbol_token="2885", quantity=1
+    )
+    draft_id = str(prepared["draft_id"])
+
+    result = await FinEdAssistant().confirm_paper_order(_context(state), draft_id)
+
+    assert bridge.confirm_calls == [draft_id]
+    assert result["paper"] is True
+    assert result["filled"] is True
+    assert result["draft_id"] == draft_id
+    assert result["side"] == "buy"
+    assert result["trading_symbol"] == "RELIANCE-EQ"
+    assert result["quantity"] == 1
+    assert state.pending_paper_drafts == {}
+
+
+@pytest.mark.asyncio
+async def test_confirm_paper_order_rejects_unknown_draft_without_browser_rpc() -> None:
+    bridge = FakePaperTradingBridge()
+    state = _paper_state(provider=FakeMarketDataProvider(), bridge=bridge)
+
+    with pytest.raises(ToolError, match="pending paper draft"):
+        await FinEdAssistant().confirm_paper_order(_context(state), "draft-unknown")
+
+    assert bridge.confirm_calls == []
 
 
 def test_prompt_requires_historical_tool_and_explains_estimate_limits() -> None:

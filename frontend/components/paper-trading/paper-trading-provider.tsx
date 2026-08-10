@@ -38,6 +38,7 @@ const SESSION_ERROR = 'Paper draft belongs to a different agent session.';
 const RPC_METHODS = {
   openDashboard: 'fined.paper.v1.open_dashboard',
   prepareOrder: 'fined.paper.v1.prepare_order',
+  confirmOrder: 'fined.paper.v1.confirm_order',
   getPortfolioSummary: 'fined.paper.v1.get_portfolio_summary',
 } as const;
 
@@ -47,6 +48,7 @@ type PaperRpcHandler = (data: PaperInvocation) => Promise<string>;
 export interface PaperRpcHandlers {
   openDashboard: PaperRpcHandler;
   prepareOrder: PaperRpcHandler;
+  confirmOrder: PaperRpcHandler;
   getPortfolioSummary: PaperRpcHandler;
 }
 
@@ -59,6 +61,7 @@ export interface PaperRpcDependencies {
   now(): string;
   openDashboard(): void;
   prepareDraft(draft: PreparedPaperDraft): void;
+  confirmDraft(draftId: string): Promise<PaperOrderResultPayload>;
 }
 
 interface PaperRoomRpcRegistry {
@@ -66,7 +69,7 @@ interface PaperRoomRpcRegistry {
   unregisterRpcMethod(method: string): void;
 }
 
-interface PaperOrderResultPayload {
+export interface PaperOrderResultPayload {
   version: 1;
   paper: true;
   draft_id: string;
@@ -97,7 +100,7 @@ export interface ConfirmPaperDraftDependencies {
   now: string;
   storage: PaperPortfolioStorage | null | undefined;
   coordinator?: PaperPortfolioLockCoordinator | null;
-  sendOrderResult(payload: PaperOrderResultPayload): Promise<string>;
+  sendOrderResult?(payload: PaperOrderResultPayload): Promise<string>;
 }
 
 export type PaperTradingView = 'session' | 'dashboard';
@@ -250,6 +253,18 @@ function decodeEmptyPaperRequest(payload: string): void {
   }
 }
 
+function decodePaperConfirmationRequest(payload: string): string {
+  const decoded = decodeObject(payload);
+  requireExactKeys(decoded, ['version', 'paper', 'draft_id']);
+  if (decoded.version !== 1 || decoded.paper !== true) {
+    throw new Error('Paper RPC payload has an unsupported version');
+  }
+  if (typeof decoded.draft_id !== 'string' || !decoded.draft_id.trim()) {
+    throw new Error('Paper confirmation draft id must be non-empty');
+  }
+  return decoded.draft_id;
+}
+
 function authorize(callerIdentity: string, expectedAgentIdentity: string): void {
   if (callerIdentity !== expectedAgentIdentity) {
     throw new Error('Paper RPC caller is not authorized');
@@ -318,6 +333,27 @@ export function createPaperRpcHandlers(dependencies: PaperRpcDependencies): Pape
     });
   };
 
+  const confirmOrder: PaperRpcHandler = async ({ callerIdentity, payload }) => {
+    authorize(callerIdentity, dependencies.expectedAgentIdentity);
+    requireReadyLedger(dependencies);
+    const draftId = decodePaperConfirmationRequest(payload);
+    const activeDraft = dependencies.getDraft()?.draft;
+    if (!activeDraft || activeDraft.draftId !== draftId) {
+      throw new Error('No matching active paper draft is available');
+    }
+    const result = await dependencies.confirmDraft(draftId);
+    if (
+      result.draft_id !== activeDraft.draftId ||
+      result.side !== activeDraft.side ||
+      result.trading_symbol !== activeDraft.tradingSymbol ||
+      result.quantity !== activeDraft.quantity ||
+      result.fill_price_paise !== activeDraft.pricePaise
+    ) {
+      throw new Error('Paper confirmation result does not match the active draft');
+    }
+    return JSON.stringify(result);
+  };
+
   const getPortfolioSummary: PaperRpcHandler = async ({ callerIdentity, payload }) => {
     authorize(callerIdentity, dependencies.expectedAgentIdentity);
     requireReadyLedger(dependencies);
@@ -341,7 +377,7 @@ export function createPaperRpcHandlers(dependencies: PaperRpcDependencies): Pape
     });
   };
 
-  return { openDashboard, prepareOrder, getPortfolioSummary };
+  return { openDashboard, prepareOrder, confirmOrder, getPortfolioSummary };
 }
 
 export function registerPaperRpcHandlers(
@@ -351,6 +387,7 @@ export function registerPaperRpcHandlers(
   const registrations = [
     [RPC_METHODS.openDashboard, handlers.openDashboard],
     [RPC_METHODS.prepareOrder, handlers.prepareOrder],
+    [RPC_METHODS.confirmOrder, handlers.confirmOrder],
     [RPC_METHODS.getPortfolioSummary, handlers.getPortfolioSummary],
   ] as const;
   const installed: string[] = [];
@@ -409,8 +446,21 @@ export async function confirmPaperDraft(
     return result;
   }
 
-  const fill = result.portfolio.fills[result.portfolio.fills.length - 1];
-  const payload: PaperOrderResultPayload = {
+  if (dependencies.sendOrderResult) {
+    const payload = paperOrderResultPayload(result.portfolio);
+    try {
+      void Promise.resolve(dependencies.sendOrderResult(payload)).catch(() => undefined);
+    } catch {
+      // The persisted browser result remains successful even when voice acknowledgement fails.
+    }
+  }
+  return result;
+}
+
+export function paperOrderResultPayload(portfolio: PaperPortfolio): PaperOrderResultPayload {
+  const fill = portfolio.fills[portfolio.fills.length - 1];
+  if (!fill) throw new Error('Confirmed paper fill is unavailable');
+  return {
     version: 1,
     paper: true,
     draft_id: fill.draftId,
@@ -419,14 +469,8 @@ export async function confirmPaperDraft(
     quantity: fill.quantity,
     fill_price_paise: fill.fillPricePaise,
     simulated_at: pythonCompatibleUtcTimestamp(fill.filledAt),
-    cash_paise: result.portfolio.cashPaise,
+    cash_paise: portfolio.cashPaise,
   };
-  try {
-    void Promise.resolve(dependencies.sendOrderResult(payload)).catch(() => undefined);
-  } catch {
-    // The persisted browser result remains successful even when voice acknowledgement fails.
-  }
-  return result;
 }
 
 function browserStorage(): PaperPortfolioStorage | null {
@@ -586,6 +630,76 @@ export function PaperTradingProvider({ children }: PropsWithChildren) {
     setHoldingQuotes({});
     setQuoteStatus('idle');
   }, [expectedAgentSessionKey, updateLedger]);
+
+  const commitDraft = useCallback(
+    async (
+      requestedDraftId: string | null,
+      reportResultToAgent: boolean
+    ): Promise<PaperOrderResultPayload> => {
+      const current = ledgerRef.current;
+      const currentDraft = current.draft;
+      if (current.readiness !== 'ready') {
+        updateLedger((state) => ({ ...state, error: PERSISTENCE_ERROR }));
+        throw new Error(PERSISTENCE_ERROR);
+      }
+      if (!currentDraft || !expectedAgentIdentity || !expectedAgentSessionKey) {
+        const message = 'No active paper draft is available to confirm.';
+        updateLedger((state) => ({
+          ...state,
+          error: message,
+        }));
+        throw new Error(message);
+      }
+      if (requestedDraftId !== null && requestedDraftId !== currentDraft.draft.draftId) {
+        const message = 'No matching active paper draft is available.';
+        updateLedger((state) => ({ ...state, error: message }));
+        throw new Error(message);
+      }
+      try {
+        const result = await confirmPaperDraft({
+          portfolio: current.portfolio,
+          draft: currentDraft.draft,
+          preparedAgentIdentity: currentDraft.agentIdentity,
+          currentAgentIdentity: expectedAgentIdentity,
+          preparedAgentSessionKey: currentDraft.agentSessionKey,
+          getCurrentAgentSessionKey: () => expectedAgentSessionKeyRef.current,
+          now: new Date().toISOString(),
+          storage: browserStorage(),
+          sendOrderResult: reportResultToAgent
+            ? (payload) =>
+                sendPaperOrderResult(session.room.localParticipant, expectedAgentIdentity, payload)
+            : undefined,
+        });
+        updateLedger((state) => reconcilePaperSave(state, result, 'confirm'));
+        if (result.status === 'saved') {
+          return paperOrderResultPayload(result.portfolio);
+        }
+        throw new Error(ledgerRef.current.error ?? 'The paper order could not be confirmed.');
+      } catch (cause) {
+        updateLedger((state) => ({
+          ...state,
+          error: cause instanceof Error ? cause.message : 'The paper order could not be confirmed.',
+        }));
+        throw cause;
+      }
+    },
+    [expectedAgentIdentity, expectedAgentSessionKey, session.room.localParticipant, updateLedger]
+  );
+
+  const confirmDraft = useCallback(async () => {
+    try {
+      await commitDraft(null, true);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [commitDraft]);
+
+  const confirmDraftFromAgent = useCallback(
+    (draftId: string) => commitDraft(draftId, false),
+    [commitDraft]
+  );
+
   const handlers = useMemo(
     () =>
       expectedAgentIdentity && expectedAgentSessionKey
@@ -600,56 +714,22 @@ export function PaperTradingProvider({ children }: PropsWithChildren) {
             prepareDraft: (next) => {
               updateLedger((current) => ({ ...current, draft: next }));
             },
+            confirmDraft: confirmDraftFromAgent,
           })
         : null,
-    [expectedAgentIdentity, expectedAgentSessionKey, openDashboard, updateLedger]
+    [
+      confirmDraftFromAgent,
+      expectedAgentIdentity,
+      expectedAgentSessionKey,
+      openDashboard,
+      updateLedger,
+    ]
   );
 
   useEffect(() => {
     if (!handlers) return;
     return registerPaperRpcHandlers(session.room, handlers);
   }, [handlers, session.room]);
-
-  const confirmDraft = useCallback(async () => {
-    const current = ledgerRef.current;
-    const currentDraft = current.draft;
-    if (current.readiness !== 'ready') {
-      updateLedger((state) => ({ ...state, error: PERSISTENCE_ERROR }));
-      return false;
-    }
-    if (!currentDraft || !expectedAgentIdentity || !expectedAgentSessionKey) {
-      updateLedger((state) => ({
-        ...state,
-        error: 'No active paper draft is available to confirm.',
-      }));
-      return false;
-    }
-    try {
-      const result = await confirmPaperDraft({
-        portfolio: current.portfolio,
-        draft: currentDraft.draft,
-        preparedAgentIdentity: currentDraft.agentIdentity,
-        currentAgentIdentity: expectedAgentIdentity,
-        preparedAgentSessionKey: currentDraft.agentSessionKey,
-        getCurrentAgentSessionKey: () => expectedAgentSessionKeyRef.current,
-        now: new Date().toISOString(),
-        storage: browserStorage(),
-        sendOrderResult: (payload) =>
-          sendPaperOrderResult(session.room.localParticipant, expectedAgentIdentity, payload),
-      });
-      updateLedger((state) => reconcilePaperSave(state, result, 'confirm'));
-      if (result.status === 'saved') {
-        return true;
-      }
-      return false;
-    } catch (cause) {
-      updateLedger((state) => ({
-        ...state,
-        error: cause instanceof Error ? cause.message : 'The paper order could not be confirmed.',
-      }));
-      return false;
-    }
-  }, [expectedAgentIdentity, expectedAgentSessionKey, session.room.localParticipant, updateLedger]);
 
   const resetPortfolio = useCallback(async () => {
     const current = ledgerRef.current;

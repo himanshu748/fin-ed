@@ -10,9 +10,11 @@ from .models import (
     PaperDashboardAck,
     PaperDraftAck,
     PaperOrderDraft,
+    PaperOrderResult,
     PaperPortfolioSummary,
     decode_paper_dashboard_ack,
     decode_paper_draft_ack,
+    decode_paper_order_result,
     decode_paper_portfolio_summary,
 )
 
@@ -21,6 +23,7 @@ RPC_RESPONSE_TIMEOUT_SECONDS = 5
 
 _OPEN_DASHBOARD_METHOD = "fined.paper.v1.open_dashboard"
 _PREPARE_ORDER_METHOD = "fined.paper.v1.prepare_order"
+_CONFIRM_ORDER_METHOD = "fined.paper.v1.confirm_order"
 _GET_PORTFOLIO_SUMMARY_METHOD = "fined.paper.v1.get_portfolio_summary"
 _EMPTY_PAPER_REQUEST = '{"version":1,"paper":true}'
 
@@ -36,6 +39,8 @@ class PaperTradingBridge(Protocol):
     async def open_dashboard(self) -> PaperDashboardAck: ...
 
     async def prepare_order(self, draft: PaperOrderDraft) -> PaperDraftAck: ...
+
+    async def confirm_order(self, draft_id: str) -> PaperOrderResult: ...
 
     async def get_portfolio_summary(self) -> PaperPortfolioSummary: ...
 
@@ -82,6 +87,23 @@ class LiveKitPaperTradingBridge:
             if ack.draft_id != draft.draft_id:
                 raise ValueError("browser acknowledged a different draft")
             return ack
+        except Exception:
+            raise PaperTradingUIUnavailableError() from None
+
+    async def confirm_order(self, draft_id: str) -> PaperOrderResult:
+        if not isinstance(draft_id, str) or not draft_id.strip():
+            raise PaperTradingUIUnavailableError()
+        payload = json.dumps(
+            {"version": 1, "paper": True, "draft_id": draft_id},
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        response = await self._perform_rpc(_CONFIRM_ORDER_METHOD, payload)
+        try:
+            result = decode_paper_order_result(response)
+            if result.draft_id != draft_id:
+                raise ValueError("browser confirmed a different draft")
+            return result
         except Exception:
             raise PaperTradingUIUnavailableError() from None
 

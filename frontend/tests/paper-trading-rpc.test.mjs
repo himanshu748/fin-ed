@@ -72,6 +72,19 @@ const {
 
 const NOW = '2026-08-08T00:00:10.000Z';
 const OPEN_REQUEST = '{"version":1,"paper":true}';
+const CONFIRM_REQUEST = '{"version":1,"paper":true,"draft_id":"draft-1"}';
+
+const CONFIRMED_RESULT = {
+  version: 1,
+  paper: true,
+  draft_id: 'draft-1',
+  side: 'buy',
+  trading_symbol: 'RELIANCE-EQ',
+  quantity: 1,
+  fill_price_paise: 250_000,
+  simulated_at: '2026-08-08T00:00:10.000+00:00',
+  cash_paise: 9_749_900,
+};
 
 function draftPayload(overrides = {}) {
   return JSON.stringify({
@@ -98,6 +111,7 @@ function draftPayload(overrides = {}) {
 function harness(overrides = {}) {
   let opened = false;
   let prepared = null;
+  const confirmedDraftIds = [];
   let portfolio = createPaperPortfolio('2026-08-08T00:00:00.000Z', 'portfolio-1');
   const handlers = createPaperRpcHandlers({
     expectedAgentIdentity: 'agent-1',
@@ -112,6 +126,10 @@ function harness(overrides = {}) {
     prepareDraft: (draft) => {
       prepared = draft;
     },
+    confirmDraft: async (draftId) => {
+      confirmedDraftIds.push(draftId);
+      return CONFIRMED_RESULT;
+    },
     ...overrides,
   });
   return {
@@ -121,6 +139,9 @@ function harness(overrides = {}) {
     },
     get prepared() {
       return prepared?.draft ?? null;
+    },
+    get confirmedDraftIds() {
+      return confirmedDraftIds;
     },
     setPortfolio(value) {
       portfolio = value;
@@ -248,6 +269,7 @@ test('all handlers reject malformed, oversized, and lexically non-integer versio
 
   for (const payload of cases) {
     await assert.rejects(() => handlers.openDashboard(invocation(payload)));
+    await assert.rejects(() => handlers.confirmOrder(invocation(payload)));
     await assert.rejects(() => handlers.getPortfolioSummary(invocation(payload)));
   }
 });
@@ -349,6 +371,38 @@ test('prepare order binds the draft to the authorized agent session', async () =
   assert.equal(preparedBinding.agentIdentity, 'agent-1');
   assert.equal(preparedBinding.agentSessionKey, 'agent-1:sid-a');
   assert.equal(preparedBinding.draft.draftId, 'draft-1');
+});
+
+test('connected agent confirms only the exact active paper draft', async () => {
+  const state = harness();
+  await state.handlers.prepareOrder(invocation(draftPayload()));
+
+  assert.deepEqual(
+    JSON.parse(await state.handlers.confirmOrder(invocation(CONFIRM_REQUEST))),
+    CONFIRMED_RESULT
+  );
+  assert.deepEqual(state.confirmedDraftIds, ['draft-1']);
+
+  await assert.rejects(
+    () => state.handlers.confirmOrder(invocation(CONFIRM_REQUEST, 'other')),
+    /authorized/
+  );
+  await assert.rejects(
+    () =>
+      state.handlers.confirmOrder(invocation('{"version":1,"paper":true,"draft_id":"draft-2"}')),
+    /active paper draft/
+  );
+});
+
+test('agent confirmation rejects absent drafts and non-ready ledgers', async () => {
+  await assert.rejects(
+    () => harness().handlers.confirmOrder(invocation(CONFIRM_REQUEST)),
+    /active paper draft/
+  );
+
+  const state = harness({ getReadiness: () => 'unavailable' });
+  await assert.rejects(() => state.handlers.confirmOrder(invocation(CONFIRM_REQUEST)), /not ready/);
+  assert.deepEqual(state.confirmedDraftIds, []);
 });
 
 test('portfolio summary labels persisted holdings only as historical cost basis', async () => {
@@ -513,7 +567,7 @@ test('corruption discovered during reset atomically downgrades readiness', async
   assert.match(next.error, /persistence is unavailable/);
 });
 
-test('RPC registration installs and cleans up all three methods exactly once', () => {
+test('RPC registration installs and cleans up all four methods exactly once', () => {
   const registered = [];
   const unregistered = [];
   const room = {
@@ -532,6 +586,7 @@ test('RPC registration installs and cleans up all three methods exactly once', (
     [
       'fined.paper.v1.open_dashboard',
       'fined.paper.v1.prepare_order',
+      'fined.paper.v1.confirm_order',
       'fined.paper.v1.get_portfolio_summary',
     ]
   );
@@ -539,6 +594,7 @@ test('RPC registration installs and cleans up all three methods exactly once', (
   cleanup();
   assert.deepEqual(unregistered, [
     'fined.paper.v1.get_portfolio_summary',
+    'fined.paper.v1.confirm_order',
     'fined.paper.v1.prepare_order',
     'fined.paper.v1.open_dashboard',
   ]);
@@ -556,7 +612,11 @@ test('partial RPC registration failure unregisters every installed method once',
   };
 
   assert.throws(() => registerPaperRpcHandlers(room, harness().handlers), /registration failed/);
-  assert.deepEqual(unregistered, ['fined.paper.v1.prepare_order', 'fined.paper.v1.open_dashboard']);
+  assert.deepEqual(unregistered, [
+    'fined.paper.v1.confirm_order',
+    'fined.paper.v1.prepare_order',
+    'fined.paper.v1.open_dashboard',
+  ]);
 });
 
 test('confirmed fill persists through the lock and sends an exact result without awaiting voice ack', async () => {

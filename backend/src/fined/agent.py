@@ -116,6 +116,10 @@ class _UnavailablePaperTradingBridge:
         del draft
         raise PaperTradingUIUnavailableError()
 
+    async def confirm_order(self, draft_id: str):
+        del draft_id
+        raise PaperTradingUIUnavailableError()
+
     async def get_portfolio_summary(self):
         raise PaperTradingUIUnavailableError()
 
@@ -220,6 +224,9 @@ PAPER TRADING
 - Use open_paper_trading_dashboard for intent to practise or view the paper portfolio.
 - Use prepare_paper_order only after side, supported instrument, and positive whole quantity are known.
 - The tool prepares a draft. Never say it filled until the browser reports a confirmed paper result.
+- Use confirm_paper_order only after explicit confirmation of the same pending paper draft.
+- Confirmation means the learner says to confirm that paper order, or clearly says yes to your direct confirmation question after the side, symbol, quantity, price and charges were presented.
+- Do not treat the original buy or sell request, silence, an unrelated yes or earlier consent as confirmation.
 - Never provide a recommendation or convert a paper request into a real broker action.
 
 LANGUAGE
@@ -233,7 +240,8 @@ GUARDRAILS
 - Never ask for an OTP, PIN, broker password, full account number, or credentials. Never repeat sensitive credentials supplied by the user.
 - Never provide recommendations. Never recommend buying, selling, or holding a security, fund, commodity, derivative, or scheme.
 - Never provide targets, signals, guaranteed returns, assured returns, guaranteed approvals, portfolio allocation, or trade execution.
-- Never execute a trade, claim to access a broker account, or pretend an account action succeeded.
+- Never execute a real broker trade, claim to access a broker account, or pretend an account action succeeded.
+- You may confirm only a pending browser paper draft with virtual money after explicit confirmation.
 - Never provide a live F&O strategy or calls. Clearly say F&O is high risk; educational simulation means payoff examples only, never any paper or real order.
 - Never help manipulate markets, evade taxes, bypass broker controls, use insider information, or conceal financial activity.
 - Never provide personalised legal or tax advice.
@@ -800,8 +808,53 @@ class FinEdAssistant(Agent):
             "is_order": False,
             "message": (
                 "A paper draft is ready in the browser. It is not filled unless "
-                "the learner confirms it there."
+                "the learner explicitly confirms it in the browser or by voice."
             ),
+        }
+
+    @function_tool(name="confirm_paper_order")
+    async def confirm_paper_order(
+        self,
+        context: RunContext[SessionState],
+        draft_id: str,
+    ) -> dict[str, object]:
+        """Confirm one pending browser paper draft after explicit learner consent.
+
+        Args:
+            draft_id: Exact identifier returned by prepare_paper_order for the draft
+                the learner explicitly confirmed.
+        """
+        if not isinstance(draft_id, str) or not draft_id.strip():
+            raise ToolError("An exact pending paper draft is required.")
+        state = context.userdata
+        draft = state.pending_paper_drafts.get(draft_id)
+        if draft is None:
+            raise ToolError("No matching pending paper draft is available.")
+        try:
+            result = await state.paper_trading.confirm_order(draft_id)
+        except Exception:
+            raise ToolError(PAPER_TRADING_UI_UNAVAILABLE_MESSAGE) from None
+        if (
+            result.draft_id != draft.draft_id
+            or result.side != draft.side
+            or result.trading_symbol != draft.trading_symbol
+            or result.quantity != draft.quantity
+            or result.fill_price_paise != draft.price_paise
+        ):
+            raise ToolError(PAPER_TRADING_UI_UNAVAILABLE_MESSAGE)
+        del state.pending_paper_drafts[draft_id]
+        return {
+            "paper": True,
+            "filled": True,
+            "is_order": False,
+            "draft_id": result.draft_id,
+            "side": result.side,
+            "trading_symbol": result.trading_symbol,
+            "quantity": result.quantity,
+            "fill_price_paise": result.fill_price_paise,
+            "simulated_at": result.simulated_at.isoformat(),
+            "cash_paise": result.cash_paise,
+            "message": "The browser confirmed the simulated paper fill.",
         }
 
     @function_tool(name="get_paper_portfolio_summary")

@@ -92,6 +92,31 @@ async def test_prepare_order_sends_only_the_public_draft_payload() -> None:
 
 
 @pytest.mark.asyncio
+async def test_confirm_order_targets_the_browser_and_decodes_the_simulated_fill() -> (
+    None
+):
+    fake = FakeLocalParticipant(
+        '{"version":1,"paper":true,"draft_id":"draft-1","side":"buy",'
+        '"trading_symbol":"RELIANCE-EQ","quantity":2,'
+        '"fill_price_paise":250050,"simulated_at":"2026-08-08T09:15:10+00:00",'
+        '"cash_paise":9499777}'
+    )
+    bridge = LiveKitPaperTradingBridge(fake, "learner-1")
+
+    result = await bridge.confirm_order("draft-1")
+
+    assert fake.calls[0].method == "fined.paper.v1.confirm_order"
+    assert json.loads(fake.calls[0].payload) == {
+        "version": 1,
+        "paper": True,
+        "draft_id": "draft-1",
+    }
+    assert result.draft_id == "draft-1"
+    assert result.side == "buy"
+    assert result.quantity == 2
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "response",
     [
