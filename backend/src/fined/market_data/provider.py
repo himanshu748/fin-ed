@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Protocol
 
 from fined.market_data.models import (
+    HistoricalPricePair,
+    HistoricalPriceRequest,
     InstrumentSearchRequest,
     MarketInstrument,
     MarketQuote,
@@ -23,6 +25,10 @@ class MarketDataProvider(Protocol):
         self, request: InstrumentSearchRequest
     ) -> tuple[MarketInstrument, ...]: ...
 
+    async def get_historical_prices(
+        self, request: HistoricalPriceRequest
+    ) -> HistoricalPricePair: ...
+
 
 class UnavailableMarketDataProvider:
     async def get_quote(self, request: QuoteRequest) -> MarketQuote:
@@ -32,5 +38,11 @@ class UnavailableMarketDataProvider:
     async def search_instruments(
         self, request: InstrumentSearchRequest
     ) -> tuple[MarketInstrument, ...]:
+        del request
+        raise MarketDataUnavailableError(MARKET_DATA_UNAVAILABLE_MESSAGE)
+
+    async def get_historical_prices(
+        self, request: HistoricalPriceRequest
+    ) -> HistoricalPricePair:
         del request
         raise MarketDataUnavailableError(MARKET_DATA_UNAVAILABLE_MESSAGE)

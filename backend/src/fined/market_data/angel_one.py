@@ -6,7 +6,7 @@ import os
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -14,6 +14,9 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from fined.market_data.models import (
+    HistoricalClose,
+    HistoricalPricePair,
+    HistoricalPriceRequest,
     InstrumentSearchRequest,
     MarketInstrument,
     MarketQuote,
@@ -32,10 +35,17 @@ QUOTE_ENDPOINT = (
 SEARCH_SCRIP_ENDPOINT = (
     "https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/searchScrip"
 )
-_READ_ONLY_ENDPOINTS = frozenset({QUOTE_ENDPOINT, SEARCH_SCRIP_ENDPOINT})
+HISTORICAL_CANDLE_ENDPOINT = (
+    "https://apiconnect.angelone.in/rest/secure/angelbroking/"
+    "historical/v1/getCandleData"
+)
+_READ_ONLY_ENDPOINTS = frozenset(
+    {QUOTE_ENDPOINT, SEARCH_SCRIP_ENDPOINT, HISTORICAL_CANDLE_ENDPOINT}
+)
 PROVIDER_NAME = "Angel One SmartAPI"
 MAX_RESPONSE_BYTES = 256 * 1024
 DEFAULT_MAX_AGE_SECONDS = 120
+HISTORICAL_WINDOW_DAYS = 14
 _MAC_ADDRESS = re.compile(r"^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 _INDIA_TIME = ZoneInfo("Asia/Kolkata")
 _ReadOnlyRequest = tuple[str, Mapping[str, object]]
@@ -124,6 +134,48 @@ class AngelOneMarketDataProvider:
         except Exception:
             raise MarketDataUnavailableError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
         return self._rank_instruments(instruments, request)
+
+    async def get_historical_prices(
+        self, request: HistoricalPriceRequest
+    ) -> HistoricalPricePair:
+        entry_start = request.purchase_date
+        entry_end = min(
+            request.purchase_date + timedelta(days=HISTORICAL_WINDOW_DAYS),
+            request.valuation_date,
+        )
+        valuation_end = request.valuation_date
+        valuation_start = max(
+            request.valuation_date - timedelta(days=HISTORICAL_WINDOW_DAYS),
+            request.purchase_date,
+        )
+        try:
+            entry_response, valuation_response = await self._post_read_only_batch(
+                (
+                    (
+                        HISTORICAL_CANDLE_ENDPOINT,
+                        _historical_payload(request, entry_start, entry_end),
+                    ),
+                    (
+                        HISTORICAL_CANDLE_ENDPOINT,
+                        _historical_payload(
+                            request, valuation_start, valuation_end
+                        ),
+                    ),
+                )
+            )
+            entry_closes = _parse_historical_closes(
+                entry_response.json(), entry_start, entry_end
+            )
+            valuation_closes = _parse_historical_closes(
+                valuation_response.json(), valuation_start, valuation_end
+            )
+            return HistoricalPricePair(
+                entry=entry_closes[0],
+                valuation=valuation_closes[-1],
+                provider=PROVIDER_NAME,
+            )
+        except Exception:
+            raise MarketDataUnavailableError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
 
     async def _post_read_only_batch(
         self, requests: tuple[_ReadOnlyRequest, ...]
@@ -322,3 +374,53 @@ def _exchange_time(value: str) -> datetime:
     except ValueError:
         raise ValueError("exchange feed time is invalid") from None
     return parsed.replace(tzinfo=_INDIA_TIME).astimezone(UTC)
+
+
+def _historical_payload(
+    request: HistoricalPriceRequest, start: date, end: date
+) -> dict[str, object]:
+    return {
+        "exchange": request.exchange,
+        "symboltoken": request.symbol_token,
+        "interval": "ONE_DAY",
+        "fromdate": f"{start.isoformat()} 09:15",
+        "todate": f"{end.isoformat()} 15:30",
+    }
+
+
+def _parse_historical_closes(
+    value: object, start: date, end: date
+) -> tuple[HistoricalClose, ...]:
+    if not isinstance(value, dict) or value.get("status") is not True:
+        raise ValueError("historical request was not successful")
+    data = value.get("data")
+    if not isinstance(data, list) or not data:
+        raise ValueError("historical data is missing")
+
+    closes: list[HistoricalClose] = []
+    previous_date: date | None = None
+    for row in data:
+        if not isinstance(row, list) or len(row) != 6:
+            raise ValueError("historical row is invalid")
+        timestamp = row[0]
+        if not isinstance(timestamp, str):
+            raise ValueError("historical timestamp is invalid")
+        try:
+            parsed_timestamp = datetime.fromisoformat(timestamp)
+        except ValueError:
+            raise ValueError("historical timestamp is invalid") from None
+        if parsed_timestamp.tzinfo is None:
+            raise ValueError("historical timestamp is invalid")
+        trading_date = parsed_timestamp.astimezone(_INDIA_TIME).date()
+        if not start <= trading_date <= end:
+            raise ValueError("historical timestamp is outside the requested window")
+        if previous_date is not None and trading_date <= previous_date:
+            raise ValueError("historical rows are not strictly ordered")
+        previous_date = trading_date
+        closes.append(
+            HistoricalClose(
+                trading_date=trading_date,
+                close_price=_positive_decimal(row[4]),
+            )
+        )
+    return tuple(closes)

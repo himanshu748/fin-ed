@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -9,13 +10,18 @@ import pytest
 
 import fined.market_data.angel_one as angel_one
 from fined.market_data.angel_one import (
+    HISTORICAL_CANDLE_ENDPOINT,
     QUOTE_ENDPOINT,
     SEARCH_SCRIP_ENDPOINT,
     AngelOneMarketDataConfig,
     AngelOneMarketDataProvider,
     create_market_data_provider,
 )
-from fined.market_data.models import InstrumentSearchRequest, QuoteRequest
+from fined.market_data.models import (
+    HistoricalPriceRequest,
+    InstrumentSearchRequest,
+    QuoteRequest,
+)
 from fined.market_data.provider import (
     MARKET_DATA_UNAVAILABLE_MESSAGE,
     MarketDataUnavailableError,
@@ -113,6 +119,38 @@ async def test_search_rejects_f_string_forbidden_endpoint_before_transport(
 
 
 @pytest.mark.asyncio
+async def test_historical_prices_reject_runtime_reassigned_endpoint_before_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Catches endpoint mutation turning a read-only history lookup into account access.
+    transport_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal transport_calls
+        transport_calls += 1
+        return httpx.Response(500, request=request)
+
+    monkeypatch.setattr(
+        angel_one,
+        "HISTORICAL_CANDLE_ENDPOINT",
+        "https://apiconnect.angelone.in/rest/secure/angelbroking/portfolio/v1/getHolding",
+    )
+    provider = AngelOneMarketDataProvider(
+        config(), transport=httpx.MockTransport(handler)
+    )
+
+    with pytest.raises(MarketDataUnavailableError) as failure:
+        await provider.get_historical_prices(
+            HistoricalPriceRequest(
+                "NSE", "2885", date(2024, 1, 6), date(2026, 8, 9)
+            )
+        )
+
+    assert str(failure.value) == MARKET_DATA_UNAVAILABLE_MESSAGE
+    assert transport_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_batch_transport_gate_allows_exact_endpoints_in_request_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -135,18 +173,21 @@ async def test_batch_transport_gate_allows_exact_endpoints_in_request_order(
         (
             (QUOTE_ENDPOINT, {"probe": "quote"}),
             (SEARCH_SCRIP_ENDPOINT, {"probe": "search"}),
+            (HISTORICAL_CANDLE_ENDPOINT, {"probe": "history"}),
         )
     )
 
-    assert [response.json()["sequence"] for response in responses] == [1, 2]
+    assert [response.json()["sequence"] for response in responses] == [1, 2, 3]
     assert client_constructions == [1]
     assert [request.url for request in captured_requests] == [
         httpx.URL(QUOTE_ENDPOINT),
         httpx.URL(SEARCH_SCRIP_ENDPOINT),
+        httpx.URL(HISTORICAL_CANDLE_ENDPOINT),
     ]
     assert [json.loads(request.content) for request in captured_requests] == [
         {"probe": "quote"},
         {"probe": "search"},
+        {"probe": "history"},
     ]
 
 
@@ -236,6 +277,109 @@ async def test_angel_one_provider_posts_ltp_request_and_normalizes_quote(
     assert str(quote.last_traded_price) == "812.35"
     assert str(quote.close_price) == "808.1"
     assert quote.exchange_time == datetime(2026, 8, 8, 3, 30, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_historical_prices_use_two_bounded_daily_windows_and_available_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Catches downloading an entire holding period or choosing weekend boundary dates.
+    captured_requests: list[httpx.Request] = []
+    client_constructions = capture_async_client_constructions(monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        body = json.loads(request.content)
+        if body["fromdate"] == "2024-01-06 09:15":
+            data = [
+                ["2024-01-08T00:00:00+05:30", 99, 102, 98, 100, 1500],
+                ["2024-01-09T00:00:00+05:30", 100, 104, 99, 103, 1600],
+            ]
+        else:
+            data = [
+                ["2026-08-06T00:00:00+05:30", 123, 126, 122, 124, 1700],
+                ["2026-08-07T00:00:00+05:30", 124, 127, 123, 125, 1800],
+            ]
+        return httpx.Response(
+            200,
+            json={"status": True, "message": "SUCCESS", "data": data},
+            request=request,
+        )
+
+    provider = AngelOneMarketDataProvider(
+        config(), transport=httpx.MockTransport(handler)
+    )
+    request = HistoricalPriceRequest(
+        "NSE", "2885", date(2024, 1, 6), date(2026, 8, 9)
+    )
+
+    prices = await provider.get_historical_prices(request)
+
+    assert client_constructions == [1]
+    assert [item.url for item in captured_requests] == [
+        httpx.URL(HISTORICAL_CANDLE_ENDPOINT),
+        httpx.URL(HISTORICAL_CANDLE_ENDPOINT),
+    ]
+    assert [json.loads(item.content) for item in captured_requests] == [
+        {
+            "exchange": "NSE",
+            "symboltoken": "2885",
+            "interval": "ONE_DAY",
+            "fromdate": "2024-01-06 09:15",
+            "todate": "2024-01-20 15:30",
+        },
+        {
+            "exchange": "NSE",
+            "symboltoken": "2885",
+            "interval": "ONE_DAY",
+            "fromdate": "2026-07-26 09:15",
+            "todate": "2026-08-09 15:30",
+        },
+    ]
+    assert prices.entry.trading_date == date(2024, 1, 8)
+    assert prices.entry.close_price == Decimal("100")
+    assert prices.valuation.trading_date == date(2026, 8, 7)
+    assert prices.valuation.close_price == Decimal("125")
+    assert prices.provider == "Angel One SmartAPI"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "data",
+    [
+        [],
+        [["2024-01-08T00:00:00+05:30", 99, 102, 98, 0, 1500]],
+        [["not-a-time", 99, 102, 98, 100, 1500]],
+        [["2024-02-01T00:00:00+05:30", 99, 102, 98, 100, 1500]],
+        [
+            ["2024-01-09T00:00:00+05:30", 100, 104, 99, 103, 1600],
+            ["2024-01-08T00:00:00+05:30", 99, 102, 98, 100, 1500],
+        ],
+    ],
+)
+async def test_historical_prices_sanitize_empty_or_malformed_candles(
+    data: list[object],
+) -> None:
+    # Catches unsafe partial calculations from malformed or out-of-window data.
+    provider = AngelOneMarketDataProvider(
+        config(),
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={"status": True, "message": "SUCCESS", "data": data},
+                request=request,
+            )
+        ),
+    )
+
+    with pytest.raises(MarketDataUnavailableError) as failure:
+        await provider.get_historical_prices(
+            HistoricalPriceRequest(
+                "NSE", "2885", date(2024, 1, 6), date(2024, 1, 20)
+            )
+        )
+
+    assert str(failure.value) == MARKET_DATA_UNAVAILABLE_MESSAGE
 
 
 @pytest.mark.parametrize(

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
 
 from fined.market_data.models import (
+    HistoricalClose,
+    HistoricalPricePair,
+    HistoricalPriceRequest,
     InstrumentSearchRequest,
     MarketInstrument,
     MarketQuote,
@@ -59,6 +62,41 @@ def test_market_quote_serializes_attributable_decimal_data() -> None:
         "received_time": "2026-08-08T03:30:01+00:00",
         "is_order": False,
     }
+
+
+def test_historical_price_request_validates_instrument_and_date_order() -> None:
+    # Catches historical requests bypassing cash-market validation or reversing time.
+    request = HistoricalPriceRequest(
+        exchange="NSE",
+        symbol_token="2885",
+        purchase_date=date(2024, 1, 6),
+        valuation_date=date(2026, 8, 7),
+    )
+
+    assert request.purchase_date == date(2024, 1, 6)
+    with pytest.raises(ValueError, match="purchase date"):
+        HistoricalPriceRequest(
+            "NSE", "2885", date(2026, 8, 8), date(2026, 8, 7)
+        )
+    with pytest.raises(ValueError, match="exchange"):
+        HistoricalPriceRequest(
+            "NFO", "2885", date(2024, 1, 6), date(2026, 8, 7)
+        )
+
+
+def test_historical_close_and_pair_reject_invalid_provider_data() -> None:
+    # Catches nonpositive closes and reversed provider-selected trading dates.
+    entry = HistoricalClose(date(2024, 1, 8), Decimal("100"))
+    valuation = HistoricalClose(date(2026, 8, 7), Decimal("125"))
+    pair = HistoricalPricePair(entry, valuation, "Angel One SmartAPI")
+
+    assert pair.entry.close_price == Decimal("100")
+    with pytest.raises(ValueError, match="positive"):
+        HistoricalClose(date(2024, 1, 8), Decimal("0"))
+    with pytest.raises(ValueError, match="order"):
+        HistoricalPricePair(valuation, entry, "Angel One SmartAPI")
+    with pytest.raises(ValueError, match="provider"):
+        HistoricalPricePair(entry, valuation, " ")
 
 
 def test_instrument_search_rejects_blank_or_oversized_query() -> None:
@@ -140,3 +178,12 @@ async def test_unavailable_provider_uses_one_fixed_safe_message() -> None:
         await provider.get_quote(QuoteRequest("NSE", "3045"))
 
     assert str(failure.value) == MARKET_DATA_UNAVAILABLE_MESSAGE
+
+    with pytest.raises(MarketDataUnavailableError) as historical_failure:
+        await provider.get_historical_prices(
+            HistoricalPriceRequest(
+                "NSE", "3045", date(2024, 1, 1), date(2024, 1, 2)
+            )
+        )
+
+    assert str(historical_failure.value) == MARKET_DATA_UNAVAILABLE_MESSAGE
