@@ -75,13 +75,9 @@ def test_historical_price_request_validates_instrument_and_date_order() -> None:
 
     assert request.purchase_date == date(2024, 1, 6)
     with pytest.raises(ValueError, match="purchase date"):
-        HistoricalPriceRequest(
-            "NSE", "2885", date(2026, 8, 8), date(2026, 8, 7)
-        )
+        HistoricalPriceRequest("NSE", "2885", date(2026, 8, 8), date(2026, 8, 7))
     with pytest.raises(ValueError, match="exchange"):
-        HistoricalPriceRequest(
-            "NFO", "2885", date(2024, 1, 6), date(2026, 8, 7)
-        )
+        HistoricalPriceRequest("NFO", "2885", date(2024, 1, 6), date(2026, 8, 7))
 
 
 def test_historical_close_and_pair_reject_invalid_provider_data() -> None:
@@ -181,9 +177,7 @@ async def test_unavailable_provider_uses_one_fixed_safe_message() -> None:
 
     with pytest.raises(MarketDataUnavailableError) as historical_failure:
         await provider.get_historical_prices(
-            HistoricalPriceRequest(
-                "NSE", "3045", date(2024, 1, 1), date(2024, 1, 2)
-            )
+            HistoricalPriceRequest("NSE", "3045", date(2024, 1, 1), date(2024, 1, 2))
         )
 
     assert str(historical_failure.value) == MARKET_DATA_UNAVAILABLE_MESSAGE

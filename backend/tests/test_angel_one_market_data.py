@@ -141,9 +141,7 @@ async def test_historical_prices_reject_runtime_reassigned_endpoint_before_trans
 
     with pytest.raises(MarketDataUnavailableError) as failure:
         await provider.get_historical_prices(
-            HistoricalPriceRequest(
-                "NSE", "2885", date(2024, 1, 6), date(2026, 8, 9)
-            )
+            HistoricalPriceRequest("NSE", "2885", date(2024, 1, 6), date(2026, 8, 9))
         )
 
     assert str(failure.value) == MARKET_DATA_UNAVAILABLE_MESSAGE
@@ -309,9 +307,7 @@ async def test_historical_prices_use_two_bounded_daily_windows_and_available_clo
     provider = AngelOneMarketDataProvider(
         config(), transport=httpx.MockTransport(handler)
     )
-    request = HistoricalPriceRequest(
-        "NSE", "2885", date(2024, 1, 6), date(2026, 8, 9)
-    )
+    request = HistoricalPriceRequest("NSE", "2885", date(2024, 1, 6), date(2026, 8, 9))
 
     prices = await provider.get_historical_prices(request)
 
@@ -374,9 +370,7 @@ async def test_historical_prices_sanitize_empty_or_malformed_candles(
 
     with pytest.raises(MarketDataUnavailableError) as failure:
         await provider.get_historical_prices(
-            HistoricalPriceRequest(
-                "NSE", "2885", date(2024, 1, 6), date(2024, 1, 20)
-            )
+            HistoricalPriceRequest("NSE", "2885", date(2024, 1, 6), date(2024, 1, 20))
         )
 
     assert str(failure.value) == MARKET_DATA_UNAVAILABLE_MESSAGE

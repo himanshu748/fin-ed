@@ -33,7 +33,10 @@ class HistoricalPriceRequest:
 
     def __post_init__(self) -> None:
         QuoteRequest(self.exchange, self.symbol_token)
-        if type(self.purchase_date) is not date or type(self.valuation_date) is not date:
+        if (
+            type(self.purchase_date) is not date
+            or type(self.valuation_date) is not date
+        ):
             raise ValueError("historical dates must be calendar dates")
         if self.purchase_date > self.valuation_date:
             raise ValueError("purchase date must not be after valuation date")

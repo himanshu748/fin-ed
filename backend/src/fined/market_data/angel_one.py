@@ -157,9 +157,7 @@ class AngelOneMarketDataProvider:
                     ),
                     (
                         HISTORICAL_CANDLE_ENDPOINT,
-                        _historical_payload(
-                            request, valuation_start, valuation_end
-                        ),
+                        _historical_payload(request, valuation_start, valuation_end),
                     ),
                 )
             )
