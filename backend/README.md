@@ -156,11 +156,12 @@ aborts publication, and generated builds remain excluded from Git.
 
 ## Read-only Angel One market data and MCP
 
-The optional quote gateway uses Angel One SmartAPI's official LTP endpoint. Add
-all five `ANGEL_ONE_*` values shown in `.env.example` to `.env.local`; when any
-value is absent or invalid, quote lookup fails closed without affecting the
-voice tutor. Access tokens expire according to the broker's authentication
-policy. Generate the current token locally from the `backend` directory:
+The optional market-data gateway uses Angel One SmartAPI's official LTP,
+instrument-search and historical-candle endpoints. Add all five `ANGEL_ONE_*`
+values shown in `.env.example` to `.env.local`; when any value is absent or
+invalid, market-data lookup fails closed without affecting the voice tutor.
+Access tokens expire according to the broker's authentication policy. Generate
+the current token locally from the `backend` directory:
 
 ```bash
 uv run python -m fined.market_data.session_setup
@@ -178,10 +179,19 @@ Run the local stdio MCP server with:
 uv run python -m fined.market_data.mcp_server
 ```
 
-It exposes only `get_market_quote(exchange, symbol_token)`. The tool is marked
-read-only, includes provider and exchange timestamps, and has no account,
-holding, position, recommendation, or order capability. MCP supplies the tool
-interface; Angel One supplies the authenticated market data.
+It exposes only `get_market_quote(exchange, symbol_token)` and
+`search_market_instruments(query, exchange, limit)`. Both tools are marked
+read-only and have no account, holding, position, recommendation or order
+capability. MCP supplies the tool interface while Angel One supplies the
+authenticated market data.
+
+Historical data stays inside the voice agent through
+`calculate_historical_return`. The tool requires an instrument resolved by
+search, a purchase date, a valuation date and an investment amount. It fetches
+two bounded `ONE_DAY` candle windows, uses whole units and retains leftover
+cash. The result includes actual provider dates and prices plus a fixed warning
+that dividends, splits, bonus issues, fees, taxes and inflation are excluded.
+The endpoint cannot read broker trade history or place an order.
 
 ## Tests
 
@@ -219,6 +229,7 @@ backend/
 ├── src/fined/
 │   ├── agent.py                       # Prompt, profile, greeting, and tools
 │   ├── calculator.py                  # Deterministic delivery illustration
+│   ├── historical_returns.py          # Whole-unit past-return illustration
 │   ├── chat_model.py                  # Gemini allowlist and output policy
 │   ├── provider_safety.py             # Safe provider-error boundary
 │   ├── speech.py                      # Spoken rendering and URL handling

@@ -30,11 +30,14 @@ The Angel One adapter is restricted to exact request definitions for:
 
 - `POST /rest/secure/angelbroking/market/v1/quote/`
 - `POST /rest/secure/angelbroking/order/v1/searchScrip`
+- `POST /rest/secure/angelbroking/historical/v1/getCandleData`
 
 The second path contains `order/v1` in Angel One's API naming but is an
-instrument search endpoint. No caller can supply a URL, host, HTTP method or
-arbitrary path. The adapter rejects every request not represented by one of
-these two internal request definitions.
+instrument search endpoint. The historical endpoint is limited to `ONE_DAY`
+candles and two bounded date windows used to locate entry and valuation closing
+prices. No caller can supply a URL, host, HTTP method or arbitrary path. The
+adapter rejects every request not represented by one of these three internal
+request definitions.
 
 FinEd must never expose or implement broker endpoints for account profile,
 funds, holdings, positions, order history, trade history, order placement,
@@ -60,6 +63,7 @@ upgrade if FinEd becomes a public multi-user service.
 | `search_market_knowledge` | `read_only` |
 | `get_market_quote` | `read_only` |
 | `search_market_instruments` | `read_only` |
+| `calculate_historical_return` | `read_only` |
 | `open_paper_trading_dashboard` | `paper_simulation` |
 | `prepare_paper_order` | `paper_simulation` |
 | `get_paper_portfolio_summary` | `read_only` |
@@ -67,7 +71,28 @@ upgrade if FinEd becomes a public multi-user service.
 
 The external MCP server continues exposing only `get_market_quote` and
 `search_market_instruments`. Both remain annotated as read-only,
-non-destructive and idempotent.
+non-destructive and idempotent. Historical return calculation remains an
+in-process voice-agent tool so its provider result can be combined with a
+bounded deterministic calculation and fixed educational warnings.
+
+## Historical return tool
+
+### `calculate_historical_return`
+
+Inputs identify one provider-resolved NSE or BSE cash-market instrument, a
+strict purchase date, a strict valuation date and a positive bounded rupee
+amount. The adapter requests only daily candles from two short windows: the
+first available close on or after the purchase date and the last available
+close on or before the valuation date. It never downloads account history or
+broker trade history.
+
+The deterministic result uses whole units and retains uninvested cash. It
+returns the entry and valuation dates actually used, both closing prices,
+units, leftover cash, final value, absolute gain or loss and percentage return.
+It labels the result as an unadjusted historical illustration based on daily
+closes. It always states that dividends, splits, bonus issues, fees, taxes and
+inflation are excluded, so the result is not a total-return figure, forecast or
+recommendation.
 
 ## New educational tools
 
@@ -131,7 +156,8 @@ Required tests will prove:
 
 - every registered tool has one allowed capability
 - no real-money or broker-account capability can be registered
-- the Angel One transport accepts only the two exact read-only operations
+- the Angel One transport accepts the exact quote and instrument-search operations
+- the Angel One transport accepts the exact bounded historical-candle operation
 - raw URLs, alternate methods and order/account endpoints are rejected
 - MCP exposes only the two read-only market-data tools
 - prompt-injection text cannot create an unavailable tool or arbitrary request
@@ -140,6 +166,8 @@ Required tests will prove:
 - paper activity cannot mutate or query an Angel One account
 - each new calculator validates bounds, returns deterministic results and
   includes the required educational warning
+- historical return requests use bounded entry and valuation windows, select
+  the correct available closes and preserve whole-unit leftover cash
 - existing voice, RAG, memory, quote and paper-trading tests remain green
 
 ## Documentation and deployment

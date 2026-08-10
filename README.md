@@ -11,7 +11,8 @@ The project is built for the Financial Services track of **10 Days of Voice Agen
 - Google Gemini conversation and tool use with a strict model allowlist
 - Murf Falcon 2 speech using `Nikhil`, `Conversational` and locale `en-IN`
 - LiveKit Cloud transport with a prewarmed Python worker
-- Optional Angel One SmartAPI quotes through read-only tools
+- Optional Angel One SmartAPI live quotes and historical closes through read-only tools
+- Whole-unit historical return illustrations with explicit corporate-action caveats
 - A browser-owned paper trading ledger with ₹1,00,000 virtual cash
 - Voice tools that can open the paper dashboard, prepare a simulated order and read the paper portfolio
 - Visible session IDs with separate transcript history for each meaningful session
@@ -42,7 +43,7 @@ Browser microphone or typed question
   -> Browser audio, transcript and session archive
 
 Optional tool paths
-  -> Angel One SmartAPI for read-only NSE quotes
+  -> Angel One SmartAPI for read-only NSE and BSE quotes, symbols and daily closes
   -> Browser paper ledger for simulated orders
   -> SQLite for consented caller memory
   -> Local knowledge index for cited educational evidence
@@ -135,9 +136,56 @@ pnpm dev --port 3001
 
 Then open [http://127.0.0.1:3001](http://127.0.0.1:3001), select a learning mode, choose **Talk to FinEd Saathi** and allow microphone access.
 
-## Optional Angel One live quotes
+## Day 5 domain tools
 
-Create an Angel One SmartAPI app of type **Trading**. The app type provides the authenticated market data endpoints used by this project. FinEd only calls quote and instrument search paths. It does not call broker order paths.
+The primary Day 5 tool is `calculate_angel_one_trade_cost`. It computes an
+Angel One equity-delivery charge estimate from a bundled local schedule snapshot.
+The current snapshot applies from **1 March 2026** and records its official Angel
+One, NSE, BSE and SEBI source links. This calculator does not need a broker login
+or network connection. It is local schedule-backed data, not a live contract note
+or account-specific result.
+
+The tool description requires the model to collect the trade date, exchange,
+quantity, buy price and optional sell details before calling it. Every result
+includes its applicability date, estimate status and source links. Unsupported
+dates, malformed inputs or a damaged schedule produce a fixed spoken fallback
+instead of guessed charges.
+
+The separate `get_market_quote` and `search_market_instruments` tools use live
+Angel One SmartAPI data when all optional credentials below are configured. They
+return the provider and exchange timestamp. If Angel One is unavailable, the
+agent says live market data could not be verified and continues with the lesson.
+
+`calculate_historical_return` uses the same market-data-only connection. It
+resolves an NSE or BSE instrument, fetches two bounded daily-candle windows and
+uses the first available close on or after the requested purchase date plus the
+last available close on or before the valuation date. It calculates whole units,
+keeps leftover cash and returns the absolute and percentage change.
+
+Historical results are unadjusted illustrations, not total-return figures. They
+exclude dividends, splits, bonus issues, fees, taxes and inflation. FinEd always
+labels this limitation and never presents the result as a forecast or
+recommendation.
+
+For a Day 5 recording, ask:
+
+> On 7 August 2026, I bought 10 shares on NSE at ₹1,400 and sold them at ₹1,450
+> as a delivery trade. Use your verified Angel One calculator to explain every
+> charge and tell me which schedule date you used.
+
+To demonstrate historical data, ask:
+
+> If I had invested ₹10,000 in Reliance on 6 January 2024, what would it have
+> been worth on 7 August 2026? Use historical data and explain what the estimate
+> excludes.
+
+For the graceful failure path, ask for the same calculation with a trade date
+before 1 March 2026. The agent must say that no verified schedule covers that
+date and must not invent a result.
+
+## Optional Angel One read-only market data
+
+Create an Angel One SmartAPI app of type **Trading**. The app type provides the authenticated market data endpoints used by this project. FinEd calls only the exact quote, instrument-search and historical-candle paths. It never calls account, holding, position, trade-history or real-order endpoints.
 
 Add these values to `backend/.env.local`:
 
@@ -149,9 +197,9 @@ ANGEL_ONE_CLIENT_PUBLIC_IP
 ANGEL_ONE_MAC_ADDRESS
 ```
 
-The access token must be current. If a credential is missing, expired or rejected, quote tools fail closed and say live data is unavailable. The rest of the voice session remains usable.
+The access token must be current. If a credential is missing, expired or rejected, market-data tools fail closed and say live data is unavailable. The rest of the voice session remains usable.
 
-Market data availability depends on Angel One access, exchange hours and the active account's entitlements. Every accepted quote is returned with its provider and exchange timestamp. Paper order drafts expire 30 seconds after the quote.
+Market data availability depends on Angel One access, exchange hours and the active account's entitlements. Every accepted quote is returned with its provider and exchange timestamp. Historical candles use Angel One's `ONE_DAY` interval. Paper order drafts expire 30 seconds after the quote.
 
 ## Paper trading
 
@@ -196,9 +244,10 @@ Gemini 3.x uses minimal thinking. Gemini 2.5 uses a zero thinking budget. Every 
 3. Choose a learning mode then start a voice session.
 4. Confirm the UI shows a session ID and the state changes to **Listening** or **Speaking**.
 5. Ask one Indian market concept such as "What is an ETF?"
-6. Ask FinEd to open paper trading and prepare one simulated order if live quotes are configured.
-7. Show the transcript, cited sources, Nikhil's audio and the education-only boundary.
-8. Keep real credentials and financial identifiers out of the recording.
+6. Ask a historical return question and show the daily-close limitation.
+7. Ask FinEd to open paper trading and prepare one simulated order if live quotes are configured.
+8. Show the transcript, cited sources, Nikhil's audio and the education-only boundary.
+9. Keep real credentials and financial identifiers out of the recording.
 
 ## Verify the project
 
