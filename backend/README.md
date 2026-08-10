@@ -32,6 +32,8 @@ Complete `.env.local` with your own credentials:
 | `GOOGLE_API_KEY`     | Gemini conversation and optional knowledge embeddings          |
 | `GEMINI_MODEL`       | Optional exact model selection; defaults to `gemini-3.5-flash-lite` |
 | `FINED_MEMORY_DB_PATH` | Optional Day 4 SQLite path; defaults inside `data/memory`     |
+| `SIP_OUTBOUND_TRUNK_ID` | Optional stored LiveKit outbound SIP trunk ID (`ST_...`) for Day 6 |
+| `FINED_OUTBOUND_AGENT_NAME` | Optional Day 6 worker name; defaults to `my-agent`             |
 
 Do not commit `.env.local` or paste credentials into issues, logs, or docs.
 
@@ -59,6 +61,55 @@ The production CLI mode is:
 ```bash
 uv run dotenv -f .env.local run -- python src/agent.py start
 ```
+
+## Day 6: consented outbound paper-practice reminder
+
+The optional outbound flow is a private, operator-triggered command for one
+learner who explicitly opted in to a paper-trading practice reminder. It is not
+available to the browser. It creates an explicit LiveKit dispatch with
+phone-free allowlisted metadata, then makes one SIP participant dial. The
+outbound agent says who it is, states the opt-in reason and lets the recipient
+say stop before any lesson.
+
+Create a stored outbound SIP trunk in LiveKit Cloud with the Twilio carrier and
+Indian termination enabled. Put its `ST_...` ID in `.env.local`; the command
+also uses the existing `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
+`LIVEKIT_API_SECRET`. Carrier credentials stay with the stored LiveKit trunk,
+not this repository.
+
+```text
+SIP_OUTBOUND_TRUNK_ID=ST_your_livekit_outbound_trunk_id
+# FINED_OUTBOUND_AGENT_NAME=my-agent
+```
+
+The agent-name value is optional and defaults to `my-agent`. Do not put a
+recipient number in `.env.local`. Supply one Indian number in E.164 form at the
+private command boundary, such as `+919876543210`; the example is a placeholder.
+
+Before each attempt, verify a specific recorded opt-in and confirm that the
+learner has not withdrawn consent. Start the `my-agent` worker, then run a dry
+run from this directory:
+
+```bash
+uv run dotenv -f .env.local run -- python src/outbound_call.py --to +919876543210 --dry-run
+```
+
+With a safe configuration, it prints `Dry run passed. No phone call was made.`
+
+The dry run validates the E.164 number, stored trunk ID and agent name. It does
+not create a LiveKit client, dispatch or call. Only after it succeeds and
+consent is checked again, place exactly one real call:
+
+```bash
+uv run dotenv -f .env.local run -- python src/outbound_call.py --to +919876543210
+```
+
+The real command dispatches first, then dials once through the stored trunk. It
+has a 25-second ringing limit and a five-minute maximum duration. It does not
+log the number in its normal output, persist a contact or job, use the browser,
+access a broker or execute a real or paper trade. Busy, unanswered and failed
+attempts do not retry. Do not place this command in a scheduler or call it from
+a browser route.
 
 ## Voice and model configuration
 

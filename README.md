@@ -18,6 +18,7 @@ The project is built for the Financial Services track of **10 Days of Voice Agen
 - Visible session IDs with separate transcript history for each meaningful session
 - Consent-gated caller memory backed by SQLite
 - An optional local knowledge index with fail-closed evidence behavior
+- A manual, consented paper-practice reminder through a bounded LiveKit SIP call
 - Guardrails for credentials, personalised recommendations, guaranteed outcomes, wrongdoing and prompt extraction
 - An accessible responsive interface with reduced-motion support
 
@@ -26,6 +27,12 @@ The project is built for the Financial Services track of **10 Days of Voice Agen
 FinEd Saathi is an educational product. It never asks for a broker password, PIN, OTP, PAN, Aadhaar or bank details. Angel One credentials stay in the backend environment and are never sent to the browser.
 
 Paper orders are simulated. A learner must review and confirm each draft in the browser. No broker order API is called and no real money is used.
+
+The optional Day 6 paper-practice reminder is started only by a private
+server-side command after a learner's explicit opt-in. It creates a new LiveKit
+agent dispatch before one SIP dial. The caller first hears FinEd's identity,
+the opt-in purpose and a way to say stop. It has no browser, broker or
+real-trading path, and it does not store a recipient number or schedule a retry.
 
 The F&O mode explains mechanics, margin and loss risk. It does not provide signals or live strategies. Personalised decisions belong with a SEBI-registered investment adviser.
 
@@ -47,6 +54,12 @@ Optional tool paths
   -> Browser paper ledger for simulated orders
   -> SQLite for consented caller memory
   -> Local knowledge index for cited educational evidence
+
+Optional Day 6 outbound reminder
+  -> private operator command
+  -> explicit LiveKit dispatch with allowlisted, phone-free metadata
+  -> one SIP participant dial through a stored LiveKit Cloud outbound trunk
+  -> consented Indian E.164 recipient
 ```
 
 ## Run locally
@@ -215,6 +228,64 @@ The paper portfolio starts with ₹1,00,000 in virtual cash and lives in browser
 - A reset control that restores the original virtual balance
 
 Ask the agent to open paper trading or prepare a paper order. The LiveKit RPC bridge opens the dashboard and transfers the draft to the browser. The browser remains the source of truth for the simulated ledger.
+
+## Day 6 consented outbound practice reminder
+
+This optional flow is a single education-only paper-trading practice reminder,
+not a campaign, scheduler or follow-up service. The only supported reminder is
+`paper_practice` in Stocks mode. During the call, FinEd does not access the
+browser, caller memory, a broker account, a live portfolio or a paper order. It
+can explain a concept if asked, but it must end the call immediately if the
+recipient says stop, unsubscribe, do not call or end this call.
+
+The operator must have a recorded, specific opt-in for this reminder and must
+reconfirm that it has not been withdrawn before every manual attempt. The
+outbound helper keeps the phone number out of dispatch metadata and has no
+contact store, job store or automatic retry. A busy, unanswered or failed dial
+ends the attempt. A later call requires a new manual command after consent is
+checked again.
+
+### Private configuration
+
+Configure a stored outbound SIP trunk in LiveKit Cloud with the Twilio carrier,
+then add its LiveKit trunk ID to `backend/.env.local`. The existing
+`LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` remain required.
+The optional agent-name setting defaults to the registered `my-agent` worker.
+
+```text
+SIP_OUTBOUND_TRUNK_ID=ST_your_livekit_outbound_trunk_id
+# FINED_OUTBOUND_AGENT_NAME=my-agent
+```
+
+Use an Indian recipient number in E.164 form, such as `+919876543210`, with no
+spaces or punctuation. The example is a placeholder. Do not put recipient
+numbers in environment files, browser code, source control or tickets.
+
+### Operator runbook
+
+Start the backend worker first. From `backend`, validate the number format and
+private outbound configuration without creating a LiveKit client, dispatch or
+SIP call:
+
+```bash
+uv run dotenv -f .env.local run -- python src/outbound_call.py --to +919876543210 --dry-run
+```
+
+With a safe configuration, the dry run prints `Dry run passed. No phone call
+was made.`
+
+Only after a successful dry run and a fresh consent check, omit `--dry-run` for
+one real attempt:
+
+```bash
+uv run dotenv -f .env.local run -- python src/outbound_call.py --to +919876543210
+```
+
+The real command creates the explicit LiveKit dispatch first, then makes one
+SIP dial through the stored trunk. It uses a 25-second ringing limit and a
+five-minute maximum call duration. Normal output contains a generic outcome,
+not the phone number. Never run this command from the browser, a scheduler or
+an automatic retry job.
 
 ## Session history and memory
 
