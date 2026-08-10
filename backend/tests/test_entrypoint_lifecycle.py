@@ -19,6 +19,12 @@ from fined.market_data.models import MarketQuote
 from fined.market_data.provider import MarketDataUnavailableError
 from fined.memory import CallerMemory
 from fined.modes import LearningMode
+from fined.outbound import (
+    OUTBOUND_DIAL_TIMEOUT_SECONDS,
+    PAPER_PRACTICE_REMINDER,
+    build_outbound_greeting,
+    build_outbound_metadata,
+)
 from fined.paper_trading import PaperOrderDraft
 
 
@@ -129,6 +135,16 @@ class FakeLocalParticipant:
         return '{"version":1,"paper":true,"opened":true}'
 
 
+class FakeRoomService:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+        self.removals: list[object] = []
+
+    async def remove_participant(self, request: object) -> None:
+        self.events.append("remove_participant")
+        self.removals.append(request)
+
+
 class FakeContext:
     def __init__(self, events: list[str], fail_at: str | None) -> None:
         self.events = events
@@ -137,9 +153,12 @@ class FakeContext:
         self.room = SimpleNamespace(
             name="test-room", local_participant=self.local_participant
         )
+        self.room_service = FakeRoomService(events)
+        self.api = SimpleNamespace(room=self.room_service)
         self.proc = SimpleNamespace(userdata={"vad": object()})
         self.log_context_fields: dict[str, str] = {}
         self.shutdown_callbacks: list[Any] = []
+        self.shutdown_reasons: list[str] = []
 
     async def connect(self) -> None:
         self.events.append("connect")
@@ -155,6 +174,10 @@ class FakeContext:
         self.shutdown_callbacks.append(callback)
         if self.fail_at == "shutdown_registration":
             raise LifecycleAbort("shutdown_registration")
+
+    def shutdown(self, reason: str) -> None:
+        self.events.append("shutdown")
+        self.shutdown_reasons.append(reason)
 
 
 @dataclass
@@ -445,6 +468,78 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
     assert entrypoint.PAPER_HOLDING_QUOTES_METHOD not in (
         harness.context.local_participant.rpc_methods
     )
+
+
+@pytest.mark.asyncio
+async def test_outbound_dispatch_uses_disclosure_and_never_reads_browser_memory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Catches an outbound reminder inheriting a caller ID, saved memory, or web greeting.
+    harness = _install_lifecycle_fakes(monkeypatch, None, tmp_path / "generated")
+    harness.context.job = SimpleNamespace(  # type: ignore[attr-defined]
+        metadata=build_outbound_metadata(PAPER_PRACTICE_REMINDER)
+    )
+
+    def memory_lookup_should_not_run(self: object, caller_id: str) -> object:
+        del self, caller_id
+        raise AssertionError("outbound reminders must not read browser memory")
+
+    monkeypatch.setattr(
+        entrypoint.SQLiteCallerMemoryStore,
+        "lookup",
+        memory_lookup_should_not_run,
+    )
+
+    def market_provider_should_not_be_created() -> object:
+        raise AssertionError("outbound reminders must not initialize market access")
+
+    monkeypatch.setattr(
+        entrypoint,
+        "create_market_data_provider",
+        market_provider_should_not_be_created,
+    )
+
+    await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
+
+    state = harness.session.userdata
+    assert state is not None
+    assert state.outbound_reminder == PAPER_PRACTICE_REMINDER  # type: ignore[union-attr]
+    assert harness.session.spoken == [build_outbound_greeting(PAPER_PRACTICE_REMINDER)]
+    assert "Welcome back" not in harness.session.spoken[0]
+    assert harness.session.generated_replies == []
+    assert harness.events.count("rpc_registration") == 0
+    assert harness.context.local_participant.rpc_methods == {}
+    assert harness.context.local_participant.outbound_rpc_calls == []
+
+
+def test_outbound_recipient_window_exceeds_the_bounded_sip_dial_window() -> None:
+    # Catches a valid near-timeout SIP answer connecting after the agent has exited.
+    assert (
+        entrypoint.OUTBOUND_RECIPIENT_JOIN_TIMEOUT_SECONDS
+        > OUTBOUND_DIAL_TIMEOUT_SECONDS
+    )
+
+
+@pytest.mark.asyncio
+async def test_outbound_stop_removes_the_sip_recipient_even_when_goodbye_fails() -> (
+    None
+):
+    # Catches a failed TTS goodbye leaving a stop-requested caller connected.
+    events: list[str] = []
+    session = FakeSession(events, "say")
+    context = FakeContext(events, None)
+    control = entrypoint._LiveKitOutboundCallControl(
+        session,
+        context,
+        "outbound-recipient-1",
+    )
+
+    with pytest.raises(LifecycleAbort, match="say"):
+        await control.end_call()
+
+    assert context.room_service.removals[0].room == "test-room"
+    assert context.room_service.removals[0].identity == "outbound-recipient-1"
+    assert context.shutdown_reasons == ["outbound recipient requested stop"]
 
 
 @pytest.mark.asyncio

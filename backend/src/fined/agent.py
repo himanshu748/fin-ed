@@ -58,6 +58,7 @@ from fined.memory import (
     MemoryValidationError,
 )
 from fined.modes import LearningMode, parse_learning_mode
+from fined.outbound import OutboundReminder
 from fined.paper_trading import (
     PAPER_DRAFT_LIFETIME,
     PaperOrderDraft,
@@ -79,6 +80,16 @@ _PAPER_INSTRUMENT_UNSUPPORTED_MESSAGE = (
     "Paper fills are currently limited to NSE EQ cash equity and ETF delivery."
 )
 _PAPER_CHARGE_ERROR_MESSAGE = "Paper order charges could not be calculated safely."
+_OUTBOUND_TOOL_UNAVAILABLE_MESSAGE = (
+    "This tool is unavailable during a short outbound learning reminder."
+)
+_OUTBOUND_STOP_REQUEST = re.compile(
+    r"^(?:please\s+)?(?:stop(?:\s+calling(?:\s+me)?)?|unsubscribe|"
+    r"do not call(?:\s+me)?|don't call(?:\s+me)?|end(?:\s+this)?\s+call|"
+    r"कॉल बंद करो|कॉल बंद करें|फोन बंद करो|फोन बंद करें|रुक जाओ|रुक जाइए)"
+    r"(?:\s+(?:please|now|अभी))?[.!?।]*$",
+    re.IGNORECASE,
+)
 
 _TOPIC_NAMES = {
     LearningMode.STOCKS: "Stocks",
@@ -101,6 +112,10 @@ class KnowledgeRetriever(Protocol):
         broker: str | None = None,
         top_k: int = 4,
     ) -> list[SearchHit]: ...
+
+
+class OutboundCallControl(Protocol):
+    async def end_call(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -156,6 +171,8 @@ class SessionState:
     memory_store: CallerMemoryStore = field(
         default_factory=_UnavailableCallerMemoryStore
     )
+    outbound_reminder: OutboundReminder | None = None
+    outbound_call_control: OutboundCallControl | None = None
 
 
 def parse_participant_profile(metadata: str | None) -> ParticipantProfile:
@@ -178,8 +195,40 @@ def parse_participant_profile(metadata: str | None) -> ParticipantProfile:
     return ParticipantProfile(parse_learning_mode(value["learning_mode"]))
 
 
-def build_system_prompt(profile: ParticipantProfile) -> str:
+def _build_memory_prompt(outbound_reminder: OutboundReminder | None) -> str:
+    if outbound_reminder is not None:
+        return """- This is a short consented outbound learning reminder, not a browser session.
+- Do not call lookup_caller_memory, save_caller_memory, or forget_caller_memory.
+- Do not ask for or retain a name, phone number, broker detail, account detail, or other personal information."""
+    return """- Call lookup_caller_memory at the start of every new session before greeting the caller.
+- If memory is found, welcome the caller by name and mention one relevant learning fact before asking whether to continue.
+- If memory is not found, greet them normally. Learn their name, language preference and two to four safe learning facts over the conversation.
+- Tell the caller exactly what you want to remember and ask for explicit consent immediately before every save.
+- Silence, ambiguity or earlier consent do not count. Call save_caller_memory only after the caller clearly says yes to that save.
+- If the caller says no, do not call the save tool. Continue without saving and do not pressure them.
+- Never save broker credentials, account numbers, PAN or Aadhaar. Never save holdings, trade history, income, bank details or financial IDs.
+- Use memory only for learning continuity such as experience level, learning goal, preferred explanation style and topic covered.
+- If the caller asks to be forgotten, explain that their saved learning memory will be deleted, ask for explicit consent and call forget_caller_memory only after a clear yes."""
+
+
+def _build_outbound_prompt(outbound_reminder: OutboundReminder | None) -> str:
+    if outbound_reminder is None:
+        return ""
+    return """OUTBOUND CALL
+- This is an opt-in paper-trading practice reminder. Its disclosure was spoken before this conversation started.
+- Never access a broker account, browser session, caller memory, live portfolio, or account-specific data.
+- Never prepare, confirm or simulate an order during this call. Teach a concept only if the caller asks.
+- If the caller says stop, unsubscribe, do not call, or end this call, call end_outbound_call immediately. Do not ask a follow-up question or offer a replacement channel.
+- Do not make a future call, retry this call, collect contact details, or claim a voicemail was a person."""
+
+
+def build_system_prompt(
+    profile: ParticipantProfile,
+    outbound_reminder: OutboundReminder | None = None,
+) -> str:
     """Build the fixed safety contract with mode-specific session context."""
+    memory_prompt = _build_memory_prompt(outbound_reminder)
+    outbound_prompt = _build_outbound_prompt(outbound_reminder)
     return f"""IDENTITY
 - You are FinEd Saathi, a voice-first Indian financial-markets tutor for beginners.
 - You work for the learner. You are not a broker, investment adviser, tax adviser, or account-support representative.
@@ -196,15 +245,7 @@ A successful call completes at least one objective:
 - Stay on the selected learning mode unless the learner explicitly changes the topic.
 
 MEMORY
-- Call lookup_caller_memory at the start of every new session before greeting the caller.
-- If memory is found, welcome the caller by name and mention one relevant learning fact before asking whether to continue.
-- If memory is not found, greet them normally. Learn their name, language preference and two to four safe learning facts over the conversation.
-- Tell the caller exactly what you want to remember and ask for explicit consent immediately before every save.
-- Silence, ambiguity or earlier consent do not count. Call save_caller_memory only after the caller clearly says yes to that save.
-- If the caller says no, do not call the save tool. Continue without saving and do not pressure them.
-- Never save broker credentials, account numbers, PAN or Aadhaar. Never save holdings, trade history, income, bank details or financial IDs.
-- Use memory only for learning continuity such as experience level, learning goal, preferred explanation style and topic covered.
-- If the caller asks to be forgotten, explain that their saved learning memory will be deleted, ask for explicit consent and call forget_caller_memory only after a clear yes.
+{memory_prompt}
 
 KNOWLEDGE
 - Explain general Indian-market concepts and use the available deterministic calculator only for its supported cases.
@@ -228,6 +269,8 @@ PAPER TRADING
 - Confirmation means the learner says to confirm that paper order, or clearly says yes to your direct confirmation question after the side, symbol, quantity, price and charges were presented.
 - Do not treat the original buy or sell request, silence, an unrelated yes or earlier consent as confirmation.
 - Never provide a recommendation or convert a paper request into a real broker action.
+
+{outbound_prompt}
 
 LANGUAGE
 - Reply entirely in English when the user speaks English.
@@ -305,10 +348,29 @@ def _latest_user_text(chat_ctx: llm.ChatContext) -> str:
     return ""
 
 
+def _require_interactive_learning_session(state: SessionState) -> None:
+    if state.outbound_reminder is not None:
+        raise ToolError(_OUTBOUND_TOOL_UNAVAILABLE_MESSAGE)
+
+
+def _is_outbound_stop_request(value: str) -> bool:
+    return bool(_OUTBOUND_STOP_REQUEST.fullmatch(value.strip()))
+
+
 class FinEdAssistant(Agent):
-    def __init__(self, profile: ParticipantProfile | None = None) -> None:
+    def __init__(
+        self,
+        profile: ParticipantProfile | None = None,
+        *,
+        outbound_reminder: OutboundReminder | None = None,
+        outbound_call_control: OutboundCallControl | None = None,
+    ) -> None:
         self.profile = profile or ParticipantProfile()
-        super().__init__(instructions=build_system_prompt(self.profile))
+        self.outbound_reminder = outbound_reminder
+        self.outbound_call_control = outbound_call_control
+        super().__init__(
+            instructions=build_system_prompt(self.profile, outbound_reminder)
+        )
 
     async def llm_node(
         self,
@@ -317,7 +379,18 @@ class FinEdAssistant(Agent):
         model_settings: ModelSettings,
     ):
         """Short-circuit obvious disallowed requests before inference or tools."""
-        decision = evaluate_guardrail(_latest_user_text(chat_ctx))
+        user_text = _latest_user_text(chat_ctx)
+        if (
+            self.outbound_reminder is not None
+            and self.outbound_call_control is not None
+            and _is_outbound_stop_request(user_text)
+        ):
+            try:
+                await self.outbound_call_control.end_call()
+            except Exception:
+                yield "I could not end the reminder call safely. Please hang up."
+            return
+        decision = evaluate_guardrail(user_text)
         if decision is not None:
             yield render_refusal(decision)
             return
@@ -346,8 +419,10 @@ class FinEdAssistant(Agent):
         context: RunContext[SessionState],
     ) -> dict[str, object]:
         """Look up the current caller's saved learning memory before greeting."""
+        state = context.userdata
+        _require_interactive_learning_session(state)
         try:
-            memory = context.userdata.memory_store.lookup(context.userdata.caller_id)
+            memory = state.memory_store.lookup(state.caller_id)
         except Exception:
             raise ToolError("Caller memory is temporarily unavailable.") from None
         if memory is None:
@@ -390,6 +465,8 @@ class FinEdAssistant(Agent):
             preferred_explanation_style: Optional safe teaching-style preference.
             topic_covered: Optional short concept covered in this conversation.
         """
+        state = context.userdata
+        _require_interactive_learning_session(state)
         if consent_confirmed is not True:
             raise ToolError(
                 "Do not save. Ask for an explicit yes immediately before saving."
@@ -403,9 +480,9 @@ class FinEdAssistant(Agent):
         if topic_covered is not None:
             facts["topic_covered"] = topic_covered
         try:
-            memory = context.userdata.memory_store.save(
+            memory = state.memory_store.save(
                 CallerMemoryInput(
-                    caller_id=context.userdata.caller_id,
+                    caller_id=state.caller_id,
                     name=name,
                     language_preference=language_preference,
                     facts=facts,
@@ -442,13 +519,15 @@ class FinEdAssistant(Agent):
         Args:
             consent_confirmed: True only after a clear yes to delete saved memory.
         """
+        state = context.userdata
+        _require_interactive_learning_session(state)
         if consent_confirmed is not True:
             raise ToolError(
                 "Do not delete. Ask for an explicit yes immediately before deletion."
             )
         try:
-            forgotten = context.userdata.memory_store.forget(
-                context.userdata.caller_id,
+            forgotten = state.memory_store.forget(
+                state.caller_id,
                 consent_confirmed=True,
             )
         except MemoryConsentRequiredError:
@@ -464,6 +543,24 @@ class FinEdAssistant(Agent):
                 if forgotten
                 else "No saved caller memory was found."
             ),
+        }
+
+    @function_tool(name="end_outbound_call")
+    async def end_outbound_call(
+        self,
+        context: RunContext[SessionState],
+    ) -> dict[str, object]:
+        """End the current consented outbound learning reminder call only."""
+        state = context.userdata
+        if state.outbound_reminder is None or state.outbound_call_control is None:
+            raise ToolError("This is not an outbound learning reminder call.")
+        try:
+            await state.outbound_call_control.end_call()
+        except Exception:
+            raise ToolError("The reminder call could not be ended safely.") from None
+        return {
+            "ended": True,
+            "message": "The consented learning reminder call is ending.",
         }
 
     @function_tool(name="search_market_knowledge")
@@ -529,13 +626,15 @@ class FinEdAssistant(Agent):
             exchange: Cash-market exchange, exactly NSE or BSE.
             symbol_token: Angel One numeric instrument token, not a ticker name.
         """
+        state = context.userdata
+        _require_interactive_learning_session(state)
         try:
             request = QuoteRequest(exchange=exchange, symbol_token=symbol_token)
         except (TypeError, ValueError) as exc:
             message = str(exc)
             raise ToolError(message) from None
         try:
-            quote = await context.userdata.market_data.get_quote(request)
+            quote = await state.market_data.get_quote(request)
         except MarketDataUnavailableError:
             raise ToolError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
         except Exception:
@@ -566,6 +665,8 @@ class FinEdAssistant(Agent):
             valuation_date: Requested historical valuation date in YYYY-MM-DD form.
             investment_amount: Positive rupee amount as decimal text, at most two decimals.
         """
+        state = context.userdata
+        _require_interactive_learning_session(state)
         try:
             request = HistoricalPriceRequest(
                 exchange=exchange,
@@ -580,7 +681,7 @@ class FinEdAssistant(Agent):
         if request.valuation_date > datetime.now(_INDIA_TIME).date():
             raise ToolError("valuation_date cannot be in the future.")
 
-        instrument = context.userdata.resolved_market_instruments.get(
+        instrument = state.resolved_market_instruments.get(
             (request.exchange, request.symbol_token)
         )
         if instrument is None:
@@ -598,7 +699,7 @@ class FinEdAssistant(Agent):
             ) from None
 
         try:
-            prices = await context.userdata.market_data.get_historical_prices(request)
+            prices = await state.market_data.get_historical_prices(request)
         except Exception:
             raise ToolError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
         try:
@@ -626,8 +727,10 @@ class FinEdAssistant(Agent):
         context: RunContext[SessionState],
     ) -> dict[str, object]:
         """Open the learner's browser-only paper dashboard without placing an order."""
+        state = context.userdata
+        _require_interactive_learning_session(state)
         try:
-            acknowledgement = await context.userdata.paper_trading.open_dashboard()
+            acknowledgement = await state.paper_trading.open_dashboard()
         except Exception:
             raise ToolError(PAPER_TRADING_UI_UNAVAILABLE_MESSAGE) from None
         return {
@@ -649,6 +752,8 @@ class FinEdAssistant(Agent):
             query: Latin-script instrument name or trading symbol, 1 to 128 characters.
             exchange: Optional exact cash exchange, NSE or BSE.
         """
+        state = context.userdata
+        _require_interactive_learning_session(state)
         if not isinstance(query, str) or not query.isascii():
             raise ToolError(
                 "Retry with the Latin-script company name or trading symbol. "
@@ -659,11 +764,11 @@ class FinEdAssistant(Agent):
         except (TypeError, ValueError) as exc:
             raise ToolError(str(exc)) from None
         try:
-            instruments = await context.userdata.market_data.search_instruments(request)
+            instruments = await state.market_data.search_instruments(request)
         except Exception:
             raise ToolError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
 
-        context.userdata.resolved_market_instruments.update(
+        state.resolved_market_instruments.update(
             {
                 (instrument.exchange, instrument.symbol_token): instrument
                 for instrument in instruments
@@ -712,6 +817,7 @@ class FinEdAssistant(Agent):
             quantity: Positive whole share or ETF-unit quantity.
         """
         state = context.userdata
+        _require_interactive_learning_session(state)
         if state.profile.learning_mode is LearningMode.FNO:
             raise ToolError(_PAPER_INSTRUMENT_UNSUPPORTED_MESSAGE)
         if not isinstance(side, str) or side not in {"buy", "sell"}:
@@ -824,9 +930,10 @@ class FinEdAssistant(Agent):
             draft_id: Exact identifier returned by prepare_paper_order for the draft
                 the learner explicitly confirmed.
         """
+        state = context.userdata
+        _require_interactive_learning_session(state)
         if not isinstance(draft_id, str) or not draft_id.strip():
             raise ToolError("An exact pending paper draft is required.")
-        state = context.userdata
         draft = state.pending_paper_drafts.get(draft_id)
         if draft is None:
             raise ToolError("No matching pending paper draft is available.")
@@ -863,8 +970,10 @@ class FinEdAssistant(Agent):
         context: RunContext[SessionState],
     ) -> dict[str, object]:
         """Read the browser-owned virtual-money paper portfolio summary."""
+        state = context.userdata
+        _require_interactive_learning_session(state)
         try:
-            summary = await context.userdata.paper_trading.get_portfolio_summary()
+            summary = await state.paper_trading.get_portfolio_summary()
         except Exception:
             raise ToolError(PAPER_TRADING_UI_UNAVAILABLE_MESSAGE) from None
         return {
@@ -912,7 +1021,9 @@ class FinEdAssistant(Agent):
             demat_debits: Positive count of sell-side demat debits.
             bse_group: Allowlisted BSE scrip group when exchange is BSE.
         """
-        if context.userdata.profile.learning_mode is LearningMode.FNO:
+        state = context.userdata
+        _require_interactive_learning_session(state)
+        if state.profile.learning_mode is LearningMode.FNO:
             raise ToolError(
                 "The delivery calculator is unavailable in F&O mode; use educational "
                 "payoff examples only, never paper orders."

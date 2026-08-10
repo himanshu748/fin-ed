@@ -240,10 +240,11 @@ recipient says stop, unsubscribe, do not call or end this call.
 
 The operator must have a recorded, specific opt-in for this reminder and must
 reconfirm that it has not been withdrawn before every manual attempt. The
-outbound helper keeps the phone number out of dispatch metadata and has no
-contact store, job store or automatic retry. A busy, unanswered or failed dial
-ends the attempt. A later call requires a new manual command after consent is
-checked again.
+required `--consent-confirmed` flag is an operator attestation, not a consent
+database or do-not-call registry. The outbound helper keeps the phone number
+out of command arguments and dispatch metadata and has no contact store, job
+store or automatic retry. A busy, unanswered or failed dial ends the attempt.
+A later call requires a new manual command after consent is checked again.
 
 ### Private configuration
 
@@ -263,12 +264,13 @@ numbers in environment files, browser code, source control or tickets.
 
 ### Operator runbook
 
-Start the backend worker first. From `backend`, validate the number format and
-private outbound configuration without creating a LiveKit client, dispatch or
-SIP call:
+Start the backend worker first. From `backend`, run this only in a private
+interactive terminal. It prompts for the Indian E.164 recipient number without
+echoing it, then validates the number format and private outbound configuration
+without creating a LiveKit client, dispatch or SIP call:
 
 ```bash
-uv run dotenv -f .env.local run -- python src/outbound_call.py --to +919876543210 --dry-run
+uv run dotenv -f .env.local run -- python src/outbound_call.py --consent-confirmed --dry-run
 ```
 
 With a safe configuration, the dry run prints `Dry run passed. No phone call
@@ -278,14 +280,14 @@ Only after a successful dry run and a fresh consent check, omit `--dry-run` for
 one real attempt:
 
 ```bash
-uv run dotenv -f .env.local run -- python src/outbound_call.py --to +919876543210
+uv run dotenv -f .env.local run -- python src/outbound_call.py --consent-confirmed
 ```
 
 The real command creates the explicit LiveKit dispatch first, then makes one
 SIP dial through the stored trunk. It uses a 25-second ringing limit and a
 five-minute maximum call duration. Normal output contains a generic outcome,
-not the phone number. Never run this command from the browser, a scheduler or
-an automatic retry job.
+not the phone number. It refuses pipelines and noninteractive shells. Never run
+this command from the browser, CI, a scheduler or an automatic retry job.
 
 ## Session history and memory
 

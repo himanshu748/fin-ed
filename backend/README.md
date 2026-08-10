@@ -87,29 +87,32 @@ recipient number in `.env.local`. Supply one Indian number in E.164 form at the
 private command boundary, such as `+919876543210`; the example is a placeholder.
 
 Before each attempt, verify a specific recorded opt-in and confirm that the
-learner has not withdrawn consent. Start the `my-agent` worker, then run a dry
-run from this directory:
+learner has not withdrawn consent. The required `--consent-confirmed` flag is
+an operator attestation, not a consent database or do-not-call registry. Start
+the `my-agent` worker, then run a dry run from a private interactive terminal:
 
 ```bash
-uv run dotenv -f .env.local run -- python src/outbound_call.py --to +919876543210 --dry-run
+uv run dotenv -f .env.local run -- python src/outbound_call.py --consent-confirmed --dry-run
 ```
 
 With a safe configuration, it prints `Dry run passed. No phone call was made.`
 
-The dry run validates the E.164 number, stored trunk ID and agent name. It does
-not create a LiveKit client, dispatch or call. Only after it succeeds and
-consent is checked again, place exactly one real call:
+The command prompts without echo for the Indian E.164 number, then validates
+it with the stored trunk ID and agent name. It refuses pipelines and
+noninteractive shells so the number does not enter command arguments. The dry
+run does not create a LiveKit client, dispatch or call. Only after it succeeds
+and consent is checked again, place exactly one real call:
 
 ```bash
-uv run dotenv -f .env.local run -- python src/outbound_call.py --to +919876543210
+uv run dotenv -f .env.local run -- python src/outbound_call.py --consent-confirmed
 ```
 
 The real command dispatches first, then dials once through the stored trunk. It
 has a 25-second ringing limit and a five-minute maximum duration. It does not
 log the number in its normal output, persist a contact or job, use the browser,
 access a broker or execute a real or paper trade. Busy, unanswered and failed
-attempts do not retry. Do not place this command in a scheduler or call it from
-a browser route.
+attempts do not retry. Do not place this command in CI, a scheduler or a browser
+route.
 
 ## Voice and model configuration
 

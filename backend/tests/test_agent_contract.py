@@ -36,6 +36,7 @@ from fined.market_data.provider import (
 )
 from fined.memory import SQLiteCallerMemoryStore
 from fined.modes import LearningMode
+from fined.outbound import PAPER_PRACTICE_REMINDER
 from fined.paper_trading import (
     PaperDashboardAck,
     PaperDraftAck,
@@ -146,6 +147,17 @@ class FakePaperTradingBridge:
             holdings_cost_basis_paise=500_000,
             cash_plus_cost_basis_paise=10_000_000,
         )
+
+
+@dataclass
+class FakeOutboundCallControl:
+    end_calls: int = 0
+    fail: bool = False
+
+    async def end_call(self) -> None:
+        self.end_calls += 1
+        if self.fail:
+            raise RuntimeError("private carrier failure")
 
 
 def _context(state: SessionState) -> RunContext[SessionState]:
@@ -503,6 +515,146 @@ def test_fined_assistant_defaults_to_general_and_exposes_exact_tool_names() -> N
     assert assistant.lookup_caller_memory.info.name == "lookup_caller_memory"
     assert assistant.save_caller_memory.info.name == "save_caller_memory"
     assert assistant.forget_caller_memory.info.name == "forget_caller_memory"
+    assert assistant.end_outbound_call.info.name == "end_outbound_call"
+
+
+def test_outbound_prompt_disables_memory_and_requires_stop_without_broker_actions() -> (
+    None
+):
+    # Catches an outbound reminder inheriting browser memory or real-trade behavior.
+    prompt = FinEdAssistant(
+        ParticipantProfile(LearningMode.STOCKS),
+        outbound_reminder=PAPER_PRACTICE_REMINDER,
+    ).instructions.casefold()
+
+    assert "outbound call" in prompt
+    assert "opt-in paper-trading practice reminder" in prompt
+    assert "do not call lookup_caller_memory" in prompt
+    assert "call end_outbound_call" in prompt
+    assert "never access a broker account" in prompt
+    assert "never prepare, confirm or simulate an order" in prompt
+
+
+@pytest.mark.asyncio
+async def test_outbound_stop_tool_ends_only_a_consented_learning_reminder() -> None:
+    # Catches a tool that can terminate ordinary browser calls or leaks carrier errors.
+    control = FakeOutboundCallControl()
+    outbound_state = SessionState(
+        profile=ParticipantProfile(LearningMode.STOCKS),
+        retriever=FakeRetriever([]),
+        outbound_reminder=PAPER_PRACTICE_REMINDER,
+        outbound_call_control=control,
+    )
+
+    result = await FinEdAssistant().end_outbound_call(_context(outbound_state))
+
+    assert control.end_calls == 1
+    assert result == {
+        "ended": True,
+        "message": "The consented learning reminder call is ending.",
+    }
+
+    browser_state = SessionState(
+        profile=ParticipantProfile(LearningMode.STOCKS), retriever=FakeRetriever([])
+    )
+    with pytest.raises(ToolError, match="not an outbound learning reminder"):
+        await FinEdAssistant().end_outbound_call(_context(browser_state))
+    assert control.end_calls == 1
+
+    failing_state = SessionState(
+        profile=ParticipantProfile(LearningMode.STOCKS),
+        retriever=FakeRetriever([]),
+        outbound_reminder=PAPER_PRACTICE_REMINDER,
+        outbound_call_control=FakeOutboundCallControl(fail=True),
+    )
+    with pytest.raises(ToolError) as failure:
+        await FinEdAssistant().end_outbound_call(_context(failing_state))
+    assert str(failure.value) == "The reminder call could not be ended safely."
+    assert "private" not in str(failure.value)
+
+
+@pytest.mark.asyncio
+async def test_outbound_reminder_blocks_memory_market_and_paper_action_tools() -> None:
+    # Catches an LLM bypassing the outbound prompt to access a browser or broker data.
+    provider = FakeMarketDataProvider(quote=_paper_quote())
+    bridge = FakePaperTradingBridge()
+    state = _paper_state(provider=provider, bridge=bridge)
+    state.outbound_reminder = PAPER_PRACTICE_REMINDER
+    assistant = FinEdAssistant(outbound_reminder=PAPER_PRACTICE_REMINDER)
+
+    with pytest.raises(ToolError, match="unavailable during a short outbound"):
+        await assistant.lookup_caller_memory(_context(state))
+    with pytest.raises(ToolError, match="unavailable during a short outbound"):
+        await assistant.get_market_quote(_context(state), "NSE", "2885")
+    with pytest.raises(ToolError, match="unavailable during a short outbound"):
+        await assistant.open_paper_trading_dashboard(_context(state))
+    with pytest.raises(ToolError, match="unavailable during a short outbound"):
+        await assistant.prepare_paper_order(_context(state), "buy", "NSE", "2885", 1)
+
+    assert provider.calls == []
+    assert bridge.open_calls == 0
+    assert bridge.prepare_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stop_request", ["stop", "Please stop calling me.", "कॉल बंद करो"]
+)
+async def test_outbound_stop_phrase_is_handled_before_llm_generation(
+    monkeypatch: pytest.MonkeyPatch, stop_request: str
+) -> None:
+    # Catches a model miss that leaves a caller connected after a direct stop request.
+    control = FakeOutboundCallControl()
+    provider_called = False
+
+    async def fake_llm_node(*args, **kwargs):
+        nonlocal provider_called
+        del args, kwargs
+        provider_called = True
+        yield "This must not be generated."
+
+    monkeypatch.setattr(Agent.default, "llm_node", fake_llm_node)
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=stop_request)
+
+    output = [
+        chunk
+        async for chunk in FinEdAssistant(
+            outbound_reminder=PAPER_PRACTICE_REMINDER,
+            outbound_call_control=control,
+        ).llm_node(chat_ctx, [], ModelSettings())
+    ]
+
+    assert control.end_calls == 1
+    assert provider_called is False
+    assert output == []
+
+
+@pytest.mark.asyncio
+async def test_outbound_stop_detection_does_not_mistake_stop_loss_for_opt_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Catches an overbroad stop matcher that terminates a legitimate lesson.
+    control = FakeOutboundCallControl()
+
+    async def fake_llm_node(*args, **kwargs):
+        del args, kwargs
+        yield "A stop-loss order is a risk-management instruction."
+
+    monkeypatch.setattr(Agent.default, "llm_node", fake_llm_node)
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content="What is a stop-loss order?")
+
+    output = [
+        chunk
+        async for chunk in FinEdAssistant(
+            outbound_reminder=PAPER_PRACTICE_REMINDER,
+            outbound_call_control=control,
+        ).llm_node(chat_ctx, [], ModelSettings())
+    ]
+
+    assert control.end_calls == 0
+    assert output == ["A stop-loss order is a risk-management instruction."]
 
 
 def test_prompt_requires_lookup_and_explicit_consent_before_memory_writes() -> None:

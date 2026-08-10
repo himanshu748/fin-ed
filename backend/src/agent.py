@@ -10,7 +10,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from google import genai
-from livekit import rtc
+from livekit import api, rtc
 from livekit.agents import (
     AgentServer,
     AgentSession,
@@ -42,6 +42,11 @@ from fined.market_data.models import QuoteRequest
 from fined.market_data.provider import MarketDataUnavailableError
 from fined.memory import CallerMemory, SQLiteCallerMemoryStore
 from fined.murf_falcon import install_current_websocket_serializer
+from fined.outbound import (
+    OUTBOUND_RECIPIENT_JOIN_TIMEOUT_SECONDS,
+    build_outbound_greeting,
+    parse_outbound_metadata,
+)
 from fined.paper_trading import LiveKitPaperTradingBridge
 from fined.paper_trading.models import (
     PaperHoldingQuote,
@@ -69,6 +74,36 @@ PAPER_RESULT_SENTENCE = "The browser confirmed the simulated paper result."
 LLM_UNAVAILABLE_SENTENCE = (
     "The language model is temporarily busy. Please wait a moment, then ask again."
 )
+
+
+class _LiveKitOutboundCallControl:
+    """Speak a short goodbye, then remove the isolated SIP room."""
+
+    def __init__(
+        self,
+        session: AgentSession[SessionState],
+        ctx: JobContext,
+        participant_identity: str,
+    ) -> None:
+        self._session = session
+        self._ctx = ctx
+        self._participant_identity = participant_identity
+
+    async def end_call(self) -> None:
+        try:
+            await asyncio.wait_for(
+                self._session.say("Okay. I will end this call now."), timeout=2.0
+            )
+        finally:
+            try:
+                await self._ctx.api.room.remove_participant(
+                    api.RoomParticipantIdentity(
+                        room=self._ctx.room.name,
+                        identity=self._participant_identity,
+                    )
+                )
+            finally:
+                self._ctx.shutdown("outbound recipient requested stop")
 
 
 def build_caller_greeting(
@@ -156,17 +191,38 @@ def _log_latency_components(metric: metrics.AgentMetrics) -> None:
 @server.rtc_session(agent_name="my-agent")
 async def my_agent(ctx: JobContext) -> None:
     await ctx.connect()
-    participant = await ctx.wait_for_participant()
-    profile = parse_participant_profile(participant.metadata)
+    outbound_reminder = parse_outbound_metadata(
+        getattr(getattr(ctx, "job", None), "metadata", None)
+    )
+    if outbound_reminder is None:
+        participant = await ctx.wait_for_participant()
+        profile = parse_participant_profile(participant.metadata)
+    else:
+        try:
+            participant = await asyncio.wait_for(
+                ctx.wait_for_participant(),
+                timeout=OUTBOUND_RECIPIENT_JOIN_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            logger.warning("Outbound recipient did not join the reminder room")
+            ctx.shutdown("outbound recipient unavailable")
+            return
+        profile = ParticipantProfile(outbound_reminder.learning_mode)
 
     ctx.log_context_fields = {
         "room": ctx.room.name,
         "mode": profile.learning_mode.value,
+        "call_type": "outbound" if outbound_reminder is not None else "browser",
     }
 
     load_dotenv(".env.local")
-    memory_path = Path(os.getenv("FINED_MEMORY_DB_PATH", str(MEMORY_DATABASE_PATH)))
-    memory_store = SQLiteCallerMemoryStore(memory_path)
+    memory_store = (
+        SQLiteCallerMemoryStore(
+            Path(os.getenv("FINED_MEMORY_DB_PATH", str(MEMORY_DATABASE_PATH)))
+        )
+        if outbound_reminder is None
+        else None
+    )
     embedding_client = genai.Client()
     client_closed = False
     registered_paper_rpc_methods: list[str] = []
@@ -195,17 +251,19 @@ async def my_agent(ctx: JobContext) -> None:
         install_current_websocket_serializer()
         embedder = GeminiEmbedder(embedding_client)
         index = _load_knowledge_retriever(KNOWLEDGE_DIRECTORY, embedder)
-        paper_trading = LiveKitPaperTradingBridge(
-            ctx.room.local_participant, participant.identity
-        )
         state = SessionState(
             profile=profile,
             retriever=index,
-            market_data=create_market_data_provider(),
-            paper_trading=paper_trading,
             caller_id=participant.identity,
-            memory_store=memory_store,
+            outbound_reminder=outbound_reminder,
         )
+        if outbound_reminder is None:
+            assert memory_store is not None
+            state.memory_store = memory_store
+            state.market_data = create_market_data_provider()
+            state.paper_trading = LiveKitPaperTradingBridge(
+                ctx.room.local_participant, participant.identity
+            )
         session = AgentSession[SessionState](
             userdata=state,
             stt=deepgram.STT(
@@ -226,6 +284,12 @@ async def my_agent(ctx: JobContext) -> None:
             vad=ctx.proc.userdata["vad"],
             preemptive_generation=True,
         )
+        if outbound_reminder is not None:
+            state.outbound_call_control = _LiveKitOutboundCallControl(
+                session,
+                ctx,
+                participant.identity,
+            )
 
         usage = metrics.UsageCollector()
 
@@ -319,14 +383,15 @@ async def my_agent(ctx: JobContext) -> None:
                 ensure_ascii=False,
             )
 
-        ctx.room.local_participant.register_rpc_method(
-            PAPER_ORDER_RESULT_METHOD, on_paper_order_result
-        )
-        registered_paper_rpc_methods.append(PAPER_ORDER_RESULT_METHOD)
-        ctx.room.local_participant.register_rpc_method(
-            PAPER_HOLDING_QUOTES_METHOD, on_paper_holding_quotes
-        )
-        registered_paper_rpc_methods.append(PAPER_HOLDING_QUOTES_METHOD)
+        if outbound_reminder is None:
+            ctx.room.local_participant.register_rpc_method(
+                PAPER_ORDER_RESULT_METHOD, on_paper_order_result
+            )
+            registered_paper_rpc_methods.append(PAPER_ORDER_RESULT_METHOD)
+            ctx.room.local_participant.register_rpc_method(
+                PAPER_HOLDING_QUOTES_METHOD, on_paper_holding_quotes
+            )
+            registered_paper_rpc_methods.append(PAPER_HOLDING_QUOTES_METHOD)
 
         async def on_shutdown(reason: str) -> None:
             del reason
@@ -341,7 +406,11 @@ async def my_agent(ctx: JobContext) -> None:
         ctx.add_shutdown_callback(on_shutdown)
 
         await session.start(
-            agent=FinEdAssistant(profile),
+            agent=FinEdAssistant(
+                profile,
+                outbound_reminder=outbound_reminder,
+                outbound_call_control=state.outbound_call_control,
+            ),
             room=ctx.room,
             room_options=room_io.RoomOptions(
                 audio_input=room_io.AudioInputOptions(
@@ -354,12 +423,16 @@ async def my_agent(ctx: JobContext) -> None:
                 ),
             ),
         )
-        try:
-            caller_memory = memory_store.lookup(participant.identity)
-        except Exception:
-            logger.warning("Caller memory lookup failed before greeting")
-            caller_memory = None
-        await session.say(build_caller_greeting(profile, caller_memory))
+        if outbound_reminder is not None:
+            await session.say(build_outbound_greeting(outbound_reminder))
+        else:
+            assert memory_store is not None
+            try:
+                caller_memory = memory_store.lookup(participant.identity)
+            except Exception:
+                logger.warning("Caller memory lookup failed before greeting")
+                caller_memory = None
+            await session.say(build_caller_greeting(profile, caller_memory))
     except BaseException:
         try:
             unregister_paper_rpcs_once()
