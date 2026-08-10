@@ -902,6 +902,7 @@ test('App places PaperTradingProvider inside AgentSessionProvider around the ses
     ['@/components/paper-trading/paper-trading-provider', { PaperTradingProvider }],
     ['@/hooks/useDebug', { useDebugMode: () => undefined }],
     ['@/lib/learning-modes', { participantMetadataForLearningMode: () => 'metadata' }],
+    ['@/lib/session-room', { getPersistentSessionRoom: () => ({}) }],
     ['@/lib/utils', { createModeScopedTokenSource: () => 'token-source' }],
   ]);
 

@@ -107,8 +107,8 @@ function assertAppSessionWiring(appSource) {
   assert.ok(ts.isArrayLiteralExpression(fetchOptionsDependencies));
   assert.deepEqual(
     fetchOptionsDependencies.elements.map((element) => element.getText(sourceFile)),
-    ['appConfig.agentName', 'participantMetadata'],
-    'fetchOptions dependencies must track canonical participantMetadata'
+    ['appConfig.agentName', 'participantMetadata', 'room'],
+    'fetchOptions dependencies must track metadata and the persistent room'
   );
 
   const session = declarations.get('session');
@@ -250,8 +250,8 @@ test('App scopes the configurable token source to canonical participant metadata
   );
 
   const staleFetchOptionsSource = appSource.replace(
-    '    [appConfig.agentName, participantMetadata]\n  );\n\n  const session',
-    '    [appConfig.agentName]\n  );\n\n  const session'
+    '    [appConfig.agentName, participantMetadata, room]\n  );\n\n  const session',
+    '    [appConfig.agentName, room]\n  );\n\n  const session'
   );
   assert.notEqual(
     staleFetchOptionsSource,
@@ -260,7 +260,7 @@ test('App scopes the configurable token source to canonical participant metadata
   );
   assert.throws(
     () => assertAppSessionWiring(staleFetchOptionsSource),
-    /fetchOptions dependencies must track canonical participantMetadata/
+    /fetchOptions dependencies must track metadata and the persistent room/
   );
 });
 

@@ -9,6 +9,7 @@ import { ViewController } from '@/components/app/view-controller';
 import { PaperTradingProvider } from '@/components/paper-trading/paper-trading-provider';
 import { useDebugMode } from '@/hooks/useDebug';
 import { type LearningMode, participantMetadataForLearningMode } from '@/lib/learning-modes';
+import { getPersistentSessionRoom } from '@/lib/session-room';
 import { createModeScopedTokenSource } from '@/lib/utils';
 
 const IN_DEVELOPMENT = process.env.NODE_ENV !== 'production';
@@ -25,6 +26,7 @@ interface AppProps {
 
 export function App({ appConfig }: AppProps) {
   const [learningMode, setLearningMode] = useState<LearningMode>('general');
+  const room = useMemo(getPersistentSessionRoom, []);
   const participantMetadata = useMemo(
     () => participantMetadataForLearningMode(learningMode),
     [learningMode]
@@ -39,8 +41,9 @@ export function App({ appConfig }: AppProps) {
     () => ({
       ...(appConfig.agentName ? { agentName: appConfig.agentName } : {}),
       participantMetadata,
+      room,
     }),
-    [appConfig.agentName, participantMetadata]
+    [appConfig.agentName, participantMetadata, room]
   );
 
   const session = useSession(tokenSource, fetchOptions);
