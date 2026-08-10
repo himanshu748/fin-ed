@@ -274,6 +274,15 @@ export function OrderReview({ draft, portfolio, readiness, onConfirm }: OrderRev
         </div>
       </dl>
 
+      <p className="mt-3 text-xs leading-5 text-[var(--muted-ink)]">
+        Angel One delivery estimate.{' '}
+        {draft.side === 'buy'
+          ? 'Includes brokerage, STT, stamp duty, exchange and IPFT charges, SEBI charges and GST. DP charges do not apply to delivery buys.'
+          : 'Includes brokerage, STT, exchange and IPFT charges, SEBI charges, the delivery DP debit charge and GST. Stamp duty does not apply to sells.'}{' '}
+        Your final contract note can differ because brokers aggregate charges across executed orders
+        and ledger entries.
+      </p>
+
       <dl className="mt-4 grid grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] gap-x-4 gap-y-3 text-sm">
         <dt>Quote source</dt>
         <dd className="font-data text-right break-words text-[var(--banknote-green)]">

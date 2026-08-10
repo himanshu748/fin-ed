@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from datetime import UTC, datetime
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -36,10 +38,18 @@ from fined.chat_model import create_gemini_llm
 from fined.knowledge.embeddings import GeminiEmbedder
 from fined.knowledge.index import KnowledgeIndex, UnavailableKnowledgeRetriever
 from fined.market_data.angel_one import create_market_data_provider
+from fined.market_data.models import QuoteRequest
+from fined.market_data.provider import MarketDataUnavailableError
 from fined.memory import CallerMemory, SQLiteCallerMemoryStore
 from fined.murf_falcon import install_current_websocket_serializer
 from fined.paper_trading import LiveKitPaperTradingBridge
-from fined.paper_trading.models import decode_paper_order_result
+from fined.paper_trading.models import (
+    PaperHoldingQuote,
+    PaperHoldingQuoteRequest,
+    decode_paper_holding_quote_request,
+    decode_paper_order_result,
+    paper_holding_quotes_rpc_payload,
+)
 
 logger = logging.getLogger("agent")
 
@@ -53,6 +63,7 @@ KNOWLEDGE_UNAVAILABLE_WARNING = (
     "Knowledge index is unavailable; starting in evidence-unavailable mode"
 )
 PAPER_ORDER_RESULT_METHOD = "fined.paper.v1.order_result"
+PAPER_HOLDING_QUOTES_METHOD = "fined.paper.v1.quote_holdings"
 PAPER_RESULT_ACK = '{"version":1,"paper":true,"acknowledged":true}'
 PAPER_RESULT_SENTENCE = "The browser confirmed the simulated paper result."
 LLM_UNAVAILABLE_SENTENCE = (
@@ -158,8 +169,8 @@ async def my_agent(ctx: JobContext) -> None:
     memory_store = SQLiteCallerMemoryStore(memory_path)
     embedding_client = genai.Client()
     client_closed = False
-    paper_result_rpc_registered = False
-    paper_result_rpc_unregistered = False
+    registered_paper_rpc_methods: list[str] = []
+    paper_rpcs_unregistered = False
     llm_fallback_task: asyncio.Task[None] | None = None
 
     async def close_client_once() -> None:
@@ -169,15 +180,16 @@ async def my_agent(ctx: JobContext) -> None:
         client_closed = True
         await _close_embedding_client(embedding_client)
 
-    def unregister_paper_result_rpc_once() -> None:
-        nonlocal paper_result_rpc_unregistered
-        if not paper_result_rpc_registered or paper_result_rpc_unregistered:
+    def unregister_paper_rpcs_once() -> None:
+        nonlocal paper_rpcs_unregistered
+        if paper_rpcs_unregistered:
             return
-        paper_result_rpc_unregistered = True
-        try:
-            ctx.room.local_participant.unregister_rpc_method(PAPER_ORDER_RESULT_METHOD)
-        except Exception:
-            logger.warning("Paper result RPC cleanup failed")
+        paper_rpcs_unregistered = True
+        for method in reversed(registered_paper_rpc_methods):
+            try:
+                ctx.room.local_participant.unregister_rpc_method(method)
+            except Exception:
+                logger.warning("Paper RPC cleanup failed for %s", method)
 
     try:
         install_current_websocket_serializer()
@@ -263,10 +275,58 @@ async def my_agent(ctx: JobContext) -> None:
             await session.say(PAPER_RESULT_SENTENCE)
             return PAPER_RESULT_ACK
 
+        async def on_paper_holding_quotes(data: rtc.RpcInvocationData) -> str:
+            if data.caller_identity != participant.identity:
+                raise rtc.RpcError(2001, "Paper quote caller is not authorized.")
+            try:
+                holdings = decode_paper_holding_quote_request(data.payload)
+            except Exception:
+                raise rtc.RpcError(2002, "Invalid paper quote request.") from None
+
+            async def quote_holding(
+                holding: PaperHoldingQuoteRequest,
+            ) -> PaperHoldingQuote | None:
+                try:
+                    quote = await state.market_data.get_quote(
+                        QuoteRequest(
+                            exchange=holding.exchange,
+                            symbol_token=holding.symbol_token,
+                        )
+                    )
+                except (MarketDataUnavailableError, ValueError):
+                    return None
+                price_paise = int(
+                    (quote.last_traded_price * Decimal("100")).quantize(
+                        Decimal("1"), rounding=ROUND_HALF_UP
+                    )
+                )
+                return PaperHoldingQuote(
+                    exchange=holding.exchange,
+                    symbol_token=holding.symbol_token,
+                    trading_symbol=quote.trading_symbol,
+                    price_paise=price_paise,
+                    quote_time=quote.exchange_time,
+                    provider=quote.provider,
+                )
+
+            quote_results = await asyncio.gather(
+                *(quote_holding(holding) for holding in holdings)
+            )
+            quotes = tuple(quote for quote in quote_results if quote is not None)
+            return json.dumps(
+                paper_holding_quotes_rpc_payload(quotes),
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+
         ctx.room.local_participant.register_rpc_method(
             PAPER_ORDER_RESULT_METHOD, on_paper_order_result
         )
-        paper_result_rpc_registered = True
+        registered_paper_rpc_methods.append(PAPER_ORDER_RESULT_METHOD)
+        ctx.room.local_participant.register_rpc_method(
+            PAPER_HOLDING_QUOTES_METHOD, on_paper_holding_quotes
+        )
+        registered_paper_rpc_methods.append(PAPER_HOLDING_QUOTES_METHOD)
 
         async def on_shutdown(reason: str) -> None:
             del reason
@@ -274,7 +334,7 @@ async def my_agent(ctx: JobContext) -> None:
                 logger.info("Agent usage summary: %s", usage.get_summary())
             finally:
                 try:
-                    unregister_paper_result_rpc_once()
+                    unregister_paper_rpcs_once()
                 finally:
                     await close_client_once()
 
@@ -302,7 +362,7 @@ async def my_agent(ctx: JobContext) -> None:
         await session.say(build_caller_greeting(profile, caller_memory))
     except BaseException:
         try:
-            unregister_paper_result_rpc_once()
+            unregister_paper_rpcs_once()
         finally:
             await close_client_once()
         raise

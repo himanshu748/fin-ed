@@ -5,6 +5,7 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -14,6 +15,8 @@ from livekit import rtc
 
 import agent as entrypoint
 from fined.knowledge.ingest import BuildError
+from fined.market_data.models import MarketQuote
+from fined.market_data.provider import MarketDataUnavailableError
 from fined.memory import CallerMemory
 from fined.modes import LearningMode
 from fined.paper_trading import PaperOrderDraft
@@ -328,7 +331,9 @@ async def test_every_post_client_failure_closes_once_and_propagates(
         await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
 
     assert harness.client.aio.close_attempts == 1
-    expected_unregistrations = int(fail_at in {"shutdown_registration", "start", "say"})
+    expected_unregistrations = 2 * int(
+        fail_at in {"shutdown_registration", "start", "say"}
+    )
     assert harness.events.count("rpc_unregistration") == expected_unregistrations
     for callback in harness.context.shutdown_callbacks:
         await callback("later shutdown")
@@ -349,12 +354,12 @@ async def test_shutdown_failure_still_closes_once_and_propagates(
     with pytest.raises(LifecycleAbort, match=fail_at):
         await callback("normal shutdown")
     assert harness.client.aio.close_attempts == 1
-    assert harness.events.count("rpc_unregistration") == 1
+    assert harness.events.count("rpc_unregistration") == 2
 
     with pytest.raises(LifecycleAbort, match=fail_at):
         await callback("duplicate shutdown")
     assert harness.client.aio.close_attempts == 1
-    assert harness.events.count("rpc_unregistration") == 1
+    assert harness.events.count("rpc_unregistration") == 2
 
 
 @pytest.mark.asyncio
@@ -383,12 +388,13 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
         "metrics_registration",
         "error_registration",
         "rpc_registration",
+        "rpc_registration",
         "shutdown_registration",
         "start",
         "say",
     ]
     assert harness.client.aio.close_attempts == 0
-    assert harness.events.count("rpc_registration") == 1
+    assert harness.events.count("rpc_registration") == 2
     assert harness.events.count("rpc_unregistration") == 0
     assert len(harness.context.shutdown_callbacks) == 1
     state = harness.session.userdata
@@ -432,8 +438,11 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
     await callback("duplicate shutdown")
 
     assert harness.client.aio.close_attempts == 1
-    assert harness.events.count("rpc_unregistration") == 1
+    assert harness.events.count("rpc_unregistration") == 2
     assert entrypoint.PAPER_ORDER_RESULT_METHOD not in (
+        harness.context.local_participant.rpc_methods
+    )
+    assert entrypoint.PAPER_HOLDING_QUOTES_METHOD not in (
         harness.context.local_participant.rpc_methods
     )
 
@@ -539,6 +548,78 @@ async def _result_rpc_harness(
             entrypoint.PAPER_ORDER_RESULT_METHOD
         ],
     )
+
+
+@pytest.mark.asyncio
+async def test_holding_quote_rpc_returns_trusted_partial_quotes_without_broker_access(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    harness = _install_lifecycle_fakes(monkeypatch, None, tmp_path / "generated")
+    await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
+    state = harness.session.userdata
+
+    class Quotes:
+        async def get_quote(self, request: object) -> MarketQuote:
+            if request.symbol_token == "1594":  # type: ignore[attr-defined]
+                raise MarketDataUnavailableError("not available")
+            now = datetime(2026, 8, 10, 5, 4, 54, tzinfo=UTC)
+            return MarketQuote(
+                exchange=request.exchange,  # type: ignore[attr-defined]
+                symbol_token=request.symbol_token,  # type: ignore[attr-defined]
+                trading_symbol="TCS-EQ",
+                last_traded_price=Decimal("2466.605"),
+                close_price=Decimal("2450"),
+                provider="Angel One SmartAPI",
+                exchange_time=now,
+                received_time=now,
+            )
+
+    state.market_data = Quotes()  # type: ignore[union-attr]
+    handler = harness.context.local_participant.rpc_methods[
+        entrypoint.PAPER_HOLDING_QUOTES_METHOD
+    ]
+    payload = json.dumps(
+        {
+            "version": 1,
+            "paper": True,
+            "holdings": [
+                {
+                    "exchange": "NSE",
+                    "symbol_token": "11536",
+                    "trading_symbol": "TCS-EQ",
+                    "quantity": 1,
+                },
+                {
+                    "exchange": "NSE",
+                    "symbol_token": "1594",
+                    "trading_symbol": "INFY-EQ",
+                    "quantity": 2,
+                },
+            ],
+        }
+    )
+
+    with pytest.raises(rtc.RpcError, match="not authorized"):
+        await handler(rtc.RpcInvocationData("request-1", "intruder", payload, 10.0))
+
+    response = json.loads(
+        await handler(rtc.RpcInvocationData("request-2", "learner-1", payload, 10.0))
+    )
+
+    assert response == {
+        "version": 1,
+        "paper": True,
+        "quotes": [
+            {
+                "exchange": "NSE",
+                "symbol_token": "11536",
+                "trading_symbol": "TCS-EQ",
+                "price_paise": 246_661,
+                "quote_time": "2026-08-10T05:04:54+00:00",
+                "provider": "Angel One SmartAPI",
+            }
+        ],
+    }
 
 
 @pytest.mark.asyncio

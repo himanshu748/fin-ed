@@ -17,6 +17,7 @@ PaperChargeStatus = Literal["estimated", "unavailable"]
 RPC_VERSION = 1
 MAX_RPC_PAYLOAD_BYTES = 15_000
 PAPER_DRAFT_LIFETIME = timedelta(seconds=30)
+MAX_PAPER_HOLDINGS = 25
 
 _SYMBOL_TOKEN = re.compile(r"^[0-9]{1,20}$")
 _SIDES = frozenset({"buy", "sell"})
@@ -230,6 +231,104 @@ class PaperPortfolioSummary:
                 "cash_plus_cost_basis_paise": self.cash_plus_cost_basis_paise,
             }
         )
+
+
+@dataclass(frozen=True)
+class PaperHoldingQuoteRequest:
+    exchange: str
+    symbol_token: str
+    trading_symbol: str
+    quantity: int
+
+    def __post_init__(self) -> None:
+        if self.exchange not in SUPPORTED_EXCHANGES:
+            raise ValueError("exchange must be NSE or BSE")
+        if not _SYMBOL_TOKEN.fullmatch(self.symbol_token):
+            raise ValueError("symbol token must contain 1 to 20 ASCII digits")
+        _require_non_empty_text(self.trading_symbol, "trading symbol")
+        if not _is_int(self.quantity) or self.quantity <= 0:
+            raise ValueError("holding quantity must be a positive whole number")
+
+
+@dataclass(frozen=True)
+class PaperHoldingQuote:
+    exchange: str
+    symbol_token: str
+    trading_symbol: str
+    price_paise: int
+    quote_time: datetime
+    provider: str
+
+    def __post_init__(self) -> None:
+        if self.exchange not in SUPPORTED_EXCHANGES:
+            raise ValueError("exchange must be NSE or BSE")
+        if not _SYMBOL_TOKEN.fullmatch(self.symbol_token):
+            raise ValueError("symbol token must contain 1 to 20 ASCII digits")
+        _require_non_empty_text(self.trading_symbol, "trading symbol")
+        if not _is_int(self.price_paise) or self.price_paise <= 0:
+            raise ValueError("quote price must be positive whole paise")
+        _require_timestamp(self.quote_time, "quote time")
+        _require_non_empty_text(self.provider, "quote provider")
+
+    def to_rpc_payload(self) -> dict[str, object]:
+        return {
+            "exchange": self.exchange,
+            "symbol_token": self.symbol_token,
+            "trading_symbol": self.trading_symbol,
+            "price_paise": self.price_paise,
+            "quote_time": self.quote_time.isoformat(),
+            "provider": self.provider,
+        }
+
+
+def decode_paper_holding_quote_request(
+    payload: str,
+) -> tuple[PaperHoldingQuoteRequest, ...]:
+    decoded = _decode_json(payload)
+    _require_exact_keys(decoded, frozenset({"version", "paper", "holdings"}))
+    _require_paper_envelope(decoded)
+    holdings = decoded["holdings"]
+    if (
+        not isinstance(holdings, list)
+        or not holdings
+        or len(holdings) > MAX_PAPER_HOLDINGS
+    ):
+        raise ValueError("paper quote request must contain 1 to 25 holdings")
+    result: list[PaperHoldingQuoteRequest] = []
+    seen: set[tuple[str, str]] = set()
+    for value in holdings:
+        if not isinstance(value, dict):
+            raise ValueError("paper holding must be an object")
+        _require_exact_keys(
+            value,
+            frozenset({"exchange", "symbol_token", "trading_symbol", "quantity"}),
+        )
+        holding = PaperHoldingQuoteRequest(
+            exchange=value["exchange"],
+            symbol_token=value["symbol_token"],
+            trading_symbol=value["trading_symbol"],
+            quantity=value["quantity"],
+        )
+        key = (holding.exchange, holding.symbol_token)
+        if key in seen:
+            raise ValueError("paper quote request contains a duplicate holding")
+        seen.add(key)
+        result.append(holding)
+    return tuple(result)
+
+
+def paper_holding_quotes_rpc_payload(
+    quotes: tuple[PaperHoldingQuote, ...],
+) -> dict[str, object]:
+    if len(quotes) > MAX_PAPER_HOLDINGS:
+        raise ValueError("paper quote response contains too many quotes")
+    return _encode_payload(
+        {
+            "version": RPC_VERSION,
+            "paper": True,
+            "quotes": [quote.to_rpc_payload() for quote in quotes],
+        }
+    )
 
 
 @dataclass(frozen=True)

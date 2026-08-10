@@ -7,10 +7,12 @@ import pytest
 
 from fined.paper_trading.models import (
     MAX_RPC_PAYLOAD_BYTES,
+    PaperHoldingQuote,
     PaperOrderDraft,
     PaperPortfolioSummary,
     decode_paper_dashboard_ack,
     decode_paper_draft_ack,
+    decode_paper_holding_quote_request,
     decode_paper_order_result,
     decode_paper_portfolio_summary,
 )
@@ -226,3 +228,41 @@ def test_browser_shaped_order_result_uses_a_python_310_compatible_utc_offset() -
     result = decode_paper_order_result(payload)
 
     assert result.simulated_at == datetime(2026, 8, 8, 0, 0, 10, tzinfo=UTC)
+
+
+def test_holding_quote_request_accepts_only_public_bounded_positions() -> None:
+    request = decode_paper_holding_quote_request(
+        '{"version":1,"paper":true,"holdings":[{"exchange":"NSE",'
+        '"symbol_token":"11536","trading_symbol":"TCS-EQ","quantity":2}]}'
+    )
+
+    assert request[0].exchange == "NSE"
+    assert request[0].symbol_token == "11536"
+    assert request[0].quantity == 2
+
+    with pytest.raises(ValueError):
+        decode_paper_holding_quote_request(
+            '{"version":1,"paper":true,"holdings":[{"exchange":"NSE",'
+            '"symbol_token":"11536","trading_symbol":"TCS-EQ","quantity":2,'
+            '"account_id":"secret"}]}'
+        )
+
+
+def test_holding_quote_response_contains_integer_paise_and_attribution() -> None:
+    quote = PaperHoldingQuote(
+        exchange="NSE",
+        symbol_token="11536",
+        trading_symbol="TCS-EQ",
+        price_paise=246_660,
+        quote_time=datetime(2026, 8, 10, 10, 34, 54, tzinfo=UTC),
+        provider="Angel One SmartAPI",
+    )
+
+    assert quote.to_rpc_payload() == {
+        "exchange": "NSE",
+        "symbol_token": "11536",
+        "trading_symbol": "TCS-EQ",
+        "price_paise": 246_660,
+        "quote_time": "2026-08-10T10:34:54+00:00",
+        "provider": "Angel One SmartAPI",
+    }

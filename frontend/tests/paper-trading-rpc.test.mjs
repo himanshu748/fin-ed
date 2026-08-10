@@ -37,6 +37,7 @@ function loadProviderModule() {
     ['@/lib/paper-trading/reducer', require('../lib/paper-trading/reducer.ts')],
     ['@/lib/paper-trading/schema', require('../lib/paper-trading/schema.ts')],
     ['@/lib/paper-trading/storage', require('../lib/paper-trading/storage.ts')],
+    ['@/lib/paper-trading/valuation', require('../lib/paper-trading/valuation.ts')],
   ]);
 
   new Function('require', 'module', 'exports', output)(

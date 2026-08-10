@@ -22,6 +22,11 @@ import type {
   PaperPortfolioStorage,
   SaveResult,
 } from '@/lib/paper-trading/types';
+import {
+  type PaperHoldingQuotes,
+  paperHoldingKey,
+  requestPaperHoldingQuotes,
+} from '@/lib/paper-trading/valuation';
 
 const MAX_RPC_PAYLOAD_BYTES = 15_000;
 const ORDER_RESULT_METHOD = 'fined.paper.v1.order_result';
@@ -97,6 +102,7 @@ export interface ConfirmPaperDraftDependencies {
 
 export type PaperTradingView = 'session' | 'dashboard';
 export type PaperLedgerReadiness = 'initializing' | 'ready' | 'unavailable' | 'corrupt';
+export type PaperQuoteStatus = 'idle' | 'loading' | 'ready' | 'partial' | 'unavailable';
 
 export interface PreparedPaperDraft {
   draft: PaperOrderDraft;
@@ -119,11 +125,14 @@ export interface PaperTradingContextValue {
   readiness: PaperLedgerReadiness;
   portfolio: PaperPortfolio;
   draft: PaperOrderDraft | null;
+  holdingQuotes: PaperHoldingQuotes;
+  quoteStatus: PaperQuoteStatus;
   error: string | null;
   openDashboard(): void;
   closeDashboard(): void;
   confirmDraft(): Promise<boolean>;
   resetPortfolio(): Promise<boolean>;
+  refreshHoldingQuotes(): Promise<boolean>;
 }
 
 interface AgentIdentitySource {
@@ -531,6 +540,9 @@ export function PaperTradingProvider({ children }: PropsWithChildren) {
     error: null,
   }));
   const ledgerRef = useRef(ledger);
+  const [holdingQuotes, setHoldingQuotes] = useState<PaperHoldingQuotes>({});
+  const [quoteStatus, setQuoteStatus] = useState<PaperQuoteStatus>('idle');
+  const quoteRequestGeneration = useRef(0);
 
   const updateLedger = useCallback(
     (transition: (current: PaperLedgerState) => PaperLedgerState) => {
@@ -570,6 +582,9 @@ export function PaperTradingProvider({ children }: PropsWithChildren) {
   expectedAgentSessionKeyRef.current = expectedAgentSessionKey;
   useEffect(() => {
     updateLedger((current) => reconcileAgentSession(current, expectedAgentSessionKey));
+    quoteRequestGeneration.current += 1;
+    setHoldingQuotes({});
+    setQuoteStatus('idle');
   }, [expectedAgentSessionKey, updateLedger]);
   const handlers = useMemo(
     () =>
@@ -664,19 +679,77 @@ export function PaperTradingProvider({ children }: PropsWithChildren) {
     }
   }, [updateLedger]);
 
+  const refreshHoldingQuotes = useCallback(async () => {
+    const holdings = ledgerRef.current.portfolio.holdings;
+    if (!expectedAgentIdentity || !expectedAgentSessionKey || !holdings.length) {
+      setHoldingQuotes({});
+      setQuoteStatus('idle');
+      return false;
+    }
+    const generation = ++quoteRequestGeneration.current;
+    setQuoteStatus('loading');
+    try {
+      const quotes = await requestPaperHoldingQuotes(
+        session.room.localParticipant,
+        expectedAgentIdentity,
+        holdings
+      );
+      if (
+        generation !== quoteRequestGeneration.current ||
+        expectedAgentSessionKeyRef.current !== expectedAgentSessionKey
+      ) {
+        return false;
+      }
+      setHoldingQuotes(quotes);
+      const quoteCount = holdings.filter((holding) => quotes[paperHoldingKey(holding)]).length;
+      setQuoteStatus(
+        quoteCount === holdings.length ? 'ready' : quoteCount > 0 ? 'partial' : 'unavailable'
+      );
+      return quoteCount === holdings.length;
+    } catch {
+      if (generation !== quoteRequestGeneration.current) return false;
+      setHoldingQuotes({});
+      setQuoteStatus('unavailable');
+      return false;
+    }
+  }, [expectedAgentIdentity, expectedAgentSessionKey, session.room.localParticipant]);
+
+  useEffect(() => {
+    if (view !== 'dashboard' || ledger.portfolio.holdings.length === 0) return;
+    void refreshHoldingQuotes();
+    const interval = window.setInterval(() => void refreshHoldingQuotes(), 30_000);
+    return () => {
+      window.clearInterval(interval);
+      quoteRequestGeneration.current += 1;
+    };
+  }, [ledger.portfolio.revision, refreshHoldingQuotes, view]);
+
   const value = useMemo<PaperTradingContextValue>(
     () => ({
       view,
       readiness: ledger.readiness,
       portfolio: ledger.portfolio,
       draft: ledger.draft?.draft ?? null,
+      holdingQuotes,
+      quoteStatus,
       error: ledger.error,
       openDashboard,
       closeDashboard,
       confirmDraft,
       resetPortfolio,
+      refreshHoldingQuotes,
     }),
-    [closeDashboard, confirmDraft, ledger, openDashboard, resetPortfolio, view]
+    [
+      closeDashboard,
+      confirmDraft,
+      holdingQuotes,
+      ledger,
+      openDashboard,
+      quoteStatus,
+      refreshHoldingQuotes,
+      resetPortfolio,
+      view,
+    ]
   );
 
   return <PaperTradingContext.Provider value={value}>{children}</PaperTradingContext.Provider>;

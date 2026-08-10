@@ -269,6 +269,28 @@ def test_sell_fill_contains_one_demat_debit() -> None:
     assert result.cash_effect == result.notional - result.total_charges
 
 
+def test_current_tcs_example_uses_different_real_buy_and_sell_schedule_components() -> (
+    None
+):
+    common = {
+        "trade_date": date(2026, 8, 10),
+        "exchange": "NSE",
+        "quantity": 1,
+        "price": Decimal("2466.60"),
+        "brokerage_promotion_applies": False,
+    }
+
+    buy = calculate_delivery_fill(DeliveryFill(side="buy", **common))
+    sell = calculate_delivery_fill(DeliveryFill(side="sell", **common))
+
+    assert buy.total_charges == Decimal("8.83")
+    assert buy.dp_charge == Decimal("0")
+    assert buy.stamp_duty > Decimal("0")
+    assert sell.total_charges == Decimal("32.06")
+    assert sell.dp_charge == Decimal("20")
+    assert sell.stamp_duty == Decimal("0")
+
+
 def test_bse_fill_requires_a_scrip_group() -> None:
     with pytest.raises(ValueError, match=r"BSE.*group"):
         DeliveryFill(

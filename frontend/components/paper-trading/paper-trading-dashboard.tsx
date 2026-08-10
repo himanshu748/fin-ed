@@ -20,8 +20,18 @@ interface PaperTradingDashboardProps {
 export function PaperTradingDashboard({
   focusHeadingOnMount = true,
 }: PaperTradingDashboardProps = {}) {
-  const { readiness, portfolio, draft, error, closeDashboard, confirmDraft, resetPortfolio } =
-    usePaperTrading();
+  const {
+    readiness,
+    portfolio,
+    draft,
+    holdingQuotes,
+    quoteStatus,
+    error,
+    closeDashboard,
+    confirmDraft,
+    resetPortfolio,
+    refreshHoldingQuotes,
+  } = usePaperTrading();
   const [isResetOpen, setIsResetOpen] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [resetStatus, setResetStatus] = useState<string | null>(null);
@@ -95,7 +105,11 @@ export function PaperTradingDashboard({
       </div>
 
       <div className="mt-6">
-        <PortfolioSummary portfolio={portfolio} />
+        <PortfolioSummary
+          portfolio={portfolio}
+          holdingQuotes={holdingQuotes}
+          quoteStatus={quoteStatus}
+        />
       </div>
 
       <div className="mt-7 grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1.65fr)_minmax(19rem,0.85fr)] lg:items-start">
@@ -108,7 +122,13 @@ export function PaperTradingDashboard({
           />
         </div>
         <div className="min-w-0 space-y-8 lg:order-1">
-          <HoldingsLedger holdings={portfolio.holdings} onBackToLearning={closeDashboard} />
+          <HoldingsLedger
+            holdings={portfolio.holdings}
+            holdingQuotes={holdingQuotes}
+            quoteStatus={quoteStatus}
+            onBackToLearning={closeDashboard}
+            onRefreshQuotes={refreshHoldingQuotes}
+          />
           <ActivityLedger fills={portfolio.fills} />
         </div>
       </div>

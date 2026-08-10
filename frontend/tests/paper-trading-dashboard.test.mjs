@@ -50,12 +50,14 @@ function compile(relativePath, dependencies) {
 }
 
 function loadPortfolioSummary(react = React, useAnimatedNumber = (value) => value) {
+  const valuation = compile('lib/paper-trading/valuation.ts', new Map());
   return compile(
     'components/paper-trading/portfolio-summary.tsx',
     new Map([
       ['react', react],
       ['react/jsx-runtime', jsxRuntime],
       ['@/hooks/use-animated-number', { useAnimatedNumber }],
+      ['@/lib/paper-trading/valuation', valuation],
     ])
   );
 }
@@ -72,6 +74,7 @@ function loadOrderReview(
     ['motion/react', { useReducedMotion: () => reduceMotion }],
     ['@/hooks/use-animated-number', { useAnimatedNumber: (value) => value }],
   ]);
+  common.set('@/lib/paper-trading/valuation', compile('lib/paper-trading/valuation.ts', new Map()));
   const portfolioSummary = compile('components/paper-trading/portfolio-summary.tsx', common);
   common.set('@/components/paper-trading/portfolio-summary', portfolioSummary);
   return compile('components/paper-trading/order-review.tsx', common);
@@ -428,6 +431,17 @@ function renderDashboard(overrides = {}) {
     readiness: 'ready',
     portfolio: portfolio(),
     draft: draft(),
+    holdingQuotes: {
+      'NSE:2885': {
+        exchange: 'NSE',
+        symbolToken: '2885',
+        tradingSymbol: 'RELIANCE-EQ',
+        pricePaise: 2_960_000,
+        quoteTime: '2026-08-10T05:04:54+00:00',
+        provider: 'Angel One SmartAPI',
+      },
+    },
+    quoteStatus: 'ready',
     error: null,
     openDashboard() {},
     closeDashboard() {},
@@ -435,6 +449,9 @@ function renderDashboard(overrides = {}) {
       return true;
     },
     async resetPortfolio() {
+      return true;
+    },
+    async refreshHoldingQuotes() {
       return true;
     },
     ...overrides,
@@ -449,6 +466,7 @@ function renderDashboard(overrides = {}) {
     ['motion/react', { useReducedMotion: () => true }],
     ['@/hooks/use-animated-number', { useAnimatedNumber: (value) => value }],
   ]);
+  common.set('@/lib/paper-trading/valuation', compile('lib/paper-trading/valuation.ts', new Map()));
   const portfolioSummary = compile('components/paper-trading/portfolio-summary.tsx', common);
   common.set('@/components/paper-trading/portfolio-summary', portfolioSummary);
   const holdingsLedger = compile('components/paper-trading/holdings-ledger.tsx', common);
@@ -510,7 +528,20 @@ test('the no-draft review reserves responsive space for concise empty-ledger art
 test('summary keeps final cash and historical cost values accessible during interpolation', () => {
   const { PortfolioSummary } = loadPortfolioSummary(React, (value) => value / 2);
   const markup = renderToStaticMarkup(
-    React.createElement(PortfolioSummary, { portfolio: portfolio() })
+    React.createElement(PortfolioSummary, {
+      portfolio: portfolio(),
+      holdingQuotes: {
+        'NSE:2885': {
+          exchange: 'NSE',
+          symbolToken: '2885',
+          tradingSymbol: 'RELIANCE-EQ',
+          pricePaise: 2_960_000,
+          quoteTime: '2026-08-10T05:04:54+00:00',
+          provider: 'Angel One SmartAPI',
+        },
+      },
+      quoteStatus: 'ready',
+    })
   );
 
   includesAll(
@@ -520,8 +551,8 @@ test('summary keeps final cash and historical cost values accessible during inte
       'aria-label="Holdings historical cost basis: ₹29,507.00"',
       'aria-hidden="true">₹35,246.50',
       'aria-hidden="true">₹14,753.50',
-      'Current/live value:',
-      'trusted current quote is required',
+      'Current holdings value:',
+      'Trusted Angel One quote refreshed every 30 seconds',
     ],
     'missing accessible animated summary behavior'
   );
@@ -642,8 +673,8 @@ test('renders browser-owned safeguards and wires enabled buy and sell confirmati
     [
       'Paper trading only',
       'No real money or broker account.',
-      'Current/live value:',
-      'trusted current quote is required',
+      'Current holdings value:',
+      'Refresh live quotes',
       'This is a simulated paper order. No real money or broker order will be used.',
       'Simulated fills recorded in this browser.',
     ],
@@ -704,7 +735,7 @@ test('renders an open ledger with native headings, status, tables, and mobile la
       '<th scope="col">Historical cost basis</th>',
       '<dt>Current/live value</dt>',
       '<dt>Realized P&amp;L</dt>',
-      'Unavailable',
+      '₹29,600.00',
       '−₹51.00',
     ],
     'missing semantic ledger behavior'

@@ -456,7 +456,11 @@ test('keeps the paper workspace simulated, browser-owned, and quote-gated', () =
   );
   includesAll(
     portfolioSummary,
-    ['Current/live value:', 'Unavailable', 'trusted current quote is required'],
+    [
+      'Current holdings value:',
+      'Trusted Angel One quote refreshed every 30 seconds',
+      'no confirmed paper holdings to value yet',
+    ],
     'missing honest no-quote state'
   );
   includesAll(
