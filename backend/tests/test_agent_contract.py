@@ -22,12 +22,18 @@ from fined.calculator import ScheduleConfigurationError, UnsupportedScheduleErro
 from fined.knowledge.index import SearchHit
 from fined.market_data.angel_one import create_market_data_provider
 from fined.market_data.models import (
+    HistoricalClose,
+    HistoricalPricePair,
+    HistoricalPriceRequest,
     InstrumentSearchRequest,
     MarketInstrument,
     MarketQuote,
     QuoteRequest,
 )
-from fined.market_data.provider import MarketDataUnavailableError
+from fined.market_data.provider import (
+    MARKET_DATA_UNAVAILABLE_MESSAGE,
+    MarketDataUnavailableError,
+)
 from fined.memory import SQLiteCallerMemoryStore
 from fined.modes import LearningMode
 from fined.paper_trading import (
@@ -70,6 +76,8 @@ class FakeMarketDataProvider:
     calls: list[QuoteRequest] = field(default_factory=list)
     instruments: tuple[MarketInstrument, ...] = ()
     search_calls: list[InstrumentSearchRequest] = field(default_factory=list)
+    historical_prices: HistoricalPricePair | None = None
+    historical_calls: list[HistoricalPriceRequest] = field(default_factory=list)
 
     async def get_quote(self, request: QuoteRequest) -> MarketQuote:
         self.calls.append(request)
@@ -82,6 +90,14 @@ class FakeMarketDataProvider:
     ) -> tuple[MarketInstrument, ...]:
         self.search_calls.append(request)
         return self.instruments
+
+    async def get_historical_prices(
+        self, request: HistoricalPriceRequest
+    ) -> HistoricalPricePair:
+        self.historical_calls.append(request)
+        if self.historical_prices is None:
+            raise MarketDataUnavailableError("provider detail must stay hidden")
+        return self.historical_prices
 
 
 @dataclass
@@ -457,6 +473,9 @@ def test_fined_assistant_defaults_to_general_and_exposes_exact_tool_names() -> N
     )
     assert assistant.get_market_quote.info.name == "get_market_quote"
     assert (
+        assistant.calculate_historical_return.info.name == "calculate_historical_return"
+    )
+    assert (
         assistant.open_paper_trading_dashboard.info.name
         == "open_paper_trading_dashboard"
     )
@@ -496,6 +515,23 @@ def test_prompt_defines_browser_only_paper_trading_safety_contract() -> None:
         "paper fills are currently limited to nse eq cash equity and etf delivery",
         "never prepare an intraday, leveraged, short-selling, or f&o paper order",
         "f&o simulation means educational payoff examples only, never a paper order",
+    ):
+        assert required in prompt
+
+
+def test_prompt_requires_historical_tool_and_explains_estimate_limits() -> None:
+    # Catches the model inventing past prices or presenting raw closes as total return.
+    prompt = build_system_prompt(ParticipantProfile(LearningMode.STOCKS)).casefold()
+
+    for required in (
+        "use calculate_historical_return",
+        "purchase date",
+        "valuation date",
+        "investment amount",
+        "whole units",
+        "unadjusted daily closing prices",
+        "dividends, splits, bonus issues, fees, taxes and inflation",
+        "not a total-return figure, forecast or recommendation",
     ):
         assert required in prompt
 
@@ -1130,6 +1166,112 @@ async def test_quote_tool_sanitizes_provider_failure() -> None:
 
     assert str(failure.value) == "Live market data is temporarily unavailable."
     assert "provider detail" not in str(failure.value)
+
+
+@pytest.mark.asyncio
+async def test_historical_return_tool_uses_resolved_instrument_and_provider_prices() -> (
+    None
+):
+    # Catches guessed tokens, fractional units or provider-free historical arithmetic.
+    instrument = _paper_instrument()
+    provider = FakeMarketDataProvider(
+        historical_prices=HistoricalPricePair(
+            entry=HistoricalClose(date(2024, 1, 8), Decimal("100")),
+            valuation=HistoricalClose(date(2026, 8, 7), Decimal("125")),
+            provider="Angel One SmartAPI",
+        )
+    )
+    state = SessionState(
+        profile=ParticipantProfile(LearningMode.STOCKS),
+        retriever=FakeRetriever([]),
+        market_data=provider,
+        resolved_market_instruments={
+            (instrument.exchange, instrument.symbol_token): instrument
+        },
+    )
+
+    result = await FinEdAssistant().calculate_historical_return(
+        context=_context(state),
+        exchange="NSE",
+        symbol_token="2885",
+        purchase_date="2024-01-06",
+        valuation_date="2026-08-07",
+        investment_amount="10000",
+    )
+
+    assert provider.historical_calls == [
+        HistoricalPriceRequest("NSE", "2885", date(2024, 1, 6), date(2026, 8, 7))
+    ]
+    assert result["trading_symbol"] == "RELIANCE-EQ"
+    assert result["requested_purchase_date"] == "2024-01-06"
+    assert result["requested_valuation_date"] == "2026-08-07"
+    assert result["entry_date"] == "2024-01-08"
+    assert result["units"] == 100
+    assert result["final_value"] == "12500.00"
+    assert result["percentage_return"] == "25.00"
+    assert result["adjusted_for_corporate_actions"] is False
+    assert result["is_forecast"] is False
+    assert result["is_recommendation"] is False
+    assert result["is_order"] is False
+
+
+@pytest.mark.asyncio
+async def test_historical_return_tool_requires_search_and_rejects_future_dates() -> (
+    None
+):
+    # Catches arbitrary token use and future data requests reaching the provider.
+    provider = FakeMarketDataProvider()
+    state = SessionState(
+        profile=ParticipantProfile(LearningMode.STOCKS),
+        retriever=FakeRetriever([]),
+        market_data=provider,
+    )
+
+    with pytest.raises(ToolError, match="search_market_instruments"):
+        await FinEdAssistant().calculate_historical_return(
+            _context(state), "NSE", "2885", "2024-01-06", "2026-08-07", "10000"
+        )
+    state.resolved_market_instruments[("NSE", "2885")] = _paper_instrument()
+    with pytest.raises(ToolError, match="future"):
+        await FinEdAssistant().calculate_historical_return(
+            _context(state), "NSE", "2885", "2024-01-06", "2099-01-01", "10000"
+        )
+
+    assert provider.historical_calls == []
+
+
+@pytest.mark.asyncio
+async def test_historical_return_tool_sanitizes_provider_and_amount_failures() -> None:
+    # Catches raw provider details or Decimal failures escaping into model context.
+    instrument = _paper_instrument()
+    provider = FakeMarketDataProvider()
+    state = SessionState(
+        profile=ParticipantProfile(LearningMode.STOCKS),
+        retriever=FakeRetriever([]),
+        market_data=provider,
+        resolved_market_instruments={
+            (instrument.exchange, instrument.symbol_token): instrument
+        },
+    )
+    assistant = FinEdAssistant()
+
+    with pytest.raises(ToolError) as provider_failure:
+        await assistant.calculate_historical_return(
+            _context(state), "NSE", "2885", "2024-01-06", "2026-08-07", "10000"
+        )
+    with pytest.raises(ToolError, match="supported range") as amount_failure:
+        await assistant.calculate_historical_return(
+            _context(state),
+            "NSE",
+            "2885",
+            "2024-01-06",
+            "2026-08-07",
+            "100000000.01",
+        )
+
+    assert str(provider_failure.value) == MARKET_DATA_UNAVAILABLE_MESSAGE
+    assert "provider detail" not in str(provider_failure.value)
+    assert "Traceback" not in str(amount_failure.value)
 
 
 @pytest.mark.asyncio

@@ -31,8 +31,16 @@ from fined.calculator import (
     calculate_delivery_trade,
 )
 from fined.guardrails import evaluate_guardrail, render_refusal
+from fined.historical_returns import (
+    HistoricalReturnInput,
+    validate_historical_investment_amount,
+)
+from fined.historical_returns import (
+    calculate_historical_return as calculate_historical_return_value,
+)
 from fined.knowledge.index import SearchHit
 from fined.market_data.models import (
+    HistoricalPriceRequest,
     InstrumentSearchRequest,
     MarketInstrument,
     QuoteRequest,
@@ -198,6 +206,10 @@ KNOWLEDGE
 - Explain general Indian-market concepts and use the available deterministic calculator only for its supported cases.
 - Use retrieval for facts that can change, including taxes, charges, prices, broker policies, and regulations.
 - Use the quote tool only for a timestamped current price. A quote is educational data, never an order or recommendation.
+- For a hypothetical past cash-market investment, first resolve the exact instrument with search_market_instruments, then use calculate_historical_return.
+- Before using calculate_historical_return, collect the purchase date, valuation date and investment amount.
+- Explain that historical results use whole units and unadjusted daily closing prices. Dividends, splits, bonus issues, fees, taxes and inflation are excluded.
+- Say the result is not a total-return figure, forecast or recommendation. Never invent past prices or calculate historical returns from a current quote.
 - If current evidence is unavailable, say it could not be verified instead of guessing.
 
 PAPER TRADING
@@ -524,6 +536,79 @@ class FinEdAssistant(Agent):
         result["message"] = (
             "Read-only educational quote. This did not place, prepare, or recommend "
             "an order. State the provider and exchange time when using it."
+        )
+        return result
+
+    @function_tool(name="calculate_historical_return")
+    async def calculate_historical_return(
+        self,
+        context: RunContext[SessionState],
+        exchange: str,
+        symbol_token: str,
+        purchase_date: str,
+        valuation_date: str,
+        investment_amount: str,
+    ) -> dict[str, object]:
+        """Estimate a past cash-market investment using read-only daily closes.
+
+        Args:
+            exchange: Exact cash exchange from instrument search, NSE or BSE.
+            symbol_token: Numeric token returned by instrument search.
+            purchase_date: Requested purchase date in strict YYYY-MM-DD form.
+            valuation_date: Requested historical valuation date in YYYY-MM-DD form.
+            investment_amount: Positive rupee amount as decimal text, at most two decimals.
+        """
+        try:
+            request = HistoricalPriceRequest(
+                exchange=exchange,
+                symbol_token=symbol_token,
+                purchase_date=_parse_iso_date(purchase_date, "purchase_date"),
+                valuation_date=_parse_iso_date(valuation_date, "valuation_date"),
+            )
+        except ToolError:
+            raise
+        except (TypeError, ValueError) as exc:
+            raise ToolError(str(exc)) from None
+        if request.valuation_date > datetime.now(_INDIA_TIME).date():
+            raise ToolError("valuation_date cannot be in the future.")
+
+        instrument = context.userdata.resolved_market_instruments.get(
+            (request.exchange, request.symbol_token)
+        )
+        if instrument is None:
+            raise ToolError(_PAPER_INSTRUMENT_NOT_RESOLVED_MESSAGE)
+        try:
+            amount = validate_historical_investment_amount(
+                _positive_decimal(investment_amount, "investment_amount")
+            )
+        except ToolError:
+            raise
+        except (DecimalException, ValueError):
+            raise ToolError(
+                "investment_amount is outside the supported range or has more "
+                "than two decimal places."
+            ) from None
+
+        try:
+            prices = await context.userdata.market_data.get_historical_prices(request)
+        except Exception:
+            raise ToolError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
+        try:
+            result = calculate_historical_return_value(
+                HistoricalReturnInput(investment_amount=amount, prices=prices)
+            ).to_tool_result()
+        except (DecimalException, ValueError):
+            raise ToolError(
+                "Historical return values are outside the supported calculation range."
+            ) from None
+        result.update(
+            {
+                "exchange": instrument.exchange,
+                "symbol_token": instrument.symbol_token,
+                "trading_symbol": instrument.trading_symbol,
+                "requested_purchase_date": request.purchase_date.isoformat(),
+                "requested_valuation_date": request.valuation_date.isoformat(),
+            }
         )
         return result
 
