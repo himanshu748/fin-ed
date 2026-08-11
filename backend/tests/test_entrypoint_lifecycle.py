@@ -471,10 +471,10 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
 
 
 @pytest.mark.asyncio
-async def test_outbound_dispatch_uses_disclosure_and_never_reads_browser_memory(
+async def test_outbound_dispatch_uses_disclosure_and_call_scoped_paper_sandbox(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # Catches an outbound reminder inheriting a caller ID, saved memory, or web greeting.
+    # Catches an outbound reminder inheriting browser state or lacking paper practice.
     harness = _install_lifecycle_fakes(monkeypatch, None, tmp_path / "generated")
     harness.context.job = SimpleNamespace(  # type: ignore[attr-defined]
         metadata=build_outbound_metadata(PAPER_PRACTICE_REMINDER)
@@ -490,13 +490,13 @@ async def test_outbound_dispatch_uses_disclosure_and_never_reads_browser_memory(
         memory_lookup_should_not_run,
     )
 
-    def market_provider_should_not_be_created() -> object:
-        raise AssertionError("outbound reminders must not initialize market access")
-
+    market_provider = object()
+    paper_bridge = object()
     monkeypatch.setattr(
-        entrypoint,
-        "create_market_data_provider",
-        market_provider_should_not_be_created,
+        entrypoint, "create_market_data_provider", lambda: market_provider
+    )
+    monkeypatch.setattr(
+        entrypoint, "CallPaperTradingBridge", lambda: paper_bridge, raising=False
     )
 
     await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
@@ -504,6 +504,8 @@ async def test_outbound_dispatch_uses_disclosure_and_never_reads_browser_memory(
     state = harness.session.userdata
     assert state is not None
     assert state.outbound_reminder == PAPER_PRACTICE_REMINDER  # type: ignore[union-attr]
+    assert state.market_data is market_provider  # type: ignore[union-attr]
+    assert state.paper_trading is paper_bridge  # type: ignore[union-attr]
     assert harness.session.spoken == [build_outbound_greeting(PAPER_PRACTICE_REMINDER)]
     assert "Welcome back" not in harness.session.spoken[0]
     assert harness.session.generated_replies == []

@@ -2,7 +2,7 @@
 
 FinEd Saathi is a voice-first Hinglish tutor for beginner concepts in the Indian
 financial market. It is the Financial Services track project for VoiceForBharat.
-Treat it as an education product: it must not place trades, provide calls or
+Treat it as an education product: it must not place real trades, provide calls or
 targets, promise returns, or give personalized investment advice.
 
 ## Product contracts

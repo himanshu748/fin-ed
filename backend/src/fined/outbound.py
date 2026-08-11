@@ -169,7 +169,7 @@ async def initiate_outbound_call(
     """Dispatch the named agent then make one bounded dial attempt.
 
     The call is deliberately operator-triggered. It does not persist a number,
-    schedule a retry, or expose a broker, paper-trading, or browser control path.
+    schedule a retry or expose a broker order or browser control path.
     """
     room_name = f"fined-outbound-{_new_token(token_factory)}"
     participant_identity = f"outbound-recipient-{_new_token(token_factory)}"

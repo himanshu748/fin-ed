@@ -18,7 +18,7 @@ The project is built for the Financial Services track of **10 Days of Voice Agen
 - Visible session IDs with separate transcript history for each meaningful session
 - Consent-gated caller memory backed by SQLite
 - An optional local knowledge index with fail-closed evidence behavior
-- A manual, consented paper-practice reminder through a bounded LiveKit SIP call
+- A manual, consented SIP reminder with a call-scoped ₹1,00,000 paper portfolio
 - Guardrails for credentials, personalised recommendations, guaranteed outcomes, wrongdoing and prompt extraction
 - An accessible responsive interface with reduced-motion support
 
@@ -26,13 +26,13 @@ The project is built for the Financial Services track of **10 Days of Voice Agen
 
 FinEd Saathi is an educational product. It never asks for a broker password, PIN, OTP, PAN, Aadhaar or bank details. Angel One credentials stay in the backend environment and are never sent to the browser.
 
-Paper orders are simulated. A learner must review and confirm each draft in the browser. No broker order API is called and no real money is used.
+Paper orders are simulated. A learner must review and explicitly confirm each draft in the browser or during an outbound practice call. No broker order API is called and no real money is used.
 
 The optional Day 6 paper-practice reminder is started only by a private
 server-side command after a learner's explicit opt-in. It creates a new LiveKit
 agent dispatch before one SIP dial. The caller first hears FinEd's identity,
-the opt-in purpose and a way to say stop. It has no browser, broker or
-real-trading path, and it does not store a recipient number or schedule a retry.
+the opt-in purpose and a way to say stop. It has no browser, broker order or
+real-trading path. It does not store a recipient number or schedule a retry.
 
 The F&O mode explains mechanics, margin and loss risk. It does not provide signals or live strategies. Personalised decisions belong with a SEBI-registered investment adviser.
 
@@ -60,6 +60,7 @@ Optional Day 6 outbound reminder
   -> explicit LiveKit dispatch with allowlisted, phone-free metadata
   -> one SIP participant dial through a stored LiveKit Cloud outbound trunk
   -> consented Indian E.164 recipient
+  -> isolated ₹1,00,000 call-only paper ledger using read-only live quotes
 ```
 
 ## Run locally
@@ -234,9 +235,17 @@ Ask the agent to open paper trading or prepare a paper order. The LiveKit RPC br
 This optional flow is a single education-only paper-trading practice reminder,
 not a campaign, scheduler or follow-up service. The only supported reminder is
 `paper_practice` in Stocks mode. During the call, FinEd does not access the
-browser, caller memory, a broker account, a live portfolio or a paper order. It
-can explain a concept if asked, but it must end the call immediately if the
-recipient says stop, unsubscribe, do not call or end this call.
+browser, caller memory, a broker account or a live portfolio. It can use the
+read-only market-data provider to prepare an NSE EQ delivery paper draft in an
+isolated ₹1,00,000 virtual portfolio. The learner must hear the side, symbol,
+quantity, timestamped price and estimated charges then explicitly confirm the
+same draft before a simulated fill. The call portfolio disappears when the
+call ends and never reaches a broker order API.
+
+FinEd must end the call immediately if the recipient says stop, hang up,
+disconnect the call, unsubscribe, do not call or an equivalent supported Hindi
+phrase. This deterministic path runs before Gemini so it does not depend on the
+model choosing a tool.
 
 The operator must have a recorded, specific opt-in for this reminder and must
 reconfirm that it has not been withdrawn before every manual attempt. The

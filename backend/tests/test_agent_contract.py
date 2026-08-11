@@ -518,10 +518,10 @@ def test_fined_assistant_defaults_to_general_and_exposes_exact_tool_names() -> N
     assert assistant.end_outbound_call.info.name == "end_outbound_call"
 
 
-def test_outbound_prompt_disables_memory_and_requires_stop_without_broker_actions() -> (
+def test_outbound_prompt_allows_confirmed_call_paper_fills_without_broker_actions() -> (
     None
 ):
-    # Catches an outbound reminder inheriting browser memory or real-trade behavior.
+    # Catches call paper practice becoming a real trade or skipping confirmation.
     prompt = FinEdAssistant(
         ParticipantProfile(LearningMode.STOCKS),
         outbound_reminder=PAPER_PRACTICE_REMINDER,
@@ -532,7 +532,10 @@ def test_outbound_prompt_disables_memory_and_requires_stop_without_broker_action
     assert "do not call lookup_caller_memory" in prompt
     assert "call end_outbound_call" in prompt
     assert "never access a broker account" in prompt
-    assert "never prepare, confirm or simulate an order" in prompt
+    assert "call-scoped" in prompt
+    assert "₹1,00,000" in prompt
+    assert "explicit confirmation" in prompt
+    assert "never execute a real broker order" in prompt
 
 
 @pytest.mark.asyncio
@@ -574,8 +577,10 @@ async def test_outbound_stop_tool_ends_only_a_consented_learning_reminder() -> N
 
 
 @pytest.mark.asyncio
-async def test_outbound_reminder_blocks_memory_market_and_paper_action_tools() -> None:
-    # Catches an LLM bypassing the outbound prompt to access a browser or broker data.
+async def test_outbound_reminder_blocks_memory_and_browser_but_allows_paper_tools() -> (
+    None
+):
+    # Catches the phone sandbox being unusable or leaking into browser memory.
     provider = FakeMarketDataProvider(quote=_paper_quote())
     bridge = FakePaperTradingBridge()
     state = _paper_state(provider=provider, bridge=bridge)
@@ -585,20 +590,36 @@ async def test_outbound_reminder_blocks_memory_market_and_paper_action_tools() -
     with pytest.raises(ToolError, match="unavailable during a short outbound"):
         await assistant.lookup_caller_memory(_context(state))
     with pytest.raises(ToolError, match="unavailable during a short outbound"):
-        await assistant.get_market_quote(_context(state), "NSE", "2885")
-    with pytest.raises(ToolError, match="unavailable during a short outbound"):
         await assistant.open_paper_trading_dashboard(_context(state))
-    with pytest.raises(ToolError, match="unavailable during a short outbound"):
-        await assistant.prepare_paper_order(_context(state), "buy", "NSE", "2885", 1)
 
-    assert provider.calls == []
+    quote = await assistant.get_market_quote(_context(state), "NSE", "2885")
+    prepared = await assistant.prepare_paper_order(
+        _context(state), "buy", "NSE", "2885", 1
+    )
+    result = await assistant.confirm_paper_order(
+        _context(state), str(prepared["draft_id"])
+    )
+
+    assert quote["is_order"] is False
+    assert prepared["paper"] is True
+    assert result["filled"] is True
+    assert provider.calls == [QuoteRequest("NSE", "2885"), QuoteRequest("NSE", "2885")]
     assert bridge.open_calls == 0
-    assert bridge.prepare_calls == 0
+    assert bridge.prepare_calls == 1
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "stop_request", ["stop", "Please stop calling me.", "कॉल बंद करो"]
+    "stop_request",
+    [
+        "stop",
+        "Please stop calling me.",
+        "hang up",
+        "cut the call",
+        "disconnect the call",
+        "कॉल बंद करो",
+        "फोन काट दो",
+    ],
 )
 async def test_outbound_stop_phrase_is_handled_before_llm_generation(
     monkeypatch: pytest.MonkeyPatch, stop_request: str

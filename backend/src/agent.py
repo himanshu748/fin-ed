@@ -47,7 +47,7 @@ from fined.outbound import (
     build_outbound_greeting,
     parse_outbound_metadata,
 )
-from fined.paper_trading import LiveKitPaperTradingBridge
+from fined.paper_trading import CallPaperTradingBridge, LiveKitPaperTradingBridge
 from fined.paper_trading.models import (
     PaperHoldingQuote,
     PaperHoldingQuoteRequest,
@@ -257,13 +257,15 @@ async def my_agent(ctx: JobContext) -> None:
             caller_id=participant.identity,
             outbound_reminder=outbound_reminder,
         )
+        state.market_data = create_market_data_provider()
         if outbound_reminder is None:
             assert memory_store is not None
             state.memory_store = memory_store
-            state.market_data = create_market_data_provider()
             state.paper_trading = LiveKitPaperTradingBridge(
                 ctx.room.local_participant, participant.identity
             )
+        else:
+            state.paper_trading = CallPaperTradingBridge()
         session = AgentSession[SessionState](
             userdata=state,
             stt=deepgram.STT(

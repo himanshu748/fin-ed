@@ -5,6 +5,7 @@ from .bridge import (
     PaperTradingBridge,
     PaperTradingUIUnavailableError,
 )
+from .call import CallPaperTradingBridge
 from .models import (
     MAX_RPC_PAYLOAD_BYTES,
     PAPER_DRAFT_LIFETIME,
@@ -19,6 +20,7 @@ from .models import (
 __all__ = [
     "MAX_RPC_PAYLOAD_BYTES",
     "PAPER_DRAFT_LIFETIME",
+    "CallPaperTradingBridge",
     "LiveKitPaperTradingBridge",
     "PaperDashboardAck",
     "PaperDraftAck",

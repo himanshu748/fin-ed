@@ -8,8 +8,8 @@ It connects to LiveKit Cloud as the named agent `my-agent`.
 User speech -> Deepgram Nova-3 -> Gemini + FinEd tools -> Murf Falcon 2 -> audio
 ```
 
-The agent is education-only. It does not execute trades or provide personalized
-investment advice, and F&O help is limited to mechanics, simulation, and risk.
+The agent is education-only. It does not execute real trades or provide personalized
+investment advice. F&O help is limited to mechanics, simulation and risk.
 
 ## Setup
 
@@ -71,6 +71,14 @@ phone-free allowlisted metadata, then makes one SIP participant dial. The
 outbound agent says who it is, states the opt-in reason and lets the recipient
 say stop before any lesson.
 
+The call has its own non-persistent ₹1,00,000 virtual portfolio. FinEd may use
+read-only Angel One market data to prepare an NSE EQ delivery paper draft. It
+must state the draft details and estimated charges then receive explicit voice
+confirmation before applying a simulated buy or sell. It rejects short sales,
+insufficient cash, stale drafts and drafts without verified charge estimates.
+No broker order endpoint exists in this path. The call portfolio is discarded
+when the session ends and is separate from the browser portfolio.
+
 Create a stored outbound SIP trunk in LiveKit Cloud with the Twilio carrier and
 Indian termination enabled. Put its `ST_...` ID in `.env.local`; the command
 also uses the existing `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
@@ -110,9 +118,14 @@ uv run dotenv -f .env.local run -- python src/outbound_call.py --consent-confirm
 The real command dispatches first, then dials once through the stored trunk. It
 has a 25-second ringing limit and a five-minute maximum duration. It does not
 log the number in its normal output, persist a contact or job, use the browser,
-access a broker or execute a real or paper trade. Busy, unanswered and failed
-attempts do not retry. Do not place this command in CI, a scheduler or a browser
-route.
+access a broker account or execute a real trade. It can update only the
+call-scoped virtual portfolio after explicit confirmation. Busy, unanswered and
+failed attempts do not retry. Do not place this command in CI, a scheduler or a
+browser route.
+
+Direct phrases such as `stop`, `hang up`, `disconnect the call`, `कॉल बंद करो`
+and `फोन काट दो` bypass Gemini and remove the SIP participant immediately. The
+call also closes when the recipient hangs up.
 
 ## Voice and model configuration
 

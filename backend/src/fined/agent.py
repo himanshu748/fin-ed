@@ -86,7 +86,10 @@ _OUTBOUND_TOOL_UNAVAILABLE_MESSAGE = (
 _OUTBOUND_STOP_REQUEST = re.compile(
     r"^(?:please\s+)?(?:stop(?:\s+calling(?:\s+me)?)?|unsubscribe|"
     r"do not call(?:\s+me)?|don't call(?:\s+me)?|end(?:\s+this)?\s+call|"
-    r"कॉल बंद करो|कॉल बंद करें|फोन बंद करो|फोन बंद करें|रुक जाओ|रुक जाइए)"
+    r"hang\s+up(?:\s+the\s+call)?|cut(?:\s+the)?\s+call|"
+    r"disconnect(?:\s+the)?\s+call|"
+    r"कॉल बंद करो|कॉल बंद करें|फोन बंद करो|फोन बंद करें|फोन काट दो|फोन काट दें|"
+    r"रुक जाओ|रुक जाइए)"
     r"(?:\s+(?:please|now|अभी))?[.!?।]*$",
     re.IGNORECASE,
 )
@@ -217,9 +220,37 @@ def _build_outbound_prompt(outbound_reminder: OutboundReminder | None) -> str:
     return """OUTBOUND CALL
 - This is an opt-in paper-trading practice reminder. Its disclosure was spoken before this conversation started.
 - Never access a broker account, browser session, caller memory, live portfolio, or account-specific data.
-- Never prepare, confirm or simulate an order during this call. Teach a concept only if the caller asks.
+- The call-scoped paper portfolio starts with ₹1,00,000 of virtual cash and disappears when the call ends.
+- You may use read-only market data to prepare an NSE EQ delivery paper draft. Never execute a real broker order.
+- Present the side, symbol, quantity, timestamped price and estimated charges, then ask for explicit confirmation.
+- Confirm only the same pending call-scoped draft after that confirmation. Never treat the first request, silence or an unrelated yes as confirmation.
 - If the caller says stop, unsubscribe, do not call, or end this call, call end_outbound_call immediately. Do not ask a follow-up question or offer a replacement channel.
 - Do not make a future call, retry this call, collect contact details, or claim a voicemail was a person."""
+
+
+def _build_paper_trading_prompt(
+    outbound_reminder: OutboundReminder | None,
+) -> str:
+    if outbound_reminder is not None:
+        return """- Paper trading is a call-scoped educational simulation with virtual money.
+- The portfolio starts with ₹1,00,000 and is not linked to the browser or a broker.
+- Paper fills are limited to NSE EQ cash equity and ETF delivery.
+- Never prepare an intraday, leveraged, short-selling or F&O paper order.
+- Use search_market_instruments before prepare_paper_order.
+- A prepared draft is not filled. State its side, symbol, quantity, price and estimated charges, then ask for explicit confirmation.
+- Use confirm_paper_order only after explicit confirmation of that same pending draft.
+- Never provide a recommendation or convert a paper request into a real broker action."""
+    return """- Paper trading is a browser-only educational simulation with virtual money.
+- Paper fills are currently limited to NSE EQ cash equity and ETF delivery.
+- Never prepare an intraday, leveraged, short-selling, or F&O paper order.
+- F&O simulation means educational payoff examples only, never a paper order.
+- Use open_paper_trading_dashboard for intent to practise or view the paper portfolio.
+- Use prepare_paper_order only after side, supported instrument, and positive whole quantity are known.
+- The tool prepares a draft. Never say it filled until the browser reports a confirmed paper result.
+- Use confirm_paper_order only after explicit confirmation of the same pending paper draft.
+- Confirmation means the learner says to confirm that paper order, or clearly says yes to your direct confirmation question after the side, symbol, quantity, price and charges were presented.
+- Do not treat the original buy or sell request, silence, an unrelated yes or earlier consent as confirmation.
+- Never provide a recommendation or convert a paper request into a real broker action."""
 
 
 def build_system_prompt(
@@ -229,6 +260,7 @@ def build_system_prompt(
     """Build the fixed safety contract with mode-specific session context."""
     memory_prompt = _build_memory_prompt(outbound_reminder)
     outbound_prompt = _build_outbound_prompt(outbound_reminder)
+    paper_trading_prompt = _build_paper_trading_prompt(outbound_reminder)
     return f"""IDENTITY
 - You are FinEd Saathi, a voice-first Indian financial-markets tutor for beginners.
 - You work for the learner. You are not a broker, investment adviser, tax adviser, or account-support representative.
@@ -258,17 +290,7 @@ KNOWLEDGE
 - If current evidence is unavailable, say it could not be verified instead of guessing.
 
 PAPER TRADING
-- Paper trading is a browser-only educational simulation with virtual money.
-- Paper fills are currently limited to NSE EQ cash equity and ETF delivery.
-- Never prepare an intraday, leveraged, short-selling, or F&O paper order.
-- F&O simulation means educational payoff examples only, never a paper order.
-- Use open_paper_trading_dashboard for intent to practise or view the paper portfolio.
-- Use prepare_paper_order only after side, supported instrument, and positive whole quantity are known.
-- The tool prepares a draft. Never say it filled until the browser reports a confirmed paper result.
-- Use confirm_paper_order only after explicit confirmation of the same pending paper draft.
-- Confirmation means the learner says to confirm that paper order, or clearly says yes to your direct confirmation question after the side, symbol, quantity, price and charges were presented.
-- Do not treat the original buy or sell request, silence, an unrelated yes or earlier consent as confirmation.
-- Never provide a recommendation or convert a paper request into a real broker action.
+{paper_trading_prompt}
 
 {outbound_prompt}
 
@@ -284,7 +306,7 @@ GUARDRAILS
 - Never provide recommendations. Never recommend buying, selling, or holding a security, fund, commodity, derivative, or scheme.
 - Never provide targets, signals, guaranteed returns, assured returns, guaranteed approvals, portfolio allocation, or trade execution.
 - Never execute a real broker trade, claim to access a broker account, or pretend an account action succeeded.
-- You may confirm only a pending browser paper draft with virtual money after explicit confirmation.
+- You may confirm only a pending paper draft in the active virtual-money sandbox after explicit confirmation.
 - Never provide a live F&O strategy or calls. Clearly say F&O is high risk; educational simulation means payoff examples only, never any paper or real order.
 - Never help manipulate markets, evade taxes, bypass broker controls, use insider information, or conceal financial activity.
 - Never provide personalised legal or tax advice.
@@ -348,7 +370,7 @@ def _latest_user_text(chat_ctx: llm.ChatContext) -> str:
     return ""
 
 
-def _require_interactive_learning_session(state: SessionState) -> None:
+def _require_browser_session(state: SessionState) -> None:
     if state.outbound_reminder is not None:
         raise ToolError(_OUTBOUND_TOOL_UNAVAILABLE_MESSAGE)
 
@@ -420,7 +442,7 @@ class FinEdAssistant(Agent):
     ) -> dict[str, object]:
         """Look up the current caller's saved learning memory before greeting."""
         state = context.userdata
-        _require_interactive_learning_session(state)
+        _require_browser_session(state)
         try:
             memory = state.memory_store.lookup(state.caller_id)
         except Exception:
@@ -466,7 +488,7 @@ class FinEdAssistant(Agent):
             topic_covered: Optional short concept covered in this conversation.
         """
         state = context.userdata
-        _require_interactive_learning_session(state)
+        _require_browser_session(state)
         if consent_confirmed is not True:
             raise ToolError(
                 "Do not save. Ask for an explicit yes immediately before saving."
@@ -520,7 +542,7 @@ class FinEdAssistant(Agent):
             consent_confirmed: True only after a clear yes to delete saved memory.
         """
         state = context.userdata
-        _require_interactive_learning_session(state)
+        _require_browser_session(state)
         if consent_confirmed is not True:
             raise ToolError(
                 "Do not delete. Ask for an explicit yes immediately before deletion."
@@ -627,7 +649,6 @@ class FinEdAssistant(Agent):
             symbol_token: Angel One numeric instrument token, not a ticker name.
         """
         state = context.userdata
-        _require_interactive_learning_session(state)
         try:
             request = QuoteRequest(exchange=exchange, symbol_token=symbol_token)
         except (TypeError, ValueError) as exc:
@@ -666,7 +687,6 @@ class FinEdAssistant(Agent):
             investment_amount: Positive rupee amount as decimal text, at most two decimals.
         """
         state = context.userdata
-        _require_interactive_learning_session(state)
         try:
             request = HistoricalPriceRequest(
                 exchange=exchange,
@@ -728,7 +748,7 @@ class FinEdAssistant(Agent):
     ) -> dict[str, object]:
         """Open the learner's browser-only paper dashboard without placing an order."""
         state = context.userdata
-        _require_interactive_learning_session(state)
+        _require_browser_session(state)
         try:
             acknowledgement = await state.paper_trading.open_dashboard()
         except Exception:
@@ -753,7 +773,6 @@ class FinEdAssistant(Agent):
             exchange: Optional exact cash exchange, NSE or BSE.
         """
         state = context.userdata
-        _require_interactive_learning_session(state)
         if not isinstance(query, str) or not query.isascii():
             raise ToolError(
                 "Retry with the Latin-script company name or trading symbol. "
@@ -808,7 +827,7 @@ class FinEdAssistant(Agent):
         symbol_token: str,
         quantity: int,
     ) -> dict[str, object]:
-        """Prepare an expiring delivery draft for browser confirmation only.
+        """Prepare an expiring delivery draft for explicit confirmation.
 
         Args:
             side: Exact paper side, buy or sell.
@@ -817,7 +836,6 @@ class FinEdAssistant(Agent):
             quantity: Positive whole share or ETF-unit quantity.
         """
         state = context.userdata
-        _require_interactive_learning_session(state)
         if state.profile.learning_mode is LearningMode.FNO:
             raise ToolError(_PAPER_INSTRUMENT_UNSUPPORTED_MESSAGE)
         if not isinstance(side, str) or side not in {"buy", "sell"}:
@@ -909,11 +927,15 @@ class FinEdAssistant(Agent):
             "paper": True,
             "prepared": True,
             "draft_id": draft.draft_id,
-            "requires_browser_confirmation": True,
+            "requires_browser_confirmation": state.outbound_reminder is None,
+            "requires_voice_confirmation": state.outbound_reminder is not None,
             "filled": False,
             "is_order": False,
             "message": (
-                "A paper draft is ready in the browser. It is not filled unless "
+                "A call-scoped paper draft is ready but not filled. Present its "
+                "details and ask for explicit voice confirmation."
+                if state.outbound_reminder is not None
+                else "A paper draft is ready in the browser. It is not filled unless "
                 "the learner explicitly confirms it in the browser or by voice."
             ),
         }
@@ -924,14 +946,13 @@ class FinEdAssistant(Agent):
         context: RunContext[SessionState],
         draft_id: str,
     ) -> dict[str, object]:
-        """Confirm one pending browser paper draft after explicit learner consent.
+        """Confirm one pending paper draft after explicit learner consent.
 
         Args:
             draft_id: Exact identifier returned by prepare_paper_order for the draft
                 the learner explicitly confirmed.
         """
         state = context.userdata
-        _require_interactive_learning_session(state)
         if not isinstance(draft_id, str) or not draft_id.strip():
             raise ToolError("An exact pending paper draft is required.")
         draft = state.pending_paper_drafts.get(draft_id)
@@ -961,7 +982,11 @@ class FinEdAssistant(Agent):
             "fill_price_paise": result.fill_price_paise,
             "simulated_at": result.simulated_at.isoformat(),
             "cash_paise": result.cash_paise,
-            "message": "The browser confirmed the simulated paper fill.",
+            "message": (
+                "The call-scoped simulated paper fill was confirmed."
+                if state.outbound_reminder is not None
+                else "The browser confirmed the simulated paper fill."
+            ),
         }
 
     @function_tool(name="get_paper_portfolio_summary")
@@ -969,9 +994,8 @@ class FinEdAssistant(Agent):
         self,
         context: RunContext[SessionState],
     ) -> dict[str, object]:
-        """Read the browser-owned virtual-money paper portfolio summary."""
+        """Read the active virtual-money paper portfolio summary."""
         state = context.userdata
-        _require_interactive_learning_session(state)
         try:
             summary = await state.paper_trading.get_portfolio_summary()
         except Exception:
@@ -1022,7 +1046,6 @@ class FinEdAssistant(Agent):
             bse_group: Allowlisted BSE scrip group when exchange is BSE.
         """
         state = context.userdata
-        _require_interactive_learning_session(state)
         if state.profile.learning_mode is LearningMode.FNO:
             raise ToolError(
                 "The delivery calculator is unavailable in F&O mode; use educational "
