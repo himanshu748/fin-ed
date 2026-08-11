@@ -830,6 +830,35 @@ async def test_instrument_search_preserves_ambiguous_choices_for_the_learner() -
 
 
 @pytest.mark.asyncio
+async def test_instrument_search_removes_a_trailing_company_descriptor() -> None:
+    instrument = MarketInstrument("NSE", "2885", "RELIANCE-EQ", "EQ")
+    provider = FakeMarketDataProvider(instruments=(instrument,))
+    state = SessionState(
+        profile=ParticipantProfile(LearningMode.STOCKS),
+        retriever=FakeRetriever([]),
+        market_data=provider,
+        paper_trading=FakePaperTradingBridge(),
+    )
+
+    result = await FinEdAssistant().search_market_instruments(
+        _context(state), query="Reliance Industries", exchange="NSE"
+    )
+
+    assert provider.search_calls == [
+        InstrumentSearchRequest(query="RELIANCE", exchange="NSE")
+    ]
+    assert result["matches"] == [
+        {
+            "exchange": "NSE",
+            "symbol_token": "2885",
+            "trading_symbol": "RELIANCE-EQ",
+            "series": "EQ",
+            "is_order": False,
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_instrument_search_requests_a_latin_retry_for_devanagari_query() -> None:
     provider = FakeMarketDataProvider()
     state = SessionState(

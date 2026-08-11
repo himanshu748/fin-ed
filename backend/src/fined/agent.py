@@ -93,6 +93,9 @@ _OUTBOUND_STOP_REQUEST = re.compile(
     r"(?:\s+(?:please|now|अभी))?[.!?।]*$",
     re.IGNORECASE,
 )
+_MARKET_SEARCH_COMPANY_DESCRIPTOR = re.compile(
+    r"(?:\s+(?:INDUSTRIES|LIMITED|LTD\.?))+$", re.IGNORECASE
+)
 
 _TOPIC_NAMES = {
     LearningMode.STOCKS: "Stocks",
@@ -778,6 +781,7 @@ class FinEdAssistant(Agent):
                 "Retry with the Latin-script company name or trading symbol. "
                 "Keep the learner-facing reply in their chosen language."
             )
+        query = _MARKET_SEARCH_COMPANY_DESCRIPTOR.sub("", query.strip()).upper()
         try:
             request = InstrumentSearchRequest(query=query, exchange=exchange)
         except (TypeError, ValueError) as exc:
