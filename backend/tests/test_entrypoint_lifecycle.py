@@ -498,6 +498,45 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
 
 
 @pytest.mark.asyncio
+async def test_browser_session_receives_server_configured_callback_without_number_metadata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Catches the callback adapter never reaching the browser agent or leaking its target.
+    harness = _install_lifecycle_fakes(monkeypatch, None, tmp_path / "generated")
+    callback = SimpleNamespace(request_callback=lambda reference_id: reference_id)
+    captured: dict[str, str] = {}
+
+    class CallbackFactory:
+        @classmethod
+        def from_environment(cls, environment: object) -> object:
+            del cls
+            captured.update(
+                {
+                    "number": environment["FINED_ESCALATION_CALLBACK_NUMBER"],  # type: ignore[index]
+                    "trunk": environment["SIP_OUTBOUND_TRUNK_ID"],  # type: ignore[index]
+                }
+            )
+            return callback
+
+    monkeypatch.setenv("FINED_ESCALATION_CALLBACK_NUMBER", "+919876543210")
+    monkeypatch.setenv("SIP_OUTBOUND_TRUNK_ID", "ST_abc12345")
+    monkeypatch.setattr(
+        entrypoint, "LiveKitHumanHelpCallback", CallbackFactory, raising=False
+    )
+
+    await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
+
+    state = harness.session.userdata
+    assert state is not None
+    assert state.human_help_callback is callback  # type: ignore[union-attr]
+    assert captured == {
+        "number": "+919876543210",
+        "trunk": "ST_abc12345",
+    }
+    assert "+919876543210" not in repr(harness.context.log_context_fields)
+
+
+@pytest.mark.asyncio
 async def test_outbound_dispatch_uses_disclosure_and_call_scoped_paper_sandbox(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

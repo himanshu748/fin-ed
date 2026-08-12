@@ -19,6 +19,7 @@ from fined.modes import LearningMode
 OUTBOUND_DISPATCH_KIND = "fined_outbound_learning_reminder"
 OUTBOUND_METADATA_VERSION = 1
 OUTBOUND_REMINDER_PAPER_PRACTICE = "paper_practice"
+OUTBOUND_REMINDER_HUMAN_HELP_CALLBACK = "human_help_callback"
 OUTBOUND_RINGING_TIMEOUT_SECONDS = 25
 OUTBOUND_MAX_CALL_DURATION_SECONDS = 300
 OUTBOUND_DIAL_TIMEOUT_SECONDS = 27.0
@@ -52,6 +53,10 @@ class OutboundReminder:
 PAPER_PRACTICE_REMINDER = OutboundReminder(
     name=OUTBOUND_REMINDER_PAPER_PRACTICE,
     learning_mode=LearningMode.STOCKS,
+)
+HUMAN_HELP_CALLBACK_REMINDER = OutboundReminder(
+    name=OUTBOUND_REMINDER_HUMAN_HELP_CALLBACK,
+    learning_mode=LearningMode.GENERAL,
 )
 
 
@@ -109,8 +114,8 @@ def build_outbound_metadata(reminder: OutboundReminder | str) -> str:
         {
             "version": OUTBOUND_METADATA_VERSION,
             "kind": OUTBOUND_DISPATCH_KIND,
-            "reminder": PAPER_PRACTICE_REMINDER.name,
-            "learning_mode": PAPER_PRACTICE_REMINDER.learning_mode.value,
+            "reminder": reminder.name,
+            "learning_mode": reminder.learning_mode.value,
         },
         separators=(",", ":"),
         sort_keys=True,
@@ -132,19 +137,24 @@ def parse_outbound_metadata(metadata: object) -> OutboundReminder | None:
         "learning_mode",
     }:
         return None
-    if value != {
-        "version": OUTBOUND_METADATA_VERSION,
-        "kind": OUTBOUND_DISPATCH_KIND,
-        "reminder": PAPER_PRACTICE_REMINDER.name,
-        "learning_mode": PAPER_PRACTICE_REMINDER.learning_mode.value,
-    }:
+    try:
+        reminder = _normalize_reminder(value["reminder"])
+    except OutboundConfigurationError:
         return None
-    return PAPER_PRACTICE_REMINDER
+    if value["learning_mode"] != reminder.learning_mode.value:
+        return None
+    return reminder
 
 
 def build_outbound_greeting(reminder: OutboundReminder | str) -> str:
     """Use a deterministic two-sentence disclosure before any conversation."""
-    _normalize_reminder(reminder)
+    reminder = _normalize_reminder(reminder)
+    if reminder == HUMAN_HELP_CALLBACK_REMINDER:
+        return (
+            "Hello, this is FinEd Saathi, making the automated callback you "
+            "requested about your human-help request. This is not a human adviser, "
+            "and you can say stop at any time to end this call."
+        )
     return (
         "Hello, this is FinEd Saathi, calling because you opted in to a paper "
         "trading practice reminder. Say stop at any time and I will end this call."
@@ -238,6 +248,11 @@ async def _delete_dispatch_safely(
 def _normalize_reminder(value: OutboundReminder | str) -> OutboundReminder:
     if value in {OUTBOUND_REMINDER_PAPER_PRACTICE, PAPER_PRACTICE_REMINDER}:
         return PAPER_PRACTICE_REMINDER
+    if value in {
+        OUTBOUND_REMINDER_HUMAN_HELP_CALLBACK,
+        HUMAN_HELP_CALLBACK_REMINDER,
+    }:
+        return HUMAN_HELP_CALLBACK_REMINDER
     raise OutboundConfigurationError("The outbound reminder is not supported.")
 
 

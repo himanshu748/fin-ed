@@ -35,6 +35,10 @@ from fined.escalation_bridge import (
     HumanHelpBridge,
     HumanHelpUIUnavailableError,
 )
+from fined.escalation_callback import (
+    HumanHelpCallback,
+    UnavailableHumanHelpCallback,
+)
 from fined.escalations import (
     EscalationConsentRequiredError,
     EscalationRequestInput,
@@ -69,7 +73,7 @@ from fined.memory import (
     MemoryValidationError,
 )
 from fined.modes import LearningMode, parse_learning_mode
-from fined.outbound import OutboundReminder
+from fined.outbound import HUMAN_HELP_CALLBACK_REMINDER, OutboundReminder
 from fined.paper_trading import (
     PAPER_DRAFT_LIFETIME,
     PaperOrderDraft,
@@ -208,6 +212,10 @@ class SessionState:
         default_factory=_UnavailableEscalationStore
     )
     human_help: HumanHelpBridge = field(default_factory=_UnavailableHumanHelpBridge)
+    human_help_callback: HumanHelpCallback = field(
+        default_factory=UnavailableHumanHelpCallback
+    )
+    created_escalation_references: set[str] = field(default_factory=set)
     outbound_reminder: OutboundReminder | None = None
     outbound_call_control: OutboundCallControl | None = None
 
@@ -251,6 +259,14 @@ def _build_memory_prompt(outbound_reminder: OutboundReminder | None) -> str:
 def _build_outbound_prompt(outbound_reminder: OutboundReminder | None) -> str:
     if outbound_reminder is None:
         return ""
+    if outbound_reminder == HUMAN_HELP_CALLBACK_REMINDER:
+        return """OUTBOUND CALLBACK
+- This is an automated acknowledgement callback requested after a human-help request. Its disclosure was spoken before this conversation started.
+- Never claim to be a human adviser or claim that a human has reviewed the request.
+- Do not access a broker account, browser session, caller memory, live portfolio, or account-specific data.
+- Confirm only that the request was received, repeat the safe next step, and keep the call brief.
+- If the caller says stop, unsubscribe, do not call, or end this call, call end_outbound_call immediately.
+- Do not make another call, retry this call, collect contact details, or promise a response time."""
     return """OUTBOUND CALL
 - This is an opt-in paper-trading practice reminder. Its disclosure was spoken before this conversation started.
 - Never access a broker account, browser session, caller memory, live portfolio, or account-specific data.
@@ -265,6 +281,9 @@ def _build_outbound_prompt(outbound_reminder: OutboundReminder | None) -> str:
 def _build_paper_trading_prompt(
     outbound_reminder: OutboundReminder | None,
 ) -> str:
+    if outbound_reminder == HUMAN_HELP_CALLBACK_REMINDER:
+        return """- Paper trading is unavailable during a human-help acknowledgement callback.
+- Do not call paper-trading tools or discuss placing a real order."""
     if outbound_reminder is not None:
         return """- Paper trading is a call-scoped educational simulation with virtual money.
 - The portfolio starts with ₹1,00,000 and is not linked to the browser or a broker.
@@ -289,6 +308,10 @@ def _build_paper_trading_prompt(
 
 
 def _build_human_help_prompt(outbound_reminder: OutboundReminder | None) -> str:
+    if outbound_reminder == HUMAN_HELP_CALLBACK_REMINDER:
+        return """- This automated callback acknowledges an existing human-help request only.
+- Do not create another request or imply that a human is currently on the call.
+- For suspected fraud, repeat that the caller should contact the broker immediately through an official channel and never share credentials."""
     if outbound_reminder is not None:
         return """- Human-help requests are unavailable during this short outbound call.
 - For suspected fraud, tell the caller to contact the broker immediately through an official channel and never share credentials."""
@@ -304,6 +327,8 @@ def _build_human_help_prompt(outbound_reminder: OutboundReminder | None) -> str:
 - Send only a short useful summary and what FinEd already checked. Never send the full conversation.
 - Never include an OTP, PIN, password, PAN, Aadhaar, account number, credential or other private identifier.
 - After creation, give the reference ID and explain that the request is open in the Human help view.
+- If the learner asks for a phone callback, explain that it is an automated acknowledgement, not a human adviser. Ask for fresh explicit permission immediately before calling request_escalation_callback.
+- Never call request_escalation_callback for an invented or earlier-session reference, without a clear yes, or merely because the request is urgent.
 - Do not promise an immediate reply or a response time that is not guaranteed."""
 
 
@@ -694,6 +719,7 @@ class FinEdAssistant(Agent):
             dashboard_opened = acknowledgement.opened is True
         except Exception:
             pass
+        state.created_escalation_references.add(escalation.reference_id)
         return {
             "created": True,
             "reference_id": escalation.reference_id,
@@ -707,6 +733,51 @@ class FinEdAssistant(Agent):
                 else "The human-help request was saved, but the dashboard could not "
                 "open. Keep the reference ID. Response time is not guaranteed."
             ),
+        }
+
+    @function_tool(name="request_escalation_callback")
+    async def request_escalation_callback(
+        self,
+        context: RunContext[SessionState],
+        reference_id: str,
+        consent_confirmed: bool,
+    ) -> dict[str, object]:
+        """Place one automated callback for a request created in this session.
+
+        Args:
+            reference_id: Exact human-help reference created in this browser session.
+            consent_confirmed: True only after a clear yes to this automated callback.
+        """
+        state = context.userdata
+        _require_browser_session(state)
+        if consent_confirmed is not True:
+            raise ToolError(
+                "Do not place the callback. Ask for explicit permission immediately "
+                "before calling."
+            )
+        if reference_id not in state.created_escalation_references:
+            raise ToolError(
+                "A callback is available only for a request created in the current "
+                "session."
+            )
+        try:
+            acknowledgement = await state.human_help_callback.request_callback(
+                reference_id
+            )
+        except Exception:
+            raise ToolError(
+                "The automated callback could not be started. The in-app request "
+                "remains open."
+            ) from None
+        if acknowledgement.answered is not True:
+            raise ToolError(
+                "The automated callback was not answered. The in-app request remains "
+                "open."
+            )
+        return {
+            "callback_answered": True,
+            "reference_id": reference_id,
+            "message": "The requested automated callback was answered.",
         }
 
     @function_tool(name="end_outbound_call")

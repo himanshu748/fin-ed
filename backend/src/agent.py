@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+from contextlib import suppress
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
@@ -36,6 +37,7 @@ from fined.agent import (
 )
 from fined.chat_model import create_gemini_llm
 from fined.escalation_bridge import LiveKitHumanHelpBridge
+from fined.escalation_callback import LiveKitHumanHelpCallback
 from fined.escalations import SQLiteEscalationStore
 from fined.knowledge.embeddings import GeminiEmbedder
 from fined.knowledge.index import KnowledgeIndex, UnavailableKnowledgeRetriever
@@ -46,6 +48,8 @@ from fined.memory import CallerMemory, SQLiteCallerMemoryStore
 from fined.murf_falcon import install_current_websocket_serializer
 from fined.outbound import (
     OUTBOUND_RECIPIENT_JOIN_TIMEOUT_SECONDS,
+    PAPER_PRACTICE_REMINDER,
+    OutboundConfigurationError,
     build_outbound_greeting,
     parse_outbound_metadata,
 )
@@ -278,10 +282,14 @@ async def my_agent(ctx: JobContext) -> None:
             state.human_help = LiveKitHumanHelpBridge(
                 ctx.room.local_participant, participant.identity
             )
+            with suppress(OutboundConfigurationError):
+                state.human_help_callback = LiveKitHumanHelpCallback.from_environment(
+                    os.environ
+                )
             state.paper_trading = LiveKitPaperTradingBridge(
                 ctx.room.local_participant, participant.identity
             )
-        else:
+        elif outbound_reminder == PAPER_PRACTICE_REMINDER:
             state.paper_trading = CallPaperTradingBridge()
         session = AgentSession[SessionState](
             userdata=state,

@@ -198,6 +198,18 @@ class FakeHumanHelpBridge:
         return SimpleNamespace(opened=True)
 
 
+@dataclass
+class FakeHumanHelpCallback:
+    references: list[str] = field(default_factory=list)
+    fail: bool = False
+
+    async def request_callback(self, reference_id: str):
+        self.references.append(reference_id)
+        if self.fail:
+            raise RuntimeError("private carrier detail")
+        return SimpleNamespace(answered=True)
+
+
 def _context(state: SessionState) -> RunContext[SessionState]:
     return cast(RunContext[SessionState], SimpleNamespace(userdata=state))
 
@@ -718,6 +730,59 @@ async def test_created_escalation_remains_honest_when_dashboard_delivery_fails()
     assert result["reference_id"] == "HELP-A1B2C3D4"
     assert "saved" in str(result["message"]).casefold()
     assert "dashboard" in str(result["message"]).casefold()
+
+
+@pytest.mark.asyncio
+async def test_phone_callback_requires_fresh_consent_and_current_session_reference() -> (
+    None
+):
+    # Catches a phone call without consent or for an invented/stale escalation.
+    callback = FakeHumanHelpCallback()
+    state = SessionState(
+        profile=ParticipantProfile(LearningMode.STOCKS),
+        retriever=FakeRetriever([]),
+        caller_id="learner-1",
+        escalation_store=FakeEscalationStore(),
+        human_help=FakeHumanHelpBridge(),
+    )
+    state.human_help_callback = callback  # type: ignore[attr-defined]
+    assistant = FinEdAssistant()
+    created = await assistant.create_escalation(
+        _context(state),
+        reason="suspected_fraud",
+        summary="The learner reports an unrecognised account transaction.",
+        checks_completed="FinEd confirmed the activity was not recognised.",
+        urgency="high",
+        caller_language="english",
+        follow_up_method="in_app",
+        consent_confirmed=True,
+    )
+
+    with pytest.raises(ToolError, match="explicit permission"):
+        await assistant.request_escalation_callback(  # type: ignore[attr-defined]
+            _context(state),
+            reference_id=str(created["reference_id"]),
+            consent_confirmed=False,
+        )
+    with pytest.raises(ToolError, match="current session"):
+        await assistant.request_escalation_callback(  # type: ignore[attr-defined]
+            _context(state),
+            reference_id="HELP-FFFF-FFFF-FFFF-FFFF-FFFF-FFFF",
+            consent_confirmed=True,
+        )
+
+    result = await assistant.request_escalation_callback(  # type: ignore[attr-defined]
+        _context(state),
+        reference_id=str(created["reference_id"]),
+        consent_confirmed=True,
+    )
+
+    assert callback.references == ["HELP-A1B2C3D4"]
+    assert result == {
+        "callback_answered": True,
+        "reference_id": "HELP-A1B2C3D4",
+        "message": "The requested automated callback was answered.",
+    }
 
 
 def test_outbound_prompt_allows_confirmed_call_paper_fills_without_broker_actions() -> (

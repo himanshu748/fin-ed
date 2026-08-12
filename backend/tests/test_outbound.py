@@ -121,6 +121,28 @@ def test_outbound_opening_states_identity_reason_and_stop_method_in_two_sentence
     assert len([sentence for sentence in opening.split(".") if sentence.strip()]) == 2
 
 
+def test_consented_human_help_callback_has_a_distinct_private_dispatch_and_opening() -> (
+    None
+):
+    # Catches a human-help callback being rejected or misrepresented as a human caller.
+    request = _request(reminder="human_help_callback")
+
+    assert json.loads(build_outbound_metadata(request.reminder)) == {
+        "kind": "fined_outbound_learning_reminder",
+        "learning_mode": "general",
+        "reminder": "human_help_callback",
+        "version": 1,
+    }
+    assert parse_outbound_metadata(build_outbound_metadata(request.reminder)) == (
+        request.reminder
+    )
+    assert build_outbound_greeting(request.reminder) == (
+        "Hello, this is FinEd Saathi, making the automated callback you requested "
+        "about your human-help request. This is not a human adviser, and you can say "
+        "stop at any time to end this call."
+    )
+
+
 @pytest.mark.asyncio
 async def test_outbound_call_dispatches_then_dials_without_contact_metadata() -> None:
     # Catches a dial before the named worker is dispatched or a metadata privacy leak.

@@ -35,6 +35,7 @@ Complete `.env.local` with your own credentials:
 | `FINED_ESCALATION_DB_PATH` | Optional Day 7 SQLite path; defaults inside `data/escalations` |
 | `SIP_OUTBOUND_TRUNK_ID` | Optional stored LiveKit outbound SIP trunk ID (`ST_...`) for Day 6 |
 | `FINED_OUTBOUND_AGENT_NAME` | Optional Day 6 worker name; defaults to `my-agent`             |
+| `FINED_ESCALATION_CALLBACK_NUMBER` | Optional private Day 7 demo callback destination in E.164 format |
 
 Do not commit `.env.local` or paste credentials into issues, logs, or docs.
 
@@ -127,6 +128,19 @@ browser route.
 Direct phrases such as `stop`, `hang up`, `disconnect the call`, `कॉल बंद करो`
 and `फोन काट दो` bypass Gemini and remove the SIP participant immediately. The
 call also closes when the recipient hangs up.
+
+## Day 7: optional automated acknowledgement callback
+
+The required Day 7 path saves the consented request to the local Human help
+dashboard. A callback is optional. To demo one, store a private E.164 destination
+as `FINED_ESCALATION_CALLBACK_NUMBER` in `.env.local`, restart the worker, create
+a request and then ask FinEd Saathi to call you about that reference.
+
+FinEd explains that the callback is automated and not a human adviser. It asks
+for fresh permission immediately before the callback tool runs. Refusing
+permission never places a call. Only a reference created in the current browser
+session can trigger one attempt, and the number never enters model arguments,
+browser state, dispatch metadata or application logs.
 
 ## Voice and model configuration
 
