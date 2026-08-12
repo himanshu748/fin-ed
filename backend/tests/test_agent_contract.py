@@ -160,6 +160,44 @@ class FakeOutboundCallControl:
             raise RuntimeError("private carrier failure")
 
 
+@dataclass
+class FakeEscalationStore:
+    created: list[tuple[object, bool]] = field(default_factory=list)
+    fail: bool = False
+
+    def create(self, request: object, *, consent_confirmed: bool):
+        self.created.append((request, consent_confirmed))
+        if self.fail:
+            raise RuntimeError("private database detail")
+        candidate = cast(SimpleNamespace, request)
+        return SimpleNamespace(
+            reference_id="HELP-A1B2C3D4",
+            reason=candidate.reason,
+            urgency=candidate.urgency,
+            caller_language=candidate.caller_language,
+            summary=candidate.summary,
+            checks=tuple(candidate.checks),
+            follow_up=candidate.follow_up,
+            status="open",
+            created_at=datetime(2026, 8, 12, 6, 30, tzinfo=UTC),
+        )
+
+    def list_open(self):
+        return []
+
+
+@dataclass
+class FakeHumanHelpBridge:
+    requests: list[dict[str, object]] = field(default_factory=list)
+    fail: bool = False
+
+    async def show_request(self, request: dict[str, object]):
+        self.requests.append(request)
+        if self.fail:
+            raise RuntimeError("private RPC detail")
+        return SimpleNamespace(opened=True)
+
+
 def _context(state: SessionState) -> RunContext[SessionState]:
     return cast(RunContext[SessionState], SimpleNamespace(userdata=state))
 
@@ -516,6 +554,170 @@ def test_fined_assistant_defaults_to_general_and_exposes_exact_tool_names() -> N
     assert assistant.save_caller_memory.info.name == "save_caller_memory"
     assert assistant.forget_caller_memory.info.name == "forget_caller_memory"
     assert assistant.end_outbound_call.info.name == "end_outbound_call"
+    assert assistant.create_escalation.info.name == "create_escalation"
+
+
+def test_prompt_requires_fresh_permission_for_limited_human_help() -> None:
+    # Catches silent escalation, full-transcript sharing, or vague follow-up promises.
+    prompt = build_system_prompt(ParticipantProfile(LearningMode.STOCKS)).casefold()
+
+    for required in (
+        "human help",
+        "suspected fraud",
+        "decision the agent cannot make",
+        "create_escalation",
+        "ask for explicit permission",
+        "do not create the request",
+        "full conversation",
+        "otp",
+        "pin",
+        "password",
+        "account number",
+        "reference id",
+        "do not promise an immediate reply",
+        "normal learning question",
+        "do you recognise or authorise",
+        "suspected, never confirmed fraud",
+        "charge dispute, investment loss, poor return or normal market question",
+    ):
+        assert required in prompt
+
+
+@pytest.mark.asyncio
+async def test_create_escalation_requires_fresh_consent_and_shows_safe_request() -> (
+    None
+):
+    store = FakeEscalationStore()
+    bridge = FakeHumanHelpBridge()
+    state = SessionState(
+        profile=ParticipantProfile(LearningMode.STOCKS),
+        retriever=FakeRetriever([]),
+        caller_id="learner-1",
+        escalation_store=store,
+        human_help=bridge,
+    )
+    assistant = FinEdAssistant()
+
+    with pytest.raises(ToolError, match="explicit permission"):
+        await assistant.create_escalation(
+            _context(state),
+            reason="suspected_fraud",
+            summary="The learner reports an unrecognised account transaction.",
+            checks_completed="FinEd confirmed the activity was not recognised.",
+            urgency="high",
+            caller_language="english",
+            follow_up_method="in_app",
+            consent_confirmed=False,
+        )
+
+    assert store.created == []
+    assert bridge.requests == []
+
+    result = await assistant.create_escalation(
+        _context(state),
+        reason="suspected_fraud",
+        summary="The learner reports an unrecognised account transaction.",
+        checks_completed="FinEd confirmed the activity was not recognised.",
+        urgency="high",
+        caller_language="english",
+        follow_up_method="in_app",
+        consent_confirmed=True,
+    )
+
+    assert len(store.created) == 1
+    assert store.created[0][1] is True
+    assert bridge.requests == [
+        {
+            "version": 1,
+            "reference_id": "HELP-A1B2C3D4",
+            "reason": "suspected_fraud",
+            "summary": "The learner reports an unrecognised account transaction.",
+            "checks_completed": "FinEd confirmed the activity was not recognised.",
+            "urgency": "high",
+            "language": "english",
+            "follow_up_method": "in_app",
+            "status": "open",
+            "created_at": "2026-08-12T06:30:00+00:00",
+        }
+    ]
+    assert result["created"] is True
+    assert result["reference_id"] == "HELP-A1B2C3D4"
+    assert result["status"] == "open"
+    assert "immediate" not in str(result["message"]).casefold()
+
+
+@pytest.mark.asyncio
+async def test_create_escalation_is_browser_only_and_hides_internal_failures() -> None:
+    outbound_state = SessionState(
+        profile=ParticipantProfile(LearningMode.STOCKS),
+        retriever=FakeRetriever([]),
+        outbound_reminder=PAPER_PRACTICE_REMINDER,
+    )
+    with pytest.raises(ToolError, match="unavailable during a short outbound"):
+        await FinEdAssistant().create_escalation(
+            _context(outbound_state),
+            reason="suspected_fraud",
+            summary="An unrecognised transaction was reported.",
+            checks_completed="FinEd confirmed it was not recognised.",
+            urgency="high",
+            caller_language="english",
+            follow_up_method="in_app",
+            consent_confirmed=True,
+        )
+
+    state = SessionState(
+        profile=ParticipantProfile(LearningMode.STOCKS),
+        retriever=FakeRetriever([]),
+        caller_id="learner-1",
+        escalation_store=FakeEscalationStore(fail=True),
+        human_help=FakeHumanHelpBridge(),
+    )
+    with pytest.raises(ToolError) as failure:
+        await FinEdAssistant().create_escalation(
+            _context(state),
+            reason="decision_review",
+            summary="The learner needs a personalised investment decision.",
+            checks_completed="FinEd explained the educational boundary.",
+            urgency="medium",
+            caller_language="english",
+            follow_up_method="in_app",
+            consent_confirmed=True,
+        )
+    assert str(failure.value) == "Human help is unavailable right now."
+    assert "private" not in str(failure.value)
+
+
+@pytest.mark.asyncio
+async def test_created_escalation_remains_honest_when_dashboard_delivery_fails() -> (
+    None
+):
+    store = FakeEscalationStore()
+    bridge = FakeHumanHelpBridge(fail=True)
+    state = SessionState(
+        profile=ParticipantProfile(LearningMode.STOCKS),
+        retriever=FakeRetriever([]),
+        caller_id="learner-1",
+        escalation_store=store,
+        human_help=bridge,
+    )
+
+    result = await FinEdAssistant().create_escalation(
+        _context(state),
+        reason="decision_review",
+        summary="The learner needs a human review before a large paper order.",
+        checks_completed="FinEd blocked the paper draft above ₹50,000.",
+        urgency="medium",
+        caller_language="english",
+        follow_up_method="in_app",
+        consent_confirmed=True,
+    )
+
+    assert len(store.created) == 1
+    assert result["created"] is True
+    assert result["dashboard_opened"] is False
+    assert result["reference_id"] == "HELP-A1B2C3D4"
+    assert "saved" in str(result["message"]).casefold()
+    assert "dashboard" in str(result["message"]).casefold()
 
 
 def test_outbound_prompt_allows_confirmed_call_paper_fills_without_broker_actions() -> (
@@ -952,6 +1154,27 @@ async def test_prepare_order_uses_provider_quote_not_model_price() -> None:
     assert bridge.draft.expires_at - bridge.draft.quote_time == timedelta(seconds=30)
     assert bridge.draft.draft_id
     assert state.pending_paper_drafts == {bridge.draft.draft_id: bridge.draft}
+
+
+@pytest.mark.asyncio
+async def test_prepare_order_above_fifty_thousand_requires_human_review() -> None:
+    bridge = FakePaperTradingBridge()
+    provider = FakeMarketDataProvider(quote=_paper_quote())
+    state = _paper_state(provider=provider, bridge=bridge)
+
+    with pytest.raises(ToolError, match="above ₹50,000") as failure:
+        await FinEdAssistant().prepare_paper_order(
+            _context(state),
+            side="buy",
+            exchange="NSE",
+            symbol_token="2885",
+            quantity=20,
+        )
+
+    assert "decision_review" in str(failure.value)
+    assert "explicit permission" in str(failure.value)
+    assert bridge.prepare_calls == 0
+    assert state.pending_paper_drafts == {}
 
 
 @pytest.mark.asyncio
@@ -1909,3 +2132,18 @@ async def test_forget_tool_requires_consent_then_removes_memory(tmp_path) -> Non
 
     assert result == {"forgotten": True, "message": "Saved caller memory was deleted."}
     assert store.lookup("voice_assistant_user_learner-7") is None
+
+
+@pytest.mark.asyncio
+async def test_default_memory_store_fails_closed_when_forgetting() -> None:
+    state = SessionState(
+        profile=ParticipantProfile(),
+        retriever=FakeRetriever([]),
+        caller_id="voice_assistant_user_learner-7",
+    )
+    assert hasattr(state.memory_store, "forget")
+
+    with pytest.raises(ToolError, match="Caller memory is temporarily unavailable"):
+        await FinEdAssistant().forget_caller_memory(
+            context=_context(state), consent_confirmed=True
+        )

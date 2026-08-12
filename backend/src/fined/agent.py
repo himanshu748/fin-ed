@@ -30,6 +30,17 @@ from fined.calculator import (
     calculate_delivery_fill,
     calculate_delivery_trade,
 )
+from fined.escalation_bridge import (
+    HUMAN_HELP_UI_UNAVAILABLE_MESSAGE,
+    HumanHelpBridge,
+    HumanHelpUIUnavailableError,
+)
+from fined.escalations import (
+    EscalationConsentRequiredError,
+    EscalationRequestInput,
+    EscalationStore,
+    EscalationValidationError,
+)
 from fined.guardrails import evaluate_guardrail, render_refusal
 from fined.historical_returns import (
     HistoricalReturnInput,
@@ -73,6 +84,7 @@ MAX_SEARCH_QUERY_BYTES = 4096
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _INDIA_TIME = ZoneInfo("Asia/Kolkata")
 _SUPPORTED_PAPER_NSE_SERIES = frozenset({"EQ"})
+_PAPER_HUMAN_REVIEW_THRESHOLD_PAISE = 5_000_000
 _PAPER_INSTRUMENT_NOT_RESOLVED_MESSAGE = (
     "Use search_market_instruments and select a provider-resolved instrument first."
 )
@@ -159,6 +171,21 @@ class _UnavailableCallerMemoryStore:
         raise MemoryValidationError("Caller memory is unavailable.")
 
 
+class _UnavailableEscalationStore:
+    def create(self, request: EscalationRequestInput, *, consent_confirmed: bool):
+        del request, consent_confirmed
+        raise EscalationValidationError("Human help is unavailable.")
+
+    def list_open(self):
+        return []
+
+
+class _UnavailableHumanHelpBridge:
+    async def show_request(self, public_request):
+        del public_request
+        raise HumanHelpUIUnavailableError()
+
+
 @dataclass
 class SessionState:
     profile: ParticipantProfile
@@ -177,6 +204,10 @@ class SessionState:
     memory_store: CallerMemoryStore = field(
         default_factory=_UnavailableCallerMemoryStore
     )
+    escalation_store: EscalationStore = field(
+        default_factory=_UnavailableEscalationStore
+    )
+    human_help: HumanHelpBridge = field(default_factory=_UnavailableHumanHelpBridge)
     outbound_reminder: OutboundReminder | None = None
     outbound_call_control: OutboundCallControl | None = None
 
@@ -249,11 +280,31 @@ def _build_paper_trading_prompt(
 - F&O simulation means educational payoff examples only, never a paper order.
 - Use open_paper_trading_dashboard for intent to practise or view the paper portfolio.
 - Use prepare_paper_order only after side, supported instrument, and positive whole quantity are known.
+- If a paper order is above ₹50,000, do not prepare or confirm it. Offer a decision-review human-help request and ask permission before sharing its summary.
 - The tool prepares a draft. Never say it filled until the browser reports a confirmed paper result.
 - Use confirm_paper_order only after explicit confirmation of the same pending paper draft.
 - Confirmation means the learner says to confirm that paper order, or clearly says yes to your direct confirmation question after the side, symbol, quantity, price and charges were presented.
 - Do not treat the original buy or sell request, silence, an unrelated yes or earlier consent as confirmation.
 - Never provide a recommendation or convert a paper request into a real broker action."""
+
+
+def _build_human_help_prompt(outbound_reminder: OutboundReminder | None) -> str:
+    if outbound_reminder is not None:
+        return """- Human-help requests are unavailable during this short outbound call.
+- For suspected fraud, tell the caller to contact the broker immediately through an official channel and never share credentials."""
+    return """- Human help is limited to suspected fraud or a decision the agent cannot make.
+- Use create_escalation only for one of those two reasons. A normal learning question must not create a request.
+- Suspected fraud means the learner reports activity, account access or money movement they do not recognise or authorise.
+- Ask one clarifying question such as: Do you recognise or authorise this activity?
+- Describe it as suspected, never confirmed fraud. A charge dispute, investment loss, poor return or normal market question is not suspected fraud by itself.
+- Use high or emergency urgency for suspected fraud. Use low, medium or high for a decision review.
+- Before creating it, tell the learner the exact short summary, completed checks, urgency, language and in-app follow-up you want to share.
+- Ask for explicit permission immediately before the tool call. Silence, ambiguity or earlier consent do not count.
+- If the learner says no, do not create the request and continue with a safe next step.
+- Send only a short useful summary and what FinEd already checked. Never send the full conversation.
+- Never include an OTP, PIN, password, PAN, Aadhaar, account number, credential or other private identifier.
+- After creation, give the reference ID and explain that the request is open in the Human help view.
+- Do not promise an immediate reply or a response time that is not guaranteed."""
 
 
 def build_system_prompt(
@@ -264,6 +315,7 @@ def build_system_prompt(
     memory_prompt = _build_memory_prompt(outbound_reminder)
     outbound_prompt = _build_outbound_prompt(outbound_reminder)
     paper_trading_prompt = _build_paper_trading_prompt(outbound_reminder)
+    human_help_prompt = _build_human_help_prompt(outbound_reminder)
     return f"""IDENTITY
 - You are FinEd Saathi, a voice-first Indian financial-markets tutor for beginners.
 - You work for the learner. You are not a broker, investment adviser, tax adviser, or account-support representative.
@@ -294,6 +346,9 @@ KNOWLEDGE
 
 PAPER TRADING
 {paper_trading_prompt}
+
+HUMAN HELP
+{human_help_prompt}
 
 {outbound_prompt}
 
@@ -567,6 +622,90 @@ class FinEdAssistant(Agent):
                 "Saved caller memory was deleted."
                 if forgotten
                 else "No saved caller memory was found."
+            ),
+        }
+
+    @function_tool(name="create_escalation")
+    async def create_escalation(
+        self,
+        context: RunContext[SessionState],
+        reason: str,
+        summary: str,
+        checks_completed: str,
+        urgency: str,
+        caller_language: str,
+        follow_up_method: str,
+        consent_confirmed: bool,
+    ) -> dict[str, object]:
+        """Create one consented, privacy-limited request for human help.
+
+        Args:
+            reason: Exact value suspected_fraud or decision_review.
+            summary: Short description of what happened without private information.
+            checks_completed: Short description of what FinEd already checked.
+            urgency: Exact value low, medium, high or emergency as allowed by reason.
+            caller_language: Exact value english, hindi or bilingual.
+            follow_up_method: Exact value in_app.
+            consent_confirmed: True only after a clear yes to sharing this exact request.
+        """
+        state = context.userdata
+        _require_browser_session(state)
+        if consent_confirmed is not True:
+            raise ToolError(
+                "Do not create the request. Ask for explicit permission immediately "
+                "before sharing."
+            )
+        try:
+            escalation = state.escalation_store.create(
+                EscalationRequestInput(
+                    anonymous_caller_id=state.caller_id,
+                    reason=reason,
+                    urgency=urgency,
+                    caller_language=caller_language,
+                    summary=summary,
+                    checks=(checks_completed,),
+                    follow_up=follow_up_method,
+                ),
+                consent_confirmed=True,
+            )
+        except EscalationConsentRequiredError:
+            raise ToolError(
+                "Do not create the request. Ask for explicit permission immediately "
+                "before sharing."
+            ) from None
+        except Exception:
+            raise ToolError(HUMAN_HELP_UI_UNAVAILABLE_MESSAGE) from None
+
+        public_request: dict[str, object] = {
+            "version": 1,
+            "reference_id": escalation.reference_id,
+            "reason": escalation.reason,
+            "summary": escalation.summary,
+            "checks_completed": " ".join(escalation.checks),
+            "urgency": escalation.urgency,
+            "language": escalation.caller_language,
+            "follow_up_method": escalation.follow_up,
+            "status": escalation.status,
+            "created_at": escalation.created_at.isoformat(),
+        }
+        dashboard_opened = False
+        try:
+            acknowledgement = await state.human_help.show_request(public_request)
+            dashboard_opened = acknowledgement.opened is True
+        except Exception:
+            pass
+        return {
+            "created": True,
+            "reference_id": escalation.reference_id,
+            "status": escalation.status,
+            "follow_up_method": escalation.follow_up,
+            "dashboard_opened": dashboard_opened,
+            "message": (
+                "The human-help request is open in the app. Response time is not "
+                "guaranteed."
+                if dashboard_opened
+                else "The human-help request was saved, but the dashboard could not "
+                "open. Keep the reference ID. Response time is not guaranteed."
             ),
         }
 
@@ -872,6 +1011,15 @@ class FinEdAssistant(Agent):
             notional_paise = parsed_quantity * price_paise
         except (DecimalException, OverflowError, ValueError):
             raise ToolError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
+        if (
+            state.outbound_reminder is None
+            and notional_paise > _PAPER_HUMAN_REVIEW_THRESHOLD_PAISE
+        ):
+            raise ToolError(
+                "This paper order is above ₹50,000 and requires human review. "
+                "Do not prepare or confirm it. Offer a decision_review request and "
+                "obtain explicit permission before sharing the summary."
+            )
 
         charge_paise: int | None = None
         cash_effect_paise: int | None = None

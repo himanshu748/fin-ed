@@ -91,6 +91,12 @@ function createSessionHarness({
     view: initialView,
     openDashboard() {},
   };
+  const humanHelp = {
+    requests: [],
+    isOpen: false,
+    open() {},
+    close() {},
+  };
 
   function scheduleEffect(records, pending, index, effect, dependencies) {
     if (dependenciesChanged(records[index]?.dependencies, dependencies)) {
@@ -221,6 +227,8 @@ function createSessionHarness({
       ],
       ['@/components/agents-ui/agent-chat-transcript', { AgentChatTranscript }],
       ['@/components/agents-ui/agent-control-bar', { AgentControlBar }],
+      ['@/components/human-help/escalation-dashboard', { HumanHelpDashboard: () => null }],
+      ['@/components/human-help/escalation-provider', { useHumanHelp: () => humanHelp }],
       ['@/components/paper-trading/paper-trading-dashboard', { PaperTradingDashboard }],
       [
         '@/components/paper-trading/paper-trading-provider',
@@ -550,6 +558,18 @@ test('opening the paper workspace does not end the live voice session', () => {
       ],
       ['@/components/agents-ui/agent-chat-transcript', { AgentChatTranscript: () => null }],
       ['@/components/agents-ui/agent-control-bar', { AgentControlBar: () => null }],
+      ['@/components/human-help/escalation-dashboard', { HumanHelpDashboard: () => null }],
+      [
+        '@/components/human-help/escalation-provider',
+        {
+          useHumanHelp: () => ({
+            requests: [],
+            isOpen: false,
+            open() {},
+            close() {},
+          }),
+        },
+      ],
       ['@/components/paper-trading/paper-trading-dashboard', { PaperTradingDashboard: () => null }],
       [
         '@/components/paper-trading/paper-trading-provider',

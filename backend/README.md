@@ -32,6 +32,7 @@ Complete `.env.local` with your own credentials:
 | `GOOGLE_API_KEY`     | Gemini conversation and optional knowledge embeddings          |
 | `GEMINI_MODEL`       | Optional exact model selection; defaults to `gemini-3.5-flash-lite` |
 | `FINED_MEMORY_DB_PATH` | Optional Day 4 SQLite path; defaults inside `data/memory`     |
+| `FINED_ESCALATION_DB_PATH` | Optional Day 7 SQLite path; defaults inside `data/escalations` |
 | `SIP_OUTBOUND_TRUNK_ID` | Optional stored LiveKit outbound SIP trunk ID (`ST_...`) for Day 6 |
 | `FINED_OUTBOUND_AGENT_NAME` | Optional Day 6 worker name; defaults to `my-agent`             |
 
@@ -190,6 +191,30 @@ also requires a clear yes before it deletes the record.
 The default database is `data/memory/fined.sqlite3`. It is excluded from Git and
 persists across agent restarts. Set `FINED_MEMORY_DB_PATH` only when a different
 private local path is needed.
+
+## Day 7 consented human help
+
+The browser agent can create one of two human-help request types:
+`suspected_fraud` or `decision_review`. It never decides that fraud is proven.
+For suspected fraud it first checks whether the learner recognises or authorised
+the reported activity. Ordinary losses, returns, market questions and charge
+disputes do not qualify by themselves.
+
+Browser paper orders above ₹50,000 fail closed before draft creation and can be
+offered as a consented `decision_review` request. This is a paper-trading safety
+threshold and never creates or authorises a real broker order.
+
+`create_escalation` requires fresh explicit consent for the exact summary being
+shared. The SQLite service accepts only bounded allowlisted fields and removes
+OTPs, PINs, passwords, PANs, Aadhaar values and long account-number patterns.
+It stores an anonymous caller fingerprint only for duplicate protection. Public
+request objects contain no caller ID or transcript.
+
+The default private queue is `data/escalations/fined.sqlite3`. It is excluded
+from Git and can be moved with `FINED_ESCALATION_DB_PATH`. After creation the
+agent sends the public request only to the connected learner through a scoped
+LiveKit RPC. The browser opens the Human help view and displays the reference ID,
+status, urgency, safe summary, completed checks and honest next step.
 
 ## Knowledge-index behavior
 

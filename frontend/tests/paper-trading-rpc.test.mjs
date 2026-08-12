@@ -940,6 +940,7 @@ test('App places PaperTradingProvider inside AgentSessionProvider around the ses
   }).outputText;
   const compiledModule = { exports: {} };
   const AgentSessionProvider = Symbol('AgentSessionProvider');
+  const HumanHelpProvider = Symbol('HumanHelpProvider');
   const PaperTradingProvider = Symbol('PaperTradingProvider');
   const ViewController = Symbol('ViewController');
   const jsxRuntime = {
@@ -960,6 +961,7 @@ test('App places PaperTradingProvider inside AgentSessionProvider around the ses
     ['@/components/agents-ui/agent-session-provider', { AgentSessionProvider }],
     ['@/components/agents-ui/start-audio-button', { StartAudioButton: Symbol('StartAudioButton') }],
     ['@/components/app/view-controller', { ViewController }],
+    ['@/components/human-help/escalation-provider', { HumanHelpProvider }],
     ['@/components/paper-trading/paper-trading-provider', { PaperTradingProvider }],
     ['@/hooks/useDebug', { useDebugMode: () => undefined }],
     ['@/lib/learning-modes', { participantMetadataForLearningMode: () => 'metadata' }],
@@ -979,7 +981,8 @@ test('App places PaperTradingProvider inside AgentSessionProvider around the ses
   const tree = compiledModule.exports.App({ appConfig: {} });
 
   assert.equal(tree.type, AgentSessionProvider);
-  assert.equal(tree.props.children.type, PaperTradingProvider);
-  const paperChildren = tree.props.children.props.children;
+  assert.equal(tree.props.children.type, HumanHelpProvider);
+  assert.equal(tree.props.children.props.children.type, PaperTradingProvider);
+  const paperChildren = tree.props.children.props.children.props.children;
   assert.ok(paperChildren.some((child) => child?.props?.children?.type === ViewController));
 });

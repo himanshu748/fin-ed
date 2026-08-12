@@ -132,6 +132,8 @@ class FakeLocalParticipant:
 
     async def perform_rpc(self, **kwargs: object) -> str:
         self.outbound_rpc_calls.append(kwargs)
+        if kwargs.get("method") == "fined.escalation.v1.show_request":
+            return '{"version":1,"opened":true}'
         return '{"version":1,"paper":true,"opened":true}'
 
 
@@ -295,6 +297,12 @@ def _install_lifecycle_fakes(
         "MEMORY_DATABASE_PATH",
         knowledge_directory.parent / "memory" / "fined.sqlite3",
     )
+    monkeypatch.setattr(
+        entrypoint,
+        "ESCALATION_DATABASE_PATH",
+        knowledge_directory.parent / "escalations" / "fined.sqlite3",
+        raising=False,
+    )
     monkeypatch.setattr(entrypoint.logger, "info", log_info)
     monkeypatch.setattr(entrypoint.genai, "Client", client_factory)
     monkeypatch.setattr(entrypoint, "GeminiEmbedder", stage("embedder", object()))
@@ -437,6 +445,25 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
     assert (
         harness.context.local_participant.outbound_rpc_calls[0]["destination_identity"]
         == "learner-1"
+    )
+    help_ack = await state.human_help.show_request(  # type: ignore[union-attr]
+        {
+            "version": 1,
+            "reference_id": "HELP-A1B2-C3D4-E5F6-0123-4567-89AB",
+            "reason": "suspected_fraud",
+            "summary": "An unrecognised transaction was reported.",
+            "checks_completed": "FinEd confirmed it was not recognised.",
+            "urgency": "high",
+            "language": "english",
+            "follow_up_method": "in_app",
+            "status": "open",
+            "created_at": "2026-08-12T06:30:00+00:00",
+        }
+    )
+    assert help_ack.opened is True
+    assert state.escalation_store.list_open() == []  # type: ignore[union-attr]
+    assert harness.context.local_participant.outbound_rpc_calls[1]["method"] == (
+        "fined.escalation.v1.show_request"
     )
     assert harness.llm_kwargs == {
         "model": "gemini-3.5-flash-lite",

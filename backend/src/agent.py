@@ -35,6 +35,8 @@ from fined.agent import (
     parse_participant_profile,
 )
 from fined.chat_model import create_gemini_llm
+from fined.escalation_bridge import LiveKitHumanHelpBridge
+from fined.escalations import SQLiteEscalationStore
 from fined.knowledge.embeddings import GeminiEmbedder
 from fined.knowledge.index import KnowledgeIndex, UnavailableKnowledgeRetriever
 from fined.market_data.angel_one import create_market_data_provider
@@ -63,6 +65,9 @@ KNOWLEDGE_DIRECTORY = (
 )
 MEMORY_DATABASE_PATH = (
     Path(__file__).resolve().parents[1] / "data" / "memory" / "fined.sqlite3"
+)
+ESCALATION_DATABASE_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "escalations" / "fined.sqlite3"
 )
 KNOWLEDGE_UNAVAILABLE_WARNING = (
     "Knowledge index is unavailable; starting in evidence-unavailable mode"
@@ -223,6 +228,13 @@ async def my_agent(ctx: JobContext) -> None:
         if outbound_reminder is None
         else None
     )
+    escalation_store = (
+        SQLiteEscalationStore(
+            Path(os.getenv("FINED_ESCALATION_DB_PATH", str(ESCALATION_DATABASE_PATH)))
+        )
+        if outbound_reminder is None
+        else None
+    )
     embedding_client = genai.Client()
     client_closed = False
     registered_paper_rpc_methods: list[str] = []
@@ -260,7 +272,12 @@ async def my_agent(ctx: JobContext) -> None:
         state.market_data = create_market_data_provider()
         if outbound_reminder is None:
             assert memory_store is not None
+            assert escalation_store is not None
             state.memory_store = memory_store
+            state.escalation_store = escalation_store
+            state.human_help = LiveKitHumanHelpBridge(
+                ctx.room.local_participant, participant.identity
+            )
             state.paper_trading = LiveKitPaperTradingBridge(
                 ctx.room.local_participant, participant.identity
             )

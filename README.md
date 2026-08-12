@@ -19,6 +19,7 @@ The project is built for the Financial Services track of **10 Days of Voice Agen
 - Consent-gated caller memory backed by SQLite
 - An optional local knowledge index with fail-closed evidence behavior
 - A manual, consented SIP reminder with a call-scoped ₹1,00,000 paper portfolio
+- Consent-gated human-help requests for suspected fraud and human-only decisions
 - Guardrails for credentials, personalised recommendations, guaranteed outcomes, wrongdoing and prompt extraction
 - An accessible responsive interface with reduced-motion support
 
@@ -53,6 +54,7 @@ Optional tool paths
   -> Angel One SmartAPI for read-only NSE and BSE quotes, symbols and daily closes
   -> Browser paper ledger for simulated orders
   -> SQLite for consented caller memory
+  -> SQLite plus an in-app queue for consented human-help requests
   -> Local knowledge index for cited educational evidence
 
 Optional Day 6 outbound reminder
@@ -229,6 +231,38 @@ The paper portfolio starts with ₹1,00,000 in virtual cash and lives in browser
 - A reset control that restores the original virtual balance
 
 Ask the agent to open paper trading or prepare a paper order. The LiveKit RPC bridge opens the dashboard and transfers the draft to the browser. The browser remains the source of truth for the simulated ledger.
+
+## Day 7 human help
+
+FinEd can create a human-help request for two narrow situations: suspected
+fraud and a personalised decision the agent cannot make. Suspected fraud means
+the learner reports activity, account access or money movement they do not
+recognise or authorise. A normal market question, disappointing return, loss or
+charge dispute does not become a fraud request by itself.
+
+A browser paper order above ₹50,000 is blocked before a draft is created. FinEd
+offers a consented `decision_review` request instead. Smaller paper orders keep
+the existing fresh-quote review and explicit-confirmation flow.
+
+Before creating a request, FinEd states the exact short summary, what it already
+checked, urgency, language and in-app follow-up method. It then asks for fresh
+permission. A no, silence or unrelated yes creates nothing. The request never
+contains the full transcript, caller ID, OTP, PIN, password, PAN, Aadhaar or
+account number. Sensitive values are removed again at the storage boundary.
+
+Consented requests are stored in private SQLite and shown in the connected
+learner's Human help view through a participant-scoped LiveKit RPC. Each request
+has a non-guessable reference ID, open status and an honest next step. FinEd
+does not claim fraud is confirmed and does not promise a response time.
+
+For a Day 7 recording, first show a normal question that creates no request.
+Then say:
+
+> I can see a transaction in my broker app that I do not recognise or remember
+> authorising. What should I do?
+
+After FinEd proposes the redacted summary, say yes. Show the reference ID and
+the request in the Human help view.
 
 ## Day 6 consented outbound practice reminder
 

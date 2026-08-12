@@ -309,6 +309,18 @@ function loadSessionViewForFocus(react, paperTrading) {
       ],
       ['@/components/agents-ui/agent-chat-transcript', { AgentChatTranscript: () => null }],
       ['@/components/agents-ui/agent-control-bar', { AgentControlBar: () => null }],
+      ['@/components/human-help/escalation-dashboard', { HumanHelpDashboard: () => null }],
+      [
+        '@/components/human-help/escalation-provider',
+        {
+          useHumanHelp: () => ({
+            requests: [],
+            isOpen: false,
+            open() {},
+            close() {},
+          }),
+        },
+      ],
       ['@/components/paper-trading/paper-trading-dashboard', { PaperTradingDashboard: () => null }],
       [
         '@/components/paper-trading/paper-trading-provider',

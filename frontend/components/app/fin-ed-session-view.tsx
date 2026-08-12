@@ -9,6 +9,7 @@ import {
   Copy,
   History,
   LayoutDashboard,
+  LifeBuoy,
   Mic2,
   Plus,
   ShieldCheck,
@@ -26,6 +27,8 @@ import type { AppConfig } from '@/app-config';
 import { AgentAudioVisualizerBar } from '@/components/agents-ui/agent-audio-visualizer-bar';
 import { AgentChatTranscript } from '@/components/agents-ui/agent-chat-transcript';
 import { AgentControlBar } from '@/components/agents-ui/agent-control-bar';
+import { HumanHelpDashboard } from '@/components/human-help/escalation-dashboard';
+import { useHumanHelp } from '@/components/human-help/escalation-provider';
 import { PaperTradingDashboard } from '@/components/paper-trading/paper-trading-dashboard';
 import {
   type PaperTradingView,
@@ -45,6 +48,7 @@ const SESSION_EDUCATION_BOUNDARY =
 const VOICE_LANGUAGES = 'English & Hindi';
 const SESSION_ROOM_PREFIX = 'voice_assistant_room_';
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+type WorkspaceView = PaperTradingView | 'human-help';
 
 export function sessionIdFromRoomName(roomName: string): string | null {
   if (!roomName.startsWith(SESSION_ROOM_PREFIX)) return null;
@@ -104,6 +108,7 @@ export function FinEdSessionView({ appConfig, learningMode, onNewSession }: FinE
   const { audioTrack } = useVoiceAssistant();
   const { messages } = useSessionMessages();
   const paperTrading = usePaperTrading();
+  const humanHelp = useHumanHelp();
   const shouldReduceMotion = useReducedMotion();
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(true);
   const [isSessionIdCopied, setIsSessionIdCopied] = useState(false);
@@ -112,10 +117,12 @@ export function FinEdSessionView({ appConfig, learningMode, onNewSession }: FinE
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const paperTradingTriggerRef = useRef<HTMLButtonElement>(null);
   const committedPaperViewRef = useRef<{
-    view: PaperTradingView | null;
+    view: WorkspaceView | null;
     interrupted: boolean;
   }>({ view: null, interrupted: false });
   const workspaceRef = useRef<HTMLDivElement>(null);
+  const humanHelpTriggerRef = useRef<HTMLButtonElement>(null);
+  const lastWorkspaceTriggerRef = useRef<HTMLButtonElement | null>(null);
   const activeMode = LEARNING_MODES.find((mode) => mode.value === learningMode);
   const status = statusFor(session.connectionState, agent.state);
   const sessionId = sessionIdFromRoomName(session.room.name);
@@ -126,6 +133,7 @@ export function FinEdSessionView({ appConfig, learningMode, onNewSession }: FinE
   const displayedMessageCount = selectedSession?.messages.length ?? messages.length;
   const visualizerState: AgentState =
     shouldReduceMotion && agent.state === 'speaking' ? 'listening' : agent.state;
+  const workspaceView: WorkspaceView = humanHelp.isOpen ? 'human-help' : paperTrading.view;
 
   const copySessionId = async () => {
     if (sessionId === null || navigator.clipboard === undefined) return;
@@ -157,15 +165,16 @@ export function FinEdSessionView({ appConfig, learningMode, onNewSession }: FinE
   }, [learningMode, messages, sessionId]);
 
   useLayoutEffect(() => {
-    const targetView = paperTrading.view;
+    const targetView = workspaceView;
     const transitionState = committedPaperViewRef.current;
     const committedView = transitionState.view;
 
-    const moveFocus = (view: PaperTradingView) => {
-      if (view === 'dashboard') {
+    const moveFocus = (view: WorkspaceView) => {
+      if (view !== 'session') {
         workspaceRef.current?.querySelector<HTMLElement>('h1')?.focus();
       } else {
-        paperTradingTriggerRef.current?.focus();
+        if (lastWorkspaceTriggerRef.current) lastWorkspaceTriggerRef.current.focus();
+        else paperTradingTriggerRef.current?.focus();
       }
     };
 
@@ -224,7 +233,7 @@ export function FinEdSessionView({ appConfig, learningMode, onNewSession }: FinE
       timeline?.kill();
       context.revert();
     };
-  }, [paperTrading.view, shouldReduceMotion]);
+  }, [shouldReduceMotion, workspaceView]);
 
   return (
     <div className="min-h-svh bg-[var(--paper)] text-[var(--ledger-ink)]">
@@ -298,10 +307,32 @@ export function FinEdSessionView({ appConfig, learningMode, onNewSession }: FinE
               </span>
             )}
             <button
+              ref={humanHelpTriggerRef}
+              type="button"
+              aria-pressed={humanHelp.isOpen}
+              onClick={() => {
+                lastWorkspaceTriggerRef.current = humanHelpTriggerRef.current;
+                humanHelp.open();
+              }}
+              className="flex min-h-11 min-w-11 items-center gap-2 rounded-[10px] border border-[var(--ledger-rule)] bg-[var(--surface)] px-3 text-sm font-semibold transition-colors hover:border-[var(--ledger-blue)] hover:bg-[var(--blue-wash)] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)]"
+            >
+              <LifeBuoy aria-hidden="true" className="size-5 text-[var(--ledger-blue)]" />
+              <span>Human help</span>
+              {humanHelp.requests.length > 0 && (
+                <span className="font-data rounded-[6px] bg-[var(--ledger-blue)] px-1.5 py-0.5 text-[10px] text-white">
+                  {humanHelp.requests.length}
+                </span>
+              )}
+            </button>
+            <button
               ref={paperTradingTriggerRef}
               type="button"
               aria-pressed={paperTrading.view === 'dashboard'}
-              onClick={paperTrading.openDashboard}
+              onClick={() => {
+                lastWorkspaceTriggerRef.current = paperTradingTriggerRef.current;
+                humanHelp.close();
+                paperTrading.openDashboard();
+              }}
               className="flex min-h-11 min-w-11 items-center gap-2 rounded-[10px] border border-[var(--ledger-blue)] px-3 text-sm font-semibold text-[var(--ledger-blue)] transition-colors hover:bg-[var(--blue-wash)] focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-[var(--ledger-blue)]"
             >
               <LayoutDashboard aria-hidden="true" className="size-5" />
@@ -430,8 +461,10 @@ export function FinEdSessionView({ appConfig, learningMode, onNewSession }: FinE
         </section>
       )}
 
-      <div ref={workspaceRef} data-workspace-view={paperTrading.view}>
-        {paperTrading.view === 'dashboard' ? (
+      <div ref={workspaceRef} data-workspace-view={workspaceView}>
+        {workspaceView === 'human-help' ? (
+          <HumanHelpDashboard />
+        ) : paperTrading.view === 'dashboard' ? (
           <PaperTradingDashboard focusHeadingOnMount={false} />
         ) : (
           <main className="section-shell grid min-h-[calc(100svh-11rem)] gap-5 py-5 lg:grid-cols-[minmax(16rem,0.72fr)_minmax(0,1.28fr)] lg:py-8">

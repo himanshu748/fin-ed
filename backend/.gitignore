@@ -11,6 +11,7 @@ KMS
 .pytest_cache
 .ruff_cache
 data/memory/
+data/escalations/
 
 # Claude Code
 .claude/settings.local.json
