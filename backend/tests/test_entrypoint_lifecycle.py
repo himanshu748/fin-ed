@@ -202,6 +202,7 @@ def _install_lifecycle_fakes(
     knowledge_directory: Path,
     *,
     knowledge_available: bool = True,
+    analytics_directory: Path | None = None,
 ) -> LifecycleHarness:
     events: list[str] = []
     client = FakeEmbeddingClient(events)
@@ -212,6 +213,12 @@ def _install_lifecycle_fakes(
     stt_kwargs: dict[str, object] = {}
     tts_kwargs: dict[str, object] = {}
     turn_detection_kwargs: dict[str, object] = {}
+
+    analytics_root = analytics_directory or knowledge_directory.parent / "analytics"
+    monkeypatch.setenv("FINED_ANALYTICS_DB_PATH", str(analytics_root / "fined.sqlite3"))
+    monkeypatch.setenv(
+        "FINED_ANALYTICS_SNAPSHOT_PATH", str(analytics_root / "public-summary.json")
+    )
 
     knowledge_directory.mkdir(parents=True)
     if knowledge_available:
@@ -544,14 +551,11 @@ async def test_shutdown_records_real_success_and_failure_outcomes_once(
     # Catches call analytics being hardcoded, eager or duplicated on shutdown replay.
     analytics_database = tmp_path / "analytics" / "fined.sqlite3"
     analytics_snapshot = tmp_path / "analytics" / "public-summary.json"
-    monkeypatch.setattr(
-        entrypoint, "ANALYTICS_DATABASE_PATH", analytics_database, raising=False
-    )
-    monkeypatch.setattr(
-        entrypoint, "ANALYTICS_SNAPSHOT_PATH", analytics_snapshot, raising=False
-    )
     successful = _install_lifecycle_fakes(
-        monkeypatch, None, tmp_path / "successful" / "generated"
+        monkeypatch,
+        None,
+        tmp_path / "successful" / "generated",
+        analytics_directory=tmp_path / "analytics",
     )
 
     await entrypoint.my_agent(successful.context)  # type: ignore[arg-type]
