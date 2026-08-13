@@ -12,6 +12,7 @@ KMS
 .ruff_cache
 data/memory/
 data/escalations/
+data/analytics/
 
 # Claude Code
 .claude/settings.local.json

@@ -36,6 +36,8 @@ Complete `.env.local` with your own credentials:
 | `SIP_OUTBOUND_TRUNK_ID` | Optional stored LiveKit outbound SIP trunk ID (`ST_...`) for Day 6 |
 | `FINED_OUTBOUND_AGENT_NAME` | Optional Day 6 worker name; defaults to `my-agent`             |
 | `FINED_ESCALATION_CALLBACK_NUMBER` | Optional private Day 7 demo callback destination in E.164 format |
+| `FINED_ANALYTICS_DB_PATH` | Optional Day 8 private SQLite outcome path |
+| `FINED_ANALYTICS_SNAPSHOT_PATH` | Optional Day 8 caller-safe dashboard snapshot path |
 
 Do not commit `.env.local` or paste credentials into issues, logs, or docs.
 
@@ -229,6 +231,21 @@ from Git and can be moved with `FINED_ESCALATION_DB_PATH`. After creation the
 agent sends the public request only to the connected learner through a scoped
 LiveKit RPC. The browser opens the Human help view and displays the reference ID,
 status, urgency, safe summary, completed checks and honest next step.
+
+## Day 8 call analytics
+
+Every ended browser or answered SIP session writes one minimal outcome to
+`data/analytics/fined.sqlite3`. A call is successful only when the learner
+receives grounded evidence, a trusted quote, a historical return calculation,
+a confirmed paper fill or a created human-help request. A greeting or abandoned
+conversation does not count as success.
+
+The store publishes `data/analytics/public-summary.json` atomically after each
+ended call. It contains total, successful and failed counts, success rate and up
+to 20 recent anonymous rows. The schema has no caller ID, phone number, room
+name or transcript. The frontend validates this strict allowlist again and
+serves it at `/api/analytics`; the dashboard at `/analytics` refreshes every
+five seconds.
 
 ## Knowledge-index behavior
 

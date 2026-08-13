@@ -20,6 +20,7 @@ The project is built for the Financial Services track of **10 Days of Voice Agen
 - An optional local knowledge index with fail-closed evidence behavior
 - A manual, consented SIP reminder with a call-scoped ₹1,00,000 paper portfolio
 - Consent-gated human-help requests for suspected fraud and human-only decisions
+- A real-call analytics dashboard with anonymous success and failure outcomes
 - Guardrails for credentials, personalised recommendations, guaranteed outcomes, wrongdoing and prompt extraction
 - An accessible responsive interface with reduced-motion support
 
@@ -55,6 +56,7 @@ Optional tool paths
   -> Browser paper ledger for simulated orders
   -> SQLite for consented caller memory
   -> SQLite plus an in-app queue for consented human-help requests
+  -> SQLite plus a caller-safe snapshot for the live call analytics dashboard
   -> Local knowledge index for cited educational evidence
 
 Optional Day 6 outbound reminder
@@ -263,6 +265,25 @@ Then say:
 
 After FinEd proposes the redacted summary, say yes. Show the reference ID and
 the request in the Human help view.
+
+## Day 8 call analytics
+
+FinEd records one anonymous outcome when each connected browser or SIP session
+ends. Success means the learner completed at least one verified action: received
+grounded evidence, received a trusted quote or historical calculation, completed
+a paper fill or created a human-help request. A greeting alone is not success.
+
+Open [http://127.0.0.1:3001/analytics](http://127.0.0.1:3001/analytics) during the
+local demo. It shows total calls, successful calls, failed calls, success rate
+and recent anonymous outcomes. The page refreshes every five seconds from real
+backend data. It never displays phone numbers, participant identities, room
+names or transcripts.
+
+For the Day 8 success-path video, note the current counters, start a voice
+session and complete one verified action. Use a consented Human Help request for
+a broker-independent demo or request a live RELIANCE quote after refreshing the
+daily Angel One token. End the session after the action completes. The total and
+successful counters increase after the disconnect.
 
 ## Day 6 consented outbound practice reminder
 

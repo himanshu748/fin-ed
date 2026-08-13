@@ -14,6 +14,7 @@ import pytest
 from livekit import rtc
 
 import agent as entrypoint
+from fined.call_analytics import SQLiteCallAnalyticsStore
 from fined.knowledge.ingest import BuildError
 from fined.market_data.models import MarketQuote
 from fined.market_data.provider import MarketDataUnavailableError
@@ -534,6 +535,44 @@ async def test_browser_session_receives_server_configured_callback_without_numbe
         "trunk": "ST_abc12345",
     }
     assert "+919876543210" not in repr(harness.context.log_context_fields)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_records_real_success_and_failure_outcomes_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Catches call analytics being hardcoded, eager or duplicated on shutdown replay.
+    analytics_database = tmp_path / "analytics" / "fined.sqlite3"
+    analytics_snapshot = tmp_path / "analytics" / "public-summary.json"
+    monkeypatch.setattr(
+        entrypoint, "ANALYTICS_DATABASE_PATH", analytics_database, raising=False
+    )
+    monkeypatch.setattr(
+        entrypoint, "ANALYTICS_SNAPSHOT_PATH", analytics_snapshot, raising=False
+    )
+    successful = _install_lifecycle_fakes(
+        monkeypatch, None, tmp_path / "successful" / "generated"
+    )
+
+    await entrypoint.my_agent(successful.context)  # type: ignore[arg-type]
+    successful_state = successful.session.userdata
+    assert successful_state is not None
+    successful_state.mark_analytics_success("market_quote_delivered")  # type: ignore[union-attr]
+    callback = successful.context.shutdown_callbacks[0]
+    await callback("participant disconnected")
+    await callback("duplicate shutdown")
+
+    summary = SQLiteCallAnalyticsStore(
+        analytics_database, snapshot_path=analytics_snapshot
+    ).public_summary()
+    assert summary["totals"] == {
+        "total_calls": 1,
+        "successful_calls": 1,
+        "failed_calls": 0,
+        "success_rate_percent": 100.0,
+    }
+    assert summary["recent_calls"][0]["channel"] == "browser"  # type: ignore[index]
+    assert summary["recent_calls"][0]["detail"] == "market_quote_delivered"  # type: ignore[index]
 
 
 @pytest.mark.asyncio

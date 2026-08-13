@@ -89,6 +89,13 @@ _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _INDIA_TIME = ZoneInfo("Asia/Kolkata")
 _SUPPORTED_PAPER_NSE_SERIES = frozenset({"EQ"})
 _PAPER_HUMAN_REVIEW_THRESHOLD_PAISE = 5_000_000
+_ANALYTICS_SUCCESS_RANK = {
+    "grounded_answer_delivered": 1,
+    "market_quote_delivered": 2,
+    "historical_return_calculated": 3,
+    "human_help_created": 4,
+    "paper_fill_completed": 5,
+}
 _PAPER_INSTRUMENT_NOT_RESOLVED_MESSAGE = (
     "Use search_market_instruments and select a provider-resolved instrument first."
 )
@@ -216,8 +223,22 @@ class SessionState:
         default_factory=UnavailableHumanHelpCallback
     )
     created_escalation_references: set[str] = field(default_factory=set)
+    analytics_success_condition: str | None = None
+    analytics_failure_type: str | None = None
     outbound_reminder: OutboundReminder | None = None
     outbound_call_control: OutboundCallControl | None = None
+
+    def mark_analytics_success(self, condition: str) -> None:
+        current_rank = _ANALYTICS_SUCCESS_RANK.get(
+            self.analytics_success_condition or "", 0
+        )
+        if _ANALYTICS_SUCCESS_RANK.get(condition, 0) > current_rank:
+            self.analytics_success_condition = condition
+        self.analytics_failure_type = None
+
+    def mark_analytics_tool_failure(self) -> None:
+        if self.analytics_success_condition is None:
+            self.analytics_failure_type = "tool_unavailable"
 
 
 def parse_participant_profile(metadata: str | None) -> ParticipantProfile:
@@ -720,6 +741,7 @@ class FinEdAssistant(Agent):
         except Exception:
             pass
         state.created_escalation_references.add(escalation.reference_id)
+        state.mark_analytics_success("human_help_created")
         return {
             "created": True,
             "reference_id": escalation.reference_id,
@@ -843,6 +865,7 @@ class FinEdAssistant(Agent):
                     "not be verified and do not guess."
                 ),
             }
+        state.mark_analytics_success("grounded_answer_delivered")
         return {
             "verified": True,
             "hits": [_search_hit_result(hit) for hit in hits],
@@ -870,9 +893,12 @@ class FinEdAssistant(Agent):
         try:
             quote = await state.market_data.get_quote(request)
         except MarketDataUnavailableError:
+            state.mark_analytics_tool_failure()
             raise ToolError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
         except Exception:
+            state.mark_analytics_tool_failure()
             raise ToolError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
+        state.mark_analytics_success("market_quote_delivered")
         result = quote.to_public_dict()
         result["message"] = (
             "Read-only educational quote. This did not place, prepare, or recommend "
@@ -934,6 +960,7 @@ class FinEdAssistant(Agent):
         try:
             prices = await state.market_data.get_historical_prices(request)
         except Exception:
+            state.mark_analytics_tool_failure()
             raise ToolError(MARKET_DATA_UNAVAILABLE_MESSAGE) from None
         try:
             result = calculate_historical_return_value(
@@ -943,6 +970,7 @@ class FinEdAssistant(Agent):
             raise ToolError(
                 "Historical return values are outside the supported calculation range."
             ) from None
+        state.mark_analytics_success("historical_return_calculated")
         result.update(
             {
                 "exchange": instrument.exchange,
@@ -1194,6 +1222,7 @@ class FinEdAssistant(Agent):
         ):
             raise ToolError(PAPER_TRADING_UI_UNAVAILABLE_MESSAGE)
         del state.pending_paper_drafts[draft_id]
+        state.mark_analytics_success("paper_fill_completed")
         return {
             "paper": True,
             "filled": True,

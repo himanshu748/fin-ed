@@ -35,6 +35,11 @@ from fined.agent import (
     build_system_prompt,
     parse_participant_profile,
 )
+from fined.call_analytics import (
+    CallAnalyticsInput,
+    SQLiteCallAnalyticsStore,
+    new_call_id,
+)
 from fined.chat_model import create_gemini_llm
 from fined.escalation_bridge import LiveKitHumanHelpBridge
 from fined.escalation_callback import LiveKitHumanHelpCallback
@@ -72,6 +77,12 @@ MEMORY_DATABASE_PATH = (
 )
 ESCALATION_DATABASE_PATH = (
     Path(__file__).resolve().parents[1] / "data" / "escalations" / "fined.sqlite3"
+)
+ANALYTICS_DATABASE_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "analytics" / "fined.sqlite3"
+)
+ANALYTICS_SNAPSHOT_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "analytics" / "public-summary.json"
 )
 KNOWLEDGE_UNAVAILABLE_WARNING = (
     "Knowledge index is unavailable; starting in evidence-unavailable mode"
@@ -199,6 +210,8 @@ def _log_latency_components(metric: metrics.AgentMetrics) -> None:
 
 @server.rtc_session(agent_name="my-agent")
 async def my_agent(ctx: JobContext) -> None:
+    analytics_started_at = datetime.now(UTC)
+    analytics_call_id = new_call_id()
     await ctx.connect()
     outbound_reminder = parse_outbound_metadata(
         getattr(getattr(ctx, "job", None), "metadata", None)
@@ -239,10 +252,17 @@ async def my_agent(ctx: JobContext) -> None:
         if outbound_reminder is None
         else None
     )
+    analytics_store = SQLiteCallAnalyticsStore(
+        Path(os.getenv("FINED_ANALYTICS_DB_PATH", str(ANALYTICS_DATABASE_PATH))),
+        snapshot_path=Path(
+            os.getenv("FINED_ANALYTICS_SNAPSHOT_PATH", str(ANALYTICS_SNAPSHOT_PATH))
+        ),
+    )
     embedding_client = genai.Client()
     client_closed = False
     registered_paper_rpc_methods: list[str] = []
     paper_rpcs_unregistered = False
+    analytics_recorded = False
     llm_fallback_task: asyncio.Task[None] | None = None
 
     async def close_client_once() -> None:
@@ -421,7 +441,32 @@ async def my_agent(ctx: JobContext) -> None:
             registered_paper_rpc_methods.append(PAPER_HOLDING_QUOTES_METHOD)
 
         async def on_shutdown(reason: str) -> None:
-            del reason
+            nonlocal analytics_recorded
+            if not analytics_recorded:
+                analytics_recorded = True
+                failure_type = state.analytics_failure_type
+                if state.analytics_success_condition is None and failure_type is None:
+                    if "unavailable" in reason.casefold():
+                        failure_type = "no_response"
+                    elif "error" in reason.casefold():
+                        failure_type = "system_error"
+                    else:
+                        failure_type = "no_completed_action"
+                try:
+                    analytics_store.record(
+                        CallAnalyticsInput(
+                            call_id=analytics_call_id,
+                            channel="sip"
+                            if outbound_reminder is not None
+                            else "browser",
+                            started_at=analytics_started_at,
+                            ended_at=datetime.now(UTC),
+                            success_condition=state.analytics_success_condition,
+                            failure_type=failure_type,
+                        )
+                    )
+                except Exception:
+                    logger.warning("Call analytics recording failed")
             try:
                 logger.info("Agent usage summary: %s", usage.get_summary())
             finally:

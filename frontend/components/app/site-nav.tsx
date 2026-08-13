@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/shadcn/utils';
 
 const NAV_ITEMS = [
+  { href: '/analytics', label: 'Call analytics' },
   { href: '#how-it-works', label: 'How it works' },
   { href: '#topics', label: 'Learning topics' },
   { href: '#paper-practice', label: 'Paper practice' },

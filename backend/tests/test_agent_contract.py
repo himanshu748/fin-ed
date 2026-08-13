@@ -656,6 +656,7 @@ async def test_create_escalation_requires_fresh_consent_and_shows_safe_request()
     assert result["reference_id"] == "HELP-A1B2C3D4"
     assert result["status"] == "open"
     assert "immediate" not in str(result["message"]).casefold()
+    assert state.analytics_success_condition == "human_help_created"
 
 
 @pytest.mark.asyncio
@@ -873,6 +874,7 @@ async def test_outbound_reminder_blocks_memory_and_browser_but_allows_paper_tool
     assert provider.calls == [QuoteRequest("NSE", "2885"), QuoteRequest("NSE", "2885")]
     assert bridge.open_calls == 0
     assert bridge.prepare_calls == 1
+    assert state.analytics_success_condition == "paper_fill_completed"
 
 
 @pytest.mark.asyncio
