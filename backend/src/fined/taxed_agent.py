@@ -85,8 +85,8 @@ _CANONICAL_TAX_CATEGORIES = frozenset(
 _CATEGORY_ALIASES: dict[str, TaxRuleCategory] = {
     "etf": "equity_oriented_fund",
     "shares": "equity_oriented_fund",
-    "bonds": "debt_instruments",
 }
+_EXPLICIT_LISTED_BONDS = re.compile(r"(?<!\w)listed[\s-]+bonds?(?!\w)", re.IGNORECASE)
 _ASSET_TERMS = tuple(
     re.compile(rf"(?<!\w){re.escape(term)}(?!\w)", re.IGNORECASE)
     for term in (
@@ -244,7 +244,7 @@ class TaxEdAssistant(Agent):
             raise ToolError("A bounded tax-rule query is required.")
         parsed_date = _strict_iso_date(as_of_date, self._today())
         try:
-            safe_category = _normalize_tax_category(category)
+            safe_category = _normalize_tax_category(category, query=query)
         except ValueError:
             return dict(_UNKNOWN_CATEGORY_RESULT)
         if safe_category is None and _generic_event_needs_asset(query):
@@ -359,6 +359,8 @@ def _strict_iso_date(value: str | None, default: date) -> date:
 
 def _normalize_tax_category(
     category: TaxRuleCategoryInput | str | None,
+    *,
+    query: str,
 ) -> TaxRuleCategory | None:
     if category is None:
         return None
@@ -367,6 +369,10 @@ def _normalize_tax_category(
     normalized = category.strip().casefold()
     if normalized in _CANONICAL_TAX_CATEGORIES:
         return cast(TaxRuleCategory, normalized)
+    if normalized == "bonds":
+        if _EXPLICIT_LISTED_BONDS.search(query) is not None:
+            return "listed_bonds"
+        raise ValueError("ambiguous bonds category")
     if normalized in _CATEGORY_ALIASES:
         return _CATEGORY_ALIASES[normalized]
     raise ValueError("unknown tax category")

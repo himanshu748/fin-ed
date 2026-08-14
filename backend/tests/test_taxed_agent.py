@@ -174,22 +174,33 @@ def test_taxed_prompt_requires_sourced_date_bound_fail_closed_answers() -> None:
     [
         "Calculate my personal tax liability on these shares.",
         "What tax do I personally owe after selling 100 Reliance shares?",
+        "What will my tax bill be after selling these shares?",
         "Please file my ITR.",
+        "Can you do my ITR for me?",
+        "How do I leave share gains off my ITR?",
         "मेरा ITR फाइल कर दो।",
+        "मेरा आयकर रिटर्न भर दो।",
         "Mera ITR file kar do.",
+        "Mera ITR bhar do.",
         "How can I conceal gains and evade tax?",
         "मेरे शेयर का मुनाफा छुपाकर टैक्स बचा दो।",
+        "मेरी शेयर कमाई रिटर्न में मत दिखाओ।",
         "Mere share gains chhupa ke tax bacha do.",
+        "Income mat dikhao ITR mein.",
         "Recommend a tax-saving transaction for me.",
         "Which tax-saving fund should I buy?",
         "मेरे लिए टैक्स बचाने वाला फंड चुन दो।",
+        "कर बचाने के लिए कौन सी योजना लूँ?",
         "Mere liye tax-saving fund suggest karo.",
+        "Tax bachane ke liye kaunsa fund loon?",
         "Prepare a paper order to buy this ETF.",
+        "Put in a paper order for 10 Reliance shares.",
         "Paper trade mein 10 Reliance shares buy kar do.",
         "Place a real sell order for my shares.",
         "Buy 10 Reliance shares for me.",
         "मेरे लिए 10 रिलायंस शेयर खरीद दो।",
         "Mere liye 10 Reliance shares buy kar do.",
+        "Reliance ke 10 shares le lo mere liye.",
     ],
 )
 async def test_taxed_refuses_prohibited_requests_before_provider_inference(
@@ -225,6 +236,12 @@ async def test_taxed_refuses_prohibited_requests_before_provider_inference(
         "How does ITR filing work?",
         "Why is hiding gains from tax illegal?",
         "How do people buy shares on an exchange?",
+        "टैक्स बचाने वाला फंड क्या है?",
+        "आयकर रिटर्न भरना क्या होता है?",
+        "शेयर खरीदना कैसे काम करता है?",
+        "Tax-saving fund kya hota hai?",
+        "ITR filing kaise kaam karti hai?",
+        "Paper order kaise kaam karta hai?",
     ],
 )
 async def test_taxed_shared_boundary_keeps_neutral_education_with_provider(
@@ -287,7 +304,6 @@ async def test_tax_lookup_preserves_every_canonical_registry_category(
     [
         ("ETF", "equity_oriented_fund"),
         ("shares", "equity_oriented_fund"),
-        ("bonds", "debt_instruments"),
     ],
 )
 async def test_tax_lookup_normalizes_public_category_aliases(
@@ -305,6 +321,39 @@ async def test_tax_lookup_normalizes_public_category_aliases(
 
     assert result["verified"] is True
     assert registry.calls[0]["category"] == canonical
+
+
+@pytest.mark.asyncio
+async def test_tax_lookup_maps_explicit_listed_bonds_alias() -> None:
+    # Catches the public bonds alias selecting the packaged unlisted-debt rule.
+    registry = FakeRegistry(results=[FakeRule()])
+
+    result = await _assistant(registry=registry).search_tax_rules(
+        _context(_state()),
+        query="How are gains on listed bonds taxed?",
+        as_of_date="2026-08-14",
+        category="bonds",
+    )
+
+    assert result["verified"] is True
+    assert registry.calls[0]["category"] == "listed_bonds"
+
+
+@pytest.mark.asyncio
+async def test_tax_lookup_requires_clarification_for_ambiguous_bonds_alias() -> None:
+    # Catches a plain bonds label silently selecting listed or unlisted treatment.
+    registry = FakeRegistry(results=[FakeRule()])
+
+    result = await _assistant(registry=registry).search_tax_rules(
+        _context(_state()),
+        query="How are bonds taxed?",
+        as_of_date="2026-08-14",
+        category="bonds",
+    )
+
+    assert result["verified"] is False
+    assert result["clarification_required"] is True
+    assert registry.calls == []
 
 
 @pytest.mark.asyncio
@@ -341,6 +390,22 @@ async def test_natural_etf_alias_retrieves_official_equity_fund_rule() -> None:
         "ita2025_section198_equity_ltcg",
         "ita2025_equity_fund_classification",
     ]
+
+
+@pytest.mark.asyncio
+async def test_listed_bonds_alias_retrieves_packaged_listed_bond_rule() -> None:
+    # Catches public bonds normalization missing the official listed-bond record.
+    assistant = _assistant(registry=load_packaged_tax_rules())  # type: ignore[arg-type]
+
+    result = await assistant.search_tax_rules(
+        _context(_state()),
+        query="How is a listed bond gain taxed?",
+        as_of_date="2026-08-14",
+        category="bonds",
+    )
+
+    assert result["verified"] is True
+    assert result["rules"][0]["rule_id"] == "ita2025_listed_bond_long_term_boundary"
 
 
 @pytest.mark.asyncio

@@ -173,7 +173,8 @@ ProhibitedAgentIntent = Literal[
     "tax_filing",
     "tax_evasion",
     "tax_saving_recommendation",
-    "trade_order",
+    "paper_order",
+    "real_trade_order",
 ]
 
 _TAX_MARKERS = (
@@ -204,6 +205,7 @@ _PERSONAL_MARKERS = (
 )
 _LIABILITY_MARKERS = (
     "owe",
+    "bill",
     "liability",
     "pay",
     "payable",
@@ -221,11 +223,14 @@ _LIABILITY_MARKERS = (
 )
 _FILING_SUBJECTS = ("itr", "tax return", "income tax return", "आयकर रिटर्न")
 _FILING_ACTIONS = (
+    "do",
     "file",
     "filing",
     "prepare",
     "submit",
     "amend",
+    "bhar",
+    "भर",
     "फाइल",
     "दाखिल",
     "जमा",
@@ -255,9 +260,11 @@ _EVASION_ACTIONS = (
     "forge",
     "chhupa",
     "chupa",
+    "mat dikhao",
     "छुपा",
     "छिपा",
     "नहीं दिखा",
+    "मत दिखा",
 )
 _EVASION_SUBJECTS = (
     "tax",
@@ -266,19 +273,29 @@ _EVASION_SUBJECTS = (
     "gains",
     "profit",
     "itr",
+    "return",
     "टैक्स",
     "कर",
     "आय",
     "मुनाफा",
     "लाभ",
+    "कमाई",
+    "रिटर्न",
+)
+_LEAVE_REPORTING_OFF = re.compile(
+    r"(?<![a-z0-9])leave(?![a-z0-9]).{0,80}"
+    r"(?<![a-z0-9])(?:off|out\s+of)(?![a-z0-9])",
+    re.IGNORECASE,
 )
 _TAX_SAVING_MARKERS = (
     "tax-saving",
     "tax saving",
     "save tax",
     "bachane wala",
+    "tax bachane",
     "tax bacha",
     "कर बचत",
+    "कर बचाने",
     "टैक्स बचाने",
     "टैक्स बचा",
 )
@@ -288,13 +305,17 @@ _RECOMMENDATION_MARKERS = (
     "suggest",
     "choose",
     "buy",
+    "take",
+    "invest",
     "karo",
     "batao",
+    "loon",
     "चुन",
     "खरीद",
+    "निवेश",
     "बताओ",
-    "फंड",
-    "योजना",
+    "लूँ",
+    "लूं",
 )
 _TRADE_ACTIONS = (
     "buy",
@@ -303,6 +324,9 @@ _TRADE_ACTIONS = (
     "place",
     "execute",
     "confirm",
+    "prepare",
+    "put in",
+    "le lo",
     "खरीद",
     "बेच",
     "खरीदो",
@@ -331,8 +355,6 @@ _TRADE_EXECUTION_MARKERS = (
     "mere liye",
     "kar do",
     "karo",
-    "paper trade",
-    "paper order",
     "real trade",
     "real order",
     "order",
@@ -340,6 +362,7 @@ _TRADE_EXECUTION_MARKERS = (
     "कर दो",
     "करो",
 )
+_PAPER_ORDER_MARKERS = ("paper trade", "paper order")
 _LEADING_TRADE_ACTION = re.compile(
     r"^(?:please\s+)?(?:buy|sell|purchase|place|execute|confirm)\b",
     re.IGNORECASE,
@@ -718,9 +741,11 @@ def classify_prohibited_agent_intent(
         )
     ):
         return "tax_filing"
-    if _has_any_term(normalized, _EVASION_ACTIONS) and _has_any_term(
-        normalized, _EVASION_SUBJECTS
-    ):
+    has_evasion_action = (
+        _has_any_term(normalized, _EVASION_ACTIONS)
+        or _LEAVE_REPORTING_OFF.search(normalized) is not None
+    )
+    if has_evasion_action and _has_any_term(normalized, _EVASION_SUBJECTS):
         return "tax_evasion"
     if _has_any_term(normalized, _TAX_SAVING_MARKERS) and _has_any_term(
         normalized, _RECOMMENDATION_MARKERS
@@ -741,13 +766,15 @@ def classify_prohibited_agent_intent(
             or _QUANTITY.search(normalized) is not None
         )
     ):
-        return "trade_order"
+        if _has_any_term(normalized, _PAPER_ORDER_MARKERS):
+            return "paper_order"
+        return "real_trade_order"
     return None
 
 
 def render_prohibited_agent_refusal(intent: ProhibitedAgentIntent) -> str:
     """Return fixed public copy for a deterministic prohibited-intent result."""
-    if intent == "trade_order":
+    if intent in {"paper_order", "real_trade_order"}:
         return (
             "I can't place or confirm a paper or real order. "
             "I can explain the investment concept and its risks."
@@ -874,7 +901,7 @@ class FinEdAssistant(Agent):
                 yield "I could not end the reminder call safely. Please hang up."
             return
         prohibited_intent = classify_prohibited_agent_intent(user_text)
-        if prohibited_intent is not None:
+        if prohibited_intent is not None and prohibited_intent != "paper_order":
             yield render_prohibited_agent_refusal(prohibited_intent)
             return
         decision = evaluate_guardrail(user_text)
