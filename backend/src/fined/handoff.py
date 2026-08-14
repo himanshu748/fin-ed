@@ -73,6 +73,17 @@ _EMAIL = re.compile(
     r"(?i)\b[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+\b"
 )
 _PAN = re.compile(r"(?i)(?<![a-z0-9])[a-z]{5}[0-9]{4}[a-z](?![a-z0-9])")
+_BROKER_IDENTIFIER_VALUE = re.compile(
+    r"(?ix)"
+    r"\b(client\s+code|ucc)\b"
+    r"(\s*(?:is\s+|no[.]?\s+|[:=]\s*|[-]\s*|\#\s*)?)"
+    r"("
+    r"(?=[a-z0-9-]{2,32}\b)"
+    r"(?=[a-z0-9-]*[a-z])"
+    r"(?=[a-z0-9-]*\d)"
+    r"[a-z0-9]+(?:-[a-z0-9]+)*"
+    r")"
+)
 _LABELLED_PRIVATE_VALUE = re.compile(
     r"(?ix)"
     r"\b("
@@ -394,6 +405,7 @@ def sanitize_handoff_text(text: str) -> str:
         if character in "\n\t" or not unicodedata.category(character).startswith("C")
     )
     sanitized, protected_urls = _protect_official_source_urls(sanitized)
+    sanitized = _BROKER_IDENTIFIER_VALUE.sub(r"\1\2[REDACTED]", sanitized)
     sanitized = _LABELLED_PRIVATE_VALUE.sub(r"\1\2[REDACTED]", sanitized)
     sanitized = _EXPLICIT_PIN_VALUE.sub(r"\1\2[REDACTED]", sanitized)
     sanitized = _NATURAL_ACCOUNT_VALUE.sub(r"\1\2[REDACTED]", sanitized)

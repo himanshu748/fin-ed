@@ -626,6 +626,78 @@ def test_sanitize_handoff_text_redacts_natural_pin_and_account_disclosures(
     assert "[REDACTED]" in sanitized
 
 
+@pytest.mark.parametrize(
+    ("disclosure", "private_identifier"),
+    [
+        ("My Angel One client code is AB1234.", "AB1234"),
+        ("My Zerodha client code ZY9876.", "ZY9876"),
+        ("My UCC is AB1234.", "AB1234"),
+        ("My client code: AB-1234.", "AB-1234"),
+        ("My UCC no. ZX9876.", "ZX9876"),
+    ],
+)
+def test_sanitize_handoff_text_redacts_short_broker_identifiers_only(
+    disclosure: str,
+    private_identifier: str,
+) -> None:
+    # Catches short alphanumeric broker IDs leaking or erasing the tax question.
+    text = f"{disclosure} How are equity ETF gains taxed?"
+
+    sanitized = sanitize_handoff_text(text)
+
+    assert private_identifier not in sanitized
+    assert "[REDACTED]" in sanitized
+    assert "How are equity ETF gains taxed?" in sanitized
+
+
+@pytest.mark.parametrize(
+    "ordinary_question",
+    [
+        "What does client code mean?",
+        "How is UCC used by a broker?",
+    ],
+)
+def test_sanitize_handoff_text_preserves_broker_identifier_prose(
+    ordinary_question: str,
+) -> None:
+    # Catches broker identifier labels being treated as disclosures without a value.
+    assert sanitize_handoff_text(ordinary_question) == ordinary_question
+
+
+@pytest.mark.parametrize(
+    ("disclosure", "private_identifier"),
+    [
+        ("My Angel One client code is AB1234.", "AB1234"),
+        ("My Zerodha client code ZY9876.", "ZY9876"),
+        ("My UCC is AB1234.", "AB1234"),
+        ("My client code: AB-1234.", "AB-1234"),
+        ("My UCC no. ZX9876.", "ZX9876"),
+    ],
+)
+def test_context_transfer_excludes_short_broker_identifiers(
+    disclosure: str,
+    private_identifier: str,
+) -> None:
+    # Catches a sanitizer-only fix that still leaks through handoff context creation.
+    question = f"{disclosure} How are equity ETF gains taxed?"
+    source = llm.ChatContext.empty()
+    source.add_message(role="user", content=question, id="turn-broker-id-tax")
+    pending = create_pending_handoff(
+        direction="taxed",
+        question=question,
+        locale="en-IN",
+        question_turn_id="turn-broker-id-tax",
+        now=10.0,
+    )
+
+    copied = build_handoff_chat_context(source, pending)
+    copied_text = "\n".join(message.text_content or "" for message in copied.messages())
+
+    assert private_identifier not in copied_text
+    assert "[REDACTED]" in copied_text
+    assert "How are equity ETF gains taxed?" in copied_text
+
+
 @pytest.mark.parametrize("source_url", _OFFICIAL_SOURCE_URLS)
 def test_context_transfer_preserves_each_packaged_official_source_url(
     source_url: str,
