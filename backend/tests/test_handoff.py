@@ -595,6 +595,9 @@ def test_sanitize_handoff_text_removes_labelled_multiword_credentials(
         "My account has shares. How are capital gains taxed?",
         "My demat account has shares. How are capital gains taxed?",
         "What does PIN mean for account security?",
+        "My account is active. How are capital gains taxed?",
+        "A PIN is used for account security.",
+        "PIN no. means a labelled field without a disclosed value.",
     ],
 )
 def test_sanitize_handoff_text_preserves_ordinary_account_and_pin_prose(
@@ -602,6 +605,25 @@ def test_sanitize_handoff_text_preserves_ordinary_account_and_pin_prose(
 ) -> None:
     # Catches broad credential labels destroying ordinary investment questions.
     assert sanitize_handoff_text(ordinary_question) == ordinary_question
+
+
+@pytest.mark.parametrize(
+    ("disclosure", "private_value"),
+    [
+        ("My PIN is 4321", "4321"),
+        ("PIN no. 4321", "4321"),
+        ("My account is 123456789", "123456789"),
+    ],
+)
+def test_sanitize_handoff_text_redacts_natural_pin_and_account_disclosures(
+    disclosure: str,
+    private_value: str,
+) -> None:
+    # Catches natural labelled credentials leaking when no colon or long digit run exists.
+    sanitized = sanitize_handoff_text(disclosure)
+
+    assert private_value not in sanitized
+    assert "[REDACTED]" in sanitized
 
 
 @pytest.mark.parametrize("source_url", _OFFICIAL_SOURCE_URLS)

@@ -87,7 +87,16 @@ _LABELLED_PRIVATE_VALUE = re.compile(
     r"(\s*(?:is\s+|[:=]\s*|[-]\s*|\#\s*|no[.]?\s*)?)"
     r"([^\n]+)",
 )
-_EXPLICIT_PIN_VALUE = re.compile(r"(?ix)\b(pin)\b(\s*(?:[:=]\s*|[-]\s*|\#\s*))([^\n]+)")
+_EXPLICIT_PIN_VALUE = re.compile(
+    r"(?ix)\b(pin)\b"
+    r"(\s*(?:is\s+|no[.]?\s+|[:=]\s*|[-]\s*|\#\s*))"
+    r"(?=[a-z0-9_-]*\d)([^\n]+)"
+)
+_NATURAL_ACCOUNT_VALUE = re.compile(
+    r"(?ix)\b(account)\b"
+    r"(\s+(?:is|no[.]?)\s+)"
+    r"(?=[a-z0-9_-]*\d)([^\n]+)"
+)
 _TOKEN = re.compile(
     r"(?i)(?<![a-z0-9])(?:sk|pk|api|token|secret)[-_][a-z0-9_-]{8,}(?![a-z0-9])"
 )
@@ -387,6 +396,7 @@ def sanitize_handoff_text(text: str) -> str:
     sanitized, protected_urls = _protect_official_source_urls(sanitized)
     sanitized = _LABELLED_PRIVATE_VALUE.sub(r"\1\2[REDACTED]", sanitized)
     sanitized = _EXPLICIT_PIN_VALUE.sub(r"\1\2[REDACTED]", sanitized)
+    sanitized = _NATURAL_ACCOUNT_VALUE.sub(r"\1\2[REDACTED]", sanitized)
     sanitized = _EMAIL.sub("[REDACTED]", sanitized)
     sanitized = _PAN.sub("[REDACTED]", sanitized)
     sanitized = _JWT.sub("[REDACTED]", sanitized)
