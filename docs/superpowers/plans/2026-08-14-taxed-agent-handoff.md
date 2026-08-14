@@ -493,27 +493,42 @@ git commit -m "feat: show active voice specialist"
 
 **Files:**
 - Modify: `backend/src/fined/call_analytics.py`
+- Modify: `backend/src/agent.py`
 - Modify: `backend/tests/test_call_analytics.py`
+- Modify: `backend/tests/test_entrypoint_lifecycle.py`
+- Modify: `frontend/lib/call-analytics.ts`
+- Modify: `frontend/components/analytics/call-analytics-dashboard.tsx`
+- Modify: `frontend/tests/call-analytics.test.mjs`
 - Modify: `README.md`
 - Modify: `backend/README.md`
 
 **Interfaces:**
 - Adds `tax_rule_delivered` to the existing analytics success allowlist and rank.
+- Records privacy-safe agent speaking duration for FinEd and TaxEd plus the handoff count for each call.
+- Publishes per-call and aggregate agent speaking time without caller identity, transcripts or utterance text.
 - Adds the Day 9 manual test and demonstration script to human documentation.
 
 - [ ] **Step 1: Write failing analytics tests**
 
 Add `tax_rule_delivered` as a literal accepted analytics success with no stored question or amount. Assert the public summary stores only the fixed condition string and never stores a question, asset, amount or source URL. The routing matrix is already covered against the production `classify_tax_route()` guard in Task 2 and against the FinEd offer tool in Task 3.
 
+Add RED tests for a privacy-safe `AgentTalkTimeTracker`. It must consume `agent_state_changed` speaking intervals using an injected monotonic clock, attribute each completed interval to the active `fined` or `taxed` agent and close an open interval during shutdown. Unknown agent labels and duplicate state transitions fail closed. A switch from FinEd to TaxEd increments one handoff. The public record and summary expose integer `fined_talk_seconds`, `taxed_talk_seconds` and `handoff_count` only. Their sum may not exceed total call duration by more than one rounding second.
+
+Add frontend decoder and dashboard RED tests for summary version 2. The totals show aggregate FinEd and TaxEd speaking time. Each recent call shows total duration, FinEd time, TaxEd time and handoff count. Reject extra keys, negative values, fractional values, impossible sums and caller or transcript fields.
+
 - [ ] **Step 2: Run focused tests and verify RED**
 
 Run: `cd backend && uv run pytest tests/test_call_analytics.py -q`
 
-Expected: `tax_rule_delivered` is rejected by the current allowlist.
+Expected: `tax_rule_delivered` is rejected by the current allowlist and the new speaking-time fields do not exist.
 
 - [ ] **Step 3: Implement analytics and operator documentation**
 
 Add `tax_rule_delivered` below `grounded_answer_delivered` in the success ranking so a later completed paper fill still wins. Update `CALL_SUCCESS_DEFINITION` to include a verified tax rule.
+
+Register one `agent_state_changed` listener in the LiveKit entrypoint. On each transition to speaking, capture `state.active_agent_name` and the monotonic start. On each transition away from speaking, close that interval. Close any remaining interval before analytics persistence at shutdown. Task 3 must set `state.active_agent_name` to `fined` or `taxed` in each agent's `on_enter` path and increment `state.agent_handoff_count` only after a committed agent change. Never infer identity from transcript text, voice names or provider labels.
+
+Migrate the analytics table additively and keep old rows readable as zero speaking time and zero handoffs. Publish summary version 2 with aggregate and recent-call `fined_talk_seconds`, `taxed_talk_seconds` and `handoff_count`. Update the strict frontend decoder and the responsive analytics table to show the breakdown. User-facing labels are `FinEd speaking`, `TaxEd speaking` and `Handoffs`.
 
 Document:
 
@@ -525,6 +540,7 @@ Document:
 - the normal FinEd route and TaxEd route demo questions
 - the fact that TaxEd cannot trade, calculate personal liability or file an ITR
 - how to refresh registry verification dates only after checking official sources
+- how the dashboard measures FinEd and TaxEd speaking time without storing audio or transcripts
 
 - [ ] **Step 4: Run the complete backend verification**
 
@@ -562,7 +578,7 @@ Confirm `.env`, generated databases, logs and local knowledge indexes are not st
 - [ ] **Step 7: Commit Task 6**
 
 ```bash
-git add README.md backend/README.md backend/src/fined/call_analytics.py backend/tests/test_call_analytics.py
+git add README.md backend/README.md backend/src/agent.py backend/src/fined/call_analytics.py backend/tests/test_call_analytics.py backend/tests/test_entrypoint_lifecycle.py frontend/lib/call-analytics.ts frontend/components/analytics/call-analytics-dashboard.tsx frontend/tests/call-analytics.test.mjs
 git commit -m "docs: finish Day 9 TaxEd handoff"
 ```
 

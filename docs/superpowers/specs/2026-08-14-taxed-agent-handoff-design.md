@@ -280,6 +280,10 @@ A verified TaxEd explanation emits a privacy-safe `tax_rule_delivered` success e
 
 The event may count as the Day 8 successful outcome. A handoff by itself does not count as success.
 
+Each completed call also stores rounded speaking duration for FinEd and TaxEd plus the number of committed agent handoffs. Speaking time is measured from LiveKit agent speaking state transitions with an injected monotonic clock. It is not inferred from transcripts, voice names or provider labels. The tracker closes an open interval during shutdown and fails closed for unknown agent labels or invalid transitions.
+
+The public analytics summary exposes aggregate and per-call `fined_talk_seconds`, `taxed_talk_seconds` and `handoff_count`. It never stores audio, transcripts, questions, phone numbers or caller identity. Existing rows migrate as zero speaking time and zero handoffs.
+
 ## Frontend Changes
 
 - Add the validated active-agent state to the voice workspace controller.
@@ -287,6 +291,7 @@ The event may count as the Day 8 successful outcome. A handoff by itself does no
 - Render the active-agent badge near the existing session status.
 - Keep the room, transcript, session list and paper-practice state mounted across handoffs.
 - Render official transcript source links as safe external links with descriptive labels.
+- Show total call duration, FinEd speaking time, TaxEd speaking time and handoff count in the privacy-safe analytics dashboard.
 - Preserve keyboard focus during badge updates.
 - Disable decorative transition motion under `prefers-reduced-motion`.
 
