@@ -41,6 +41,17 @@ class LifecycleAbort(BaseException):
     """Sentinel proving BaseException cleanup does not suppress the original failure."""
 
 
+class FakeMonotonicClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
 def test_development_worker_keeps_one_job_process_warm() -> None:
     """Prevent the first caller from waiting for a cold Python job process."""
     assert entrypoint.server._num_idle_processes == 1
@@ -114,12 +125,13 @@ class FakeSession:
         self.start_kwargs: dict[str, object] = {}
 
     def on(self, event_name: str):
-        assert event_name in {"metrics_collected", "error"}
-        registration_name = (
-            "metrics_registration"
-            if event_name == "metrics_collected"
-            else "error_registration"
-        )
+        registration_names = {
+            "metrics_collected": "metrics_registration",
+            "error": "error_registration",
+            "agent_state_changed": "agent_state_registration",
+        }
+        assert event_name in registration_names
+        registration_name = registration_names[event_name]
         self.events.append(registration_name)
         if self.fail_at == registration_name:
             raise LifecycleAbort(registration_name)
@@ -438,6 +450,7 @@ def _install_lifecycle_fakes(
         "usage",
         "metrics_registration",
         "error_registration",
+        "agent_state_registration",
         "rpc_registration",
         "shutdown_registration",
         "start",
@@ -511,6 +524,7 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
         "usage",
         "metrics_registration",
         "error_registration",
+        "agent_state_registration",
         "rpc_registration",
         "rpc_registration",
         "shutdown_registration",
@@ -941,9 +955,66 @@ async def test_shutdown_records_real_success_and_failure_outcomes_once(
         "successful_calls": 1,
         "failed_calls": 0,
         "success_rate_percent": 100.0,
+        "total_duration_seconds": 0,
+        "fined_talk_seconds": 0,
+        "taxed_talk_seconds": 0,
+        "handoff_count": 0,
     }
     assert summary["recent_calls"][0]["channel"] == "browser"  # type: ignore[index]
     assert summary["recent_calls"][0]["detail"] == "market_quote_delivered"  # type: ignore[index]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_records_state_backed_agent_talk_time_and_committed_handoffs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Catches lifecycle analytics inferring speakers or losing an open final interval.
+    analytics_database = tmp_path / "analytics" / "fined.sqlite3"
+    analytics_snapshot = tmp_path / "analytics" / "public-summary.json"
+    clock = FakeMonotonicClock()
+    wall_clock = [datetime(2026, 8, 14, 4, 30, tzinfo=UTC)]
+
+    class ControlledDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            del cls, tz
+            return wall_clock[0]
+
+    monkeypatch.setattr(entrypoint, "monotonic", clock, raising=False)
+    monkeypatch.setattr(entrypoint, "datetime", ControlledDateTime)
+    harness = _install_lifecycle_fakes(
+        monkeypatch,
+        None,
+        tmp_path / "generated",
+        analytics_directory=tmp_path / "analytics",
+    )
+
+    await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
+    state = harness.session.userdata
+    assert state is not None
+    callbacks = harness.session.callbacks["agent_state_changed"]
+    assert len(callbacks) == 1
+
+    state.active_agent_name = "fined"  # type: ignore[union-attr]
+    callbacks[0](SimpleNamespace(old_state="listening", new_state="speaking"))
+    clock.advance(2.6)
+    callbacks[0](SimpleNamespace(old_state="speaking", new_state="thinking"))
+    state.active_agent_name = "taxed"  # type: ignore[union-attr]
+    state.agent_handoff_count = 1  # type: ignore[union-attr]
+    callbacks[0](SimpleNamespace(old_state="thinking", new_state="speaking"))
+    clock.advance(1.6)
+    wall_clock[0] += timedelta(seconds=10)
+
+    await harness.context.shutdown_callbacks[0]("participant disconnected")
+
+    summary = SQLiteCallAnalyticsStore(
+        analytics_database, snapshot_path=analytics_snapshot
+    ).public_summary()
+    call = summary["recent_calls"][0]  # type: ignore[index]
+    assert call["duration_seconds"] == 10  # type: ignore[index]
+    assert call["fined_talk_seconds"] == 3  # type: ignore[index]
+    assert call["taxed_talk_seconds"] == 2  # type: ignore[index]
+    assert call["handoff_count"] == 1  # type: ignore[index]
 
 
 @pytest.mark.asyncio

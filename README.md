@@ -1,6 +1,6 @@
 # FinEd Saathi
 
-FinEd Saathi is a voice-first financial literacy tutor for Indian market concepts. It listens in English, Hindi or both then replies in the learner's language style through Murf Falcon 2 and the Indian voice Nikhil.
+FinEd Saathi is a voice-first financial literacy tutor for Indian market concepts. It listens in English, Hindi or both then replies in the learner's language style through Murf Falcon 2. FinEd uses the Indian voice Nikhil and the TaxEd specialist uses the multilingual Indian voice Anusha.
 
 The project is built for the Financial Services track of **10 Days of Voice Agents - VoiceForBharat Edition**. It teaches market mechanics, charges, taxes and risks. It does not recommend securities, promise returns or place real trades.
 
@@ -10,6 +10,7 @@ The project is built for the Financial Services track of **10 Days of Voice Agen
 - Deepgram Nova-3 multilingual speech recognition
 - Google Gemini conversation and tool use with a strict model allowlist
 - Murf Falcon 2 speech using `Nikhil`, `Conversational` and locale `en-IN`
+- A consented in-session TaxEd handoff using multilingual Anusha for verified Indian investment-tax rules
 - LiveKit Cloud transport with a prewarmed Python worker
 - Optional Angel One SmartAPI live quotes and historical closes through read-only tools
 - Whole-unit historical return illustrations with explicit corporate-action caveats
@@ -20,7 +21,7 @@ The project is built for the Financial Services track of **10 Days of Voice Agen
 - An optional local knowledge index with fail-closed evidence behavior
 - A manual, consented SIP reminder with a call-scoped ₹1,00,000 paper portfolio
 - Consent-gated human-help requests for suspected fraud and human-only decisions
-- A real-call analytics dashboard with anonymous success and failure outcomes
+- A real-call analytics dashboard with anonymous outcomes, agent speaking time and handoff counts
 - Guardrails for credentials, personalised recommendations, guaranteed outcomes, wrongdoing and prompt extraction
 - An accessible responsive interface with reduced-motion support
 
@@ -48,6 +49,7 @@ Browser microphone or typed question
   -> Deepgram Nova-3 STT
   -> Gemini + FinEd tools and guardrails
   -> Murf Falcon 2 TTS with Nikhil
+  -> Consented TaxEd handoff with the official tax registry and Anusha
   -> LiveKit Cloud
   -> Browser audio, transcript and session archive
 
@@ -271,19 +273,66 @@ the request in the Human help view.
 FinEd records one anonymous outcome when each connected browser or SIP session
 ends. Success means the learner completed at least one verified action: received
 grounded evidence, received a trusted quote or historical calculation, completed
-a paper fill or created a human-help request. A greeting alone is not success.
+a paper fill, received a verified tax rule or created a human-help request. A
+greeting alone is not success.
 
 Open [http://127.0.0.1:3001/analytics](http://127.0.0.1:3001/analytics) during the
-local demo. It shows total calls, successful calls, failed calls, success rate
+local demo. It shows total calls, total duration, FinEd speaking time, TaxEd
+speaking time, committed handoffs, successful calls, failed calls, success rate
 and recent anonymous outcomes. The page refreshes every five seconds from real
-backend data. It never displays phone numbers, participant identities, room
-names or transcripts.
+backend data. Speaking time comes from LiveKit agent speaking-state intervals
+and the active server-owned agent label. The tracker closes an open interval at
+shutdown. It never stores audio, transcripts, utterance text, caller identity,
+phone numbers or voice provider data.
 
 For the Day 8 success-path video, note the current counters, start a voice
 session and complete one verified action. Use a consented Human Help request for
 a broker-independent demo or request a live RELIANCE quote after refreshing the
 daily Angel One token. End the session after the action completes. The total and
 successful counters increase after the disconnect.
+
+## Day 9 TaxEd specialist
+
+TaxEd is a separate in-session agent for general Indian investment-tax
+education. FinEd stays active for normal financial learning. A tax question
+creates only an offer. The learner must give a fresh explicit yes to the exact
+permission question before the active LiveKit agent changes. TaxEd asks for the
+same fresh permission before returning a non-tax question to FinEd.
+
+The three FinEd to TaxEd permission prompts are:
+
+- English: "This is an investment-tax question. Would you like me to connect you to TaxEd?"
+- Hindi: "यह निवेश कर से जुड़ा सवाल है। क्या आप TaxEd से जुड़ना चाहेंगे?"
+- Hinglish: "Yeh investment tax ka sawaal hai. Kya aap TaxEd se connect hona chahenge?"
+
+TaxEd uses Murf voice `en-IN-anusha`, style `Conversational` and model
+`falcon-2`. An authenticated live Murf catalogue check on 2026-08-14 confirmed
+that this one Anusha voice supports `en-IN`, `hi-IN` and `hi-LATN`. The server
+selects the locale. The browser and model cannot select a voice identity.
+
+The packaged tax registry was verified against official sources on 2026-08-14.
+For a transaction or payment from 1 April 2026, TaxEd uses the Income-tax Act,
+2025 as amended by the Finance Act, 2026. Earlier assessment or payment periods
+can remain under the Income-tax Act, 1961. TaxEd asks for the relevant date when
+the boundary is unclear. It cannot trade, calculate a learner's personal tax
+liability or file an ITR. It also cannot recommend tax avoidance or fill a gap
+with model knowledge.
+
+For one consent demo:
+
+1. Ask FinEd: "What is an ETF?" Confirm that FinEd answers without a handoff.
+2. Ask: "How is an equity ETF taxed in India?"
+3. Let FinEd ask permission then say a fresh yes.
+4. Confirm the badge changes from `FinEd Saathi · Nikhil` to `TaxEd · Anusha · Investment Tax Specialist`.
+5. Confirm TaxEd states an applicability date and shows an official source.
+6. Ask a non-tax learning question then approve the return to FinEd.
+
+To refresh registry verification dates, first reopen every cited official source
+and confirm the rule text, effective dates and applicability note. Use only the
+reviewed government, regulator or exchange hosts accepted by the loader. Update
+`last_verified_on` and `review_due_on` only after that check, then run
+`uv run pytest tests/test_tax_rules.py -q` from `backend`. A past review date
+makes the rule unusable so the voice agent abstains.
 
 ## Day 6 consented outbound practice reminder
 
@@ -439,6 +488,8 @@ More detail is available in the [backend README](backend/README.md), [frontend R
 - [Gemini model catalog](https://ai.google.dev/gemini-api/docs/models)
 - [Deepgram Nova-3](https://developers.deepgram.com/docs/models-languages-overview)
 - [Angel One SmartAPI](https://smartapi.angelone.in/)
+- [Income-tax Act, 2025 as amended by Finance Act, 2026](https://www.incometaxindia.gov.in/documents/d/guest/income_tax_act_2025_as_amended_by_fa_act_2026-pdf)
+- [Income Tax Department transition FAQ](https://www.incometax.gov.in/iec/foportal/help/all-topics/e-filing-services/General%20Questions-faqs?mobile-app=1)
 
 ## License
 

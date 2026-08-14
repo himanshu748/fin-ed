@@ -20,13 +20,17 @@ const frontendRoot = join(import.meta.dirname, '..');
 
 function validSummary(overrides = {}) {
   return {
-    version: 1,
+    version: 2,
     success_definition: 'The learner completed one verified financial learning action.',
     totals: {
       total_calls: 2,
       successful_calls: 1,
       failed_calls: 1,
       success_rate_percent: 50,
+      total_duration_seconds: 51,
+      fined_talk_seconds: 20,
+      taxed_talk_seconds: 12,
+      handoff_count: 2,
     },
     recent_calls: [
       {
@@ -36,6 +40,9 @@ function validSummary(overrides = {}) {
         channel: 'browser',
         outcome: 'successful',
         detail: 'market_quote_delivered',
+        fined_talk_seconds: 20,
+        taxed_talk_seconds: 12,
+        handoff_count: 2,
       },
     ],
     ...overrides,
@@ -47,6 +54,10 @@ test('decodes real aggregate call data with strict count invariants', () => {
 
   assert.equal(summary.totals.total_calls, 2);
   assert.equal(summary.totals.successful_calls, 1);
+  assert.equal(summary.totals.total_duration_seconds, 51);
+  assert.equal(summary.totals.fined_talk_seconds, 20);
+  assert.equal(summary.totals.taxed_talk_seconds, 12);
+  assert.equal(summary.totals.handoff_count, 2);
   assert.equal(summary.recent_calls[0].channel, 'browser');
   assert.throws(() =>
     decodeCallAnalyticsSummary(
@@ -56,6 +67,10 @@ test('decodes real aggregate call data with strict count invariants', () => {
           successful_calls: 1,
           failed_calls: 1,
           success_rate_percent: 50,
+          total_duration_seconds: 51,
+          fined_talk_seconds: 20,
+          taxed_talk_seconds: 12,
+          handoff_count: 2,
         },
       })
     )
@@ -66,6 +81,9 @@ test('rejects caller identifiers, transcripts and arbitrary outcome details', ()
   for (const unsafe of [
     { ...validSummary(), phone_number: '+919876543210' },
     { ...validSummary(), transcript: 'my OTP is 123456' },
+    { ...validSummary(), audio: 'encoded-call-audio' },
+    { ...validSummary(), identity: 'learner-secret' },
+    { ...validSummary(), voice_provider: 'Murf' },
     {
       ...validSummary(),
       recent_calls: [{ ...validSummary().recent_calls[0], caller_id: 'learner-secret' }],
@@ -85,6 +103,39 @@ test('rejects caller identifiers, transcripts and arbitrary outcome details', ()
   }
 });
 
+test('rejects malformed or impossible speaking measurements', () => {
+  const call = validSummary().recent_calls[0];
+  const totals = validSummary().totals;
+  for (const unsafe of [
+    { ...validSummary(), version: 1 },
+    { ...validSummary(), totals: { ...totals, fined_talk_seconds: -1 } },
+    { ...validSummary(), totals: { ...totals, taxed_talk_seconds: 1.5 } },
+    { ...validSummary(), totals: { ...totals, handoff_count: -1 } },
+    {
+      ...validSummary(),
+      totals: { ...totals, fined_talk_seconds: 40, taxed_talk_seconds: 14 },
+    },
+    {
+      ...validSummary(),
+      recent_calls: [{ ...call, fined_talk_seconds: -1 }],
+    },
+    {
+      ...validSummary(),
+      recent_calls: [{ ...call, taxed_talk_seconds: 1.5 }],
+    },
+    {
+      ...validSummary(),
+      recent_calls: [{ ...call, handoff_count: -1 }],
+    },
+    {
+      ...validSummary(),
+      recent_calls: [{ ...call, fined_talk_seconds: 30, taxed_talk_seconds: 14 }],
+    },
+  ]) {
+    assert.throws(() => decodeCallAnalyticsSummary(unsafe));
+  }
+});
+
 test('analytics route and responsive dashboard expose the Day 8 contract', () => {
   const route = readFileSync(join(frontendRoot, 'app/api/analytics/route.ts'), 'utf8');
   const page = readFileSync(join(frontendRoot, 'app/analytics/page.tsx'), 'utf8');
@@ -96,7 +147,16 @@ test('analytics route and responsive dashboard expose the Day 8 contract', () =>
 
   assert.match(route, /public-summary\.json/);
   assert.match(route, /no-store/);
-  for (const label of ['Total calls', 'Successful calls', 'Failed calls', 'Success rate']) {
+  for (const label of [
+    'Total calls',
+    'Total duration',
+    'FinEd speaking',
+    'TaxEd speaking',
+    'Handoffs',
+    'Successful calls',
+    'Failed calls',
+    'Success rate',
+  ]) {
     assert.ok(dashboard.includes(label), `missing metric: ${label}`);
   }
   assert.match(dashboard, /setInterval/);

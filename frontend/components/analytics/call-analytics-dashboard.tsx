@@ -13,6 +13,7 @@ import { cn } from '@/lib/shadcn/utils';
 
 const DETAIL_LABELS: Record<CallDetail, string> = {
   grounded_answer_delivered: 'Grounded answer delivered',
+  tax_rule_delivered: 'Verified tax rule delivered',
   market_quote_delivered: 'Trusted quote delivered',
   historical_return_calculated: 'Historical return calculated',
   paper_fill_completed: 'Paper fill completed',
@@ -95,6 +96,10 @@ export function CallAnalyticsDashboard() {
     successful_calls: 0,
     failed_calls: 0,
     success_rate_percent: 0,
+    total_duration_seconds: 0,
+    fined_talk_seconds: 0,
+    taxed_talk_seconds: 0,
+    handoff_count: 0,
   };
 
   return (
@@ -148,6 +153,25 @@ export function CallAnalyticsDashboard() {
 
         <Reveal delay={0.05} className="mt-7 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <MetricCard label="Total calls" value={totals.total_calls} tone="blue" />
+          <MetricCard
+            label="Total duration"
+            value={totals.total_duration_seconds}
+            suffix="s"
+            tone="ink"
+          />
+          <MetricCard
+            label="FinEd speaking"
+            value={totals.fined_talk_seconds}
+            suffix="s"
+            tone="blue"
+          />
+          <MetricCard
+            label="TaxEd speaking"
+            value={totals.taxed_talk_seconds}
+            suffix="s"
+            tone="green"
+          />
+          <MetricCard label="Handoffs" value={totals.handoff_count} tone="ink" />
           <MetricCard label="Successful calls" value={totals.successful_calls} tone="green" />
           <MetricCard label="Failed calls" value={totals.failed_calls} tone="red" />
           <MetricCard
@@ -172,7 +196,7 @@ export function CallAnalyticsDashboard() {
                 <p className="flex gap-2 text-sm leading-6 text-[var(--muted-ink)]">
                   <ShieldCheck aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
                   No phone numbers, participant identities or transcripts are collected for this
-                  dashboard.
+                  dashboard. Audio is never stored.
                 </p>
               </div>
             </aside>
@@ -204,12 +228,15 @@ export function CallAnalyticsDashboard() {
                 </div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-[42rem] border-collapse text-left">
+                  <table className="w-full min-w-[68rem] border-collapse text-left">
                     <thead className="bg-[var(--paper)] text-xs text-[var(--muted-ink)] uppercase">
                       <tr>
                         <th className="px-5 py-3 font-semibold">Call</th>
                         <th className="px-5 py-3 font-semibold">Channel</th>
-                        <th className="px-5 py-3 font-semibold">Duration</th>
+                        <th className="px-5 py-3 font-semibold">Total duration</th>
+                        <th className="px-5 py-3 font-semibold">FinEd speaking</th>
+                        <th className="px-5 py-3 font-semibold">TaxEd speaking</th>
+                        <th className="px-5 py-3 font-semibold">Handoffs</th>
                         <th className="px-5 py-3 font-semibold">Outcome</th>
                         <th className="px-5 py-3 font-semibold">Completed detail</th>
                       </tr>
@@ -230,6 +257,13 @@ export function CallAnalyticsDashboard() {
                           <td className="font-data px-5 py-4 text-sm">
                             {formatDuration(call.duration_seconds)}
                           </td>
+                          <td className="font-data px-5 py-4 text-sm">
+                            {formatDuration(call.fined_talk_seconds)}
+                          </td>
+                          <td className="font-data px-5 py-4 text-sm">
+                            {formatDuration(call.taxed_talk_seconds)}
+                          </td>
+                          <td className="font-data px-5 py-4 text-sm">{call.handoff_count}</td>
                           <td className="px-5 py-4">
                             <span
                               className={cn(

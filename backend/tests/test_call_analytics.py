@@ -8,12 +8,85 @@ import pytest
 
 from fined.call_analytics import (
     CALL_SUCCESS_DEFINITION,
+    AgentTalkTimeTracker,
     CallAnalyticsInput,
     CallAnalyticsValidationError,
     SQLiteCallAnalyticsStore,
 )
 
 STARTED = datetime(2026, 8, 13, 4, 30, tzinfo=UTC)
+
+
+class FakeMonotonicClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def test_agent_talk_time_tracks_valid_intervals_and_closes_at_shutdown() -> None:
+    # Catches transcript or voice-label inference replacing state-backed interval timing.
+    clock = FakeMonotonicClock()
+    tracker = AgentTalkTimeTracker(clock=clock)
+
+    tracker.on_agent_state_changed("listening", "speaking", "fined")
+    clock.advance(2.6)
+    tracker.on_agent_state_changed("speaking", "thinking", "fined")
+    tracker.on_agent_state_changed("thinking", "speaking", "taxed")
+    clock.advance(1.6)
+
+    assert tracker.close() == {
+        "fined_talk_seconds": 3,
+        "taxed_talk_seconds": 2,
+    }
+    assert tracker.close() == {
+        "fined_talk_seconds": 3,
+        "taxed_talk_seconds": 2,
+    }
+
+
+def test_agent_talk_time_fails_closed_on_unknown_labels_and_invalid_transitions() -> (
+    None
+):
+    # Catches unknown agents or duplicate transitions being charged to a known specialist.
+    clock = FakeMonotonicClock()
+    tracker = AgentTalkTimeTracker(clock=clock)
+
+    tracker.on_agent_state_changed("listening", "speaking", "mystery")
+    clock.advance(8)
+    tracker.on_agent_state_changed("speaking", "listening", "mystery")
+    tracker.on_agent_state_changed("listening", "speaking", "fined")
+    clock.advance(4)
+    tracker.on_agent_state_changed("speaking", "speaking", "fined")
+    clock.advance(5)
+    tracker.on_agent_state_changed("speaking", "listening", "fined")
+
+    assert tracker.close() == {
+        "fined_talk_seconds": 0,
+        "taxed_talk_seconds": 0,
+    }
+
+
+def test_agent_talk_time_rejects_unknown_livekit_states_and_malformed_labels() -> None:
+    # Catches corrupted state events opening an interval under a valid-looking label.
+    clock = FakeMonotonicClock()
+    tracker = AgentTalkTimeTracker(clock=clock)
+
+    tracker.on_agent_state_changed("unknown", "speaking", "fined")
+    clock.advance(2)
+    tracker.on_agent_state_changed("speaking", "listening", "fined")
+    tracker.on_agent_state_changed("listening", "speaking", ["fined"])
+    clock.advance(2)
+    tracker.on_agent_state_changed("speaking", "listening", ["fined"])
+
+    assert tracker.close() == {
+        "fined_talk_seconds": 0,
+        "taxed_talk_seconds": 0,
+    }
 
 
 def test_real_call_outcomes_update_private_sqlite_and_public_snapshot(tmp_path) -> None:
@@ -29,6 +102,9 @@ def test_real_call_outcomes_update_private_sqlite_and_public_snapshot(tmp_path) 
             started_at=STARTED,
             ended_at=STARTED + timedelta(seconds=42),
             success_condition="market_quote_delivered",
+            fined_talk_seconds=20,
+            taxed_talk_seconds=12,
+            handoff_count=2,
         )
     )
     store.record(
@@ -48,6 +124,10 @@ def test_real_call_outcomes_update_private_sqlite_and_public_snapshot(tmp_path) 
         "successful_calls": 1,
         "failed_calls": 1,
         "success_rate_percent": 50.0,
+        "total_duration_seconds": 51,
+        "fined_talk_seconds": 20,
+        "taxed_talk_seconds": 12,
+        "handoff_count": 2,
     }
     assert summary["recent_calls"] == [
         {
@@ -57,6 +137,9 @@ def test_real_call_outcomes_update_private_sqlite_and_public_snapshot(tmp_path) 
             "channel": "sip",
             "outcome": "failed",
             "detail": "incomplete",
+            "fined_talk_seconds": 0,
+            "taxed_talk_seconds": 0,
+            "handoff_count": 0,
         },
         {
             "call_id": "CALL-A1B2-C3D4-E5F6-0123-4567-89AB",
@@ -65,6 +148,9 @@ def test_real_call_outcomes_update_private_sqlite_and_public_snapshot(tmp_path) 
             "channel": "browser",
             "outcome": "successful",
             "detail": "market_quote_delivered",
+            "fined_talk_seconds": 20,
+            "taxed_talk_seconds": 12,
+            "handoff_count": 2,
         },
     ]
     assert json.loads(snapshot.read_text()) == summary
@@ -81,8 +167,101 @@ def test_real_call_outcomes_update_private_sqlite_and_public_snapshot(tmp_path) 
         "duration_seconds",
         "outcome",
         "detail",
+        "fined_talk_seconds",
+        "taxed_talk_seconds",
+        "handoff_count",
     }
-    assert not columns & {"phone_number", "caller_id", "transcript", "room_name"}
+    assert not columns & {
+        "phone_number",
+        "caller_id",
+        "transcript",
+        "room_name",
+        "identity",
+        "audio",
+        "question",
+        "voice_provider",
+    }
+
+
+def test_tax_rule_success_is_fixed_and_stores_no_tax_question_or_source(
+    tmp_path,
+) -> None:
+    # Catches verified TaxEd outcomes leaking a learner question or registry record.
+    database = tmp_path / "fined.sqlite3"
+    store = SQLiteCallAnalyticsStore(
+        database, snapshot_path=tmp_path / "public-summary.json"
+    )
+
+    store.record(
+        CallAnalyticsInput(
+            call_id="CALL-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF",
+            channel="browser",
+            started_at=STARTED,
+            ended_at=STARTED + timedelta(seconds=10),
+            success_condition="tax_rule_delivered",
+            fined_talk_seconds=3,
+            taxed_talk_seconds=6,
+            handoff_count=1,
+        )
+    )
+
+    summary = store.public_summary()
+    assert summary["version"] == 2
+    assert summary["recent_calls"][0]["detail"] == "tax_rule_delivered"  # type: ignore[index]
+    serialized = json.dumps(summary)
+    for forbidden in ("question", "asset", "amount", "source_url"):
+        assert forbidden not in serialized
+
+
+def test_existing_version_one_table_migrates_speaking_fields_as_zero(tmp_path) -> None:
+    # Catches additive migration dropping old outcomes or returning null measurements.
+    database = tmp_path / "fined.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            CREATE TABLE call_outcomes (
+                call_id TEXT PRIMARY KEY,
+                channel TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                ended_at TEXT NOT NULL,
+                duration_seconds INTEGER NOT NULL,
+                outcome TEXT NOT NULL,
+                detail TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO call_outcomes VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "CALL-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF",
+                "browser",
+                STARTED.isoformat(),
+                (STARTED + timedelta(seconds=7)).isoformat(),
+                7,
+                "failed",
+                "incomplete",
+            ),
+        )
+
+    summary = SQLiteCallAnalyticsStore(
+        database, snapshot_path=tmp_path / "public-summary.json"
+    ).public_summary()
+
+    assert summary["totals"] == {
+        "total_calls": 1,
+        "successful_calls": 0,
+        "failed_calls": 1,
+        "success_rate_percent": 0.0,
+        "total_duration_seconds": 7,
+        "fined_talk_seconds": 0,
+        "taxed_talk_seconds": 0,
+        "handoff_count": 0,
+    }
+    assert summary["recent_calls"][0]["fined_talk_seconds"] == 0  # type: ignore[index]
+    assert summary["recent_calls"][0]["taxed_talk_seconds"] == 0  # type: ignore[index]
+    assert summary["recent_calls"][0]["handoff_count"] == 0  # type: ignore[index]
 
 
 def test_duplicate_shutdown_is_idempotent_and_invalid_outcomes_fail_closed(
@@ -143,4 +322,58 @@ def test_one_and_only_one_success_or_failure_detail_is_required() -> None:
             ended_at=STARTED,
             success_condition="OTP 123456",
             failure_type="incomplete",
+        )
+
+
+@pytest.mark.parametrize(
+    ("fined_talk_seconds", "taxed_talk_seconds", "handoff_count"),
+    [
+        (-1, 0, 0),
+        (0, -1, 0),
+        (0, 0, -1),
+        (1.5, 0, 0),
+        (0, 1.5, 0),
+        (0, 0, 1.5),
+        (True, 0, 0),
+    ],
+)
+def test_agent_measurements_require_non_negative_integers(
+    fined_talk_seconds: object,
+    taxed_talk_seconds: object,
+    handoff_count: object,
+) -> None:
+    # Catches malformed measurements entering the public summary.
+    with pytest.raises(CallAnalyticsValidationError):
+        CallAnalyticsInput(
+            call_id="CALL-A1B2-C3D4-E5F6-0123-4567-89AB",
+            channel="browser",
+            started_at=STARTED,
+            ended_at=STARTED + timedelta(seconds=5),
+            failure_type="incomplete",
+            fined_talk_seconds=fined_talk_seconds,  # type: ignore[arg-type]
+            taxed_talk_seconds=taxed_talk_seconds,  # type: ignore[arg-type]
+            handoff_count=handoff_count,  # type: ignore[arg-type]
+        )
+
+
+def test_agent_speaking_sum_allows_only_one_rounding_second() -> None:
+    # Catches impossible speaking time that exceeds the call measurement.
+    CallAnalyticsInput(
+        call_id="CALL-A1B2-C3D4-E5F6-0123-4567-89AB",
+        channel="browser",
+        started_at=STARTED,
+        ended_at=STARTED + timedelta(seconds=5),
+        failure_type="incomplete",
+        fined_talk_seconds=3,
+        taxed_talk_seconds=3,
+    )
+    with pytest.raises(CallAnalyticsValidationError):
+        CallAnalyticsInput(
+            call_id="CALL-A1B2-C3D4-E5F6-0123-4567-89AB",
+            channel="browser",
+            started_at=STARTED,
+            ended_at=STARTED + timedelta(seconds=5),
+            failure_type="incomplete",
+            fined_talk_seconds=4,
+            taxed_talk_seconds=3,
         )

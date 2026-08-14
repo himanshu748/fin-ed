@@ -5,11 +5,15 @@ financial-literacy tutor in the **Financial Services** track of VoiceForBharat.
 It connects to LiveKit Cloud as the named agent `my-agent`.
 
 ```text
-User speech -> Deepgram Nova-3 -> Gemini + FinEd tools -> Murf Falcon 2 -> audio
+User speech -> Deepgram Nova-3 -> Gemini + active agent tools -> Murf Falcon 2 -> audio
 ```
 
 The agent is education-only. It does not execute real trades or provide personalized
 investment advice. F&O help is limited to mechanics, simulation and risk.
+
+FinEd uses Nikhil for general learning. After fresh explicit permission, TaxEd
+uses Anusha for verified Indian investment-tax education in the same LiveKit
+session.
 
 ## Setup
 
@@ -22,22 +26,22 @@ cp .env.example .env.local
 
 Complete `.env.local` with your own credentials:
 
-| Variable             | Purpose                                                        |
-| -------------------- | -------------------------------------------------------------- |
-| `LIVEKIT_URL`        | LiveKit Cloud WebSocket URL                                    |
-| `LIVEKIT_API_KEY`    | LiveKit project API key                                        |
-| `LIVEKIT_API_SECRET` | LiveKit project API secret                                     |
-| `MURF_API_KEY`       | Murf speech synthesis                                          |
-| `DEEPGRAM_API_KEY`   | Deepgram speech recognition                                    |
-| `GOOGLE_API_KEY`     | Gemini conversation and optional knowledge embeddings          |
-| `GEMINI_MODEL`       | Optional exact model selection; defaults to `gemini-3.5-flash-lite` |
-| `FINED_MEMORY_DB_PATH` | Optional Day 4 SQLite path; defaults inside `data/memory`     |
-| `FINED_ESCALATION_DB_PATH` | Optional Day 7 SQLite path; defaults inside `data/escalations` |
-| `SIP_OUTBOUND_TRUNK_ID` | Optional stored LiveKit outbound SIP trunk ID (`ST_...`) for Day 6 |
-| `FINED_OUTBOUND_AGENT_NAME` | Optional Day 6 worker name; defaults to `my-agent`             |
-| `FINED_ESCALATION_CALLBACK_NUMBER` | Optional private Day 7 demo callback destination in E.164 format |
-| `FINED_ANALYTICS_DB_PATH` | Optional Day 8 private SQLite outcome path |
-| `FINED_ANALYTICS_SNAPSHOT_PATH` | Optional Day 8 caller-safe dashboard snapshot path |
+| Variable                           | Purpose                                                             |
+| ---------------------------------- | ------------------------------------------------------------------- |
+| `LIVEKIT_URL`                      | LiveKit Cloud WebSocket URL                                         |
+| `LIVEKIT_API_KEY`                  | LiveKit project API key                                             |
+| `LIVEKIT_API_SECRET`               | LiveKit project API secret                                          |
+| `MURF_API_KEY`                     | Murf speech synthesis                                               |
+| `DEEPGRAM_API_KEY`                 | Deepgram speech recognition                                         |
+| `GOOGLE_API_KEY`                   | Gemini conversation and optional knowledge embeddings               |
+| `GEMINI_MODEL`                     | Optional exact model selection; defaults to `gemini-3.5-flash-lite` |
+| `FINED_MEMORY_DB_PATH`             | Optional Day 4 SQLite path; defaults inside `data/memory`           |
+| `FINED_ESCALATION_DB_PATH`         | Optional Day 7 SQLite path; defaults inside `data/escalations`      |
+| `SIP_OUTBOUND_TRUNK_ID`            | Optional stored LiveKit outbound SIP trunk ID (`ST_...`) for Day 6  |
+| `FINED_OUTBOUND_AGENT_NAME`        | Optional Day 6 worker name; defaults to `my-agent`                  |
+| `FINED_ESCALATION_CALLBACK_NUMBER` | Optional private Day 7 demo callback destination in E.164 format    |
+| `FINED_ANALYTICS_DB_PATH`          | Optional Day 8 private SQLite outcome path                          |
+| `FINED_ANALYTICS_SNAPSHOT_PATH`    | Optional Day 8 caller-safe dashboard snapshot path                  |
 
 Do not commit `.env.local` or paste credentials into issues, logs, or docs.
 
@@ -155,6 +159,19 @@ The Day 1 Indian voice is configured in `src/agent.py`:
 | Locale  | `en-IN`          |
 | Model   | `falcon-2`       |
 
+TaxEd uses one server-owned Murf voice configuration:
+
+| Setting | Value                         |
+| ------- | ----------------------------- |
+| Voice   | `en-IN-anusha`                |
+| Style   | `Conversational`              |
+| Locales | `en-IN`, `hi-IN` or `hi-LATN` |
+| Model   | `falcon-2`                    |
+
+An authenticated live Murf catalogue check on 2026-08-14 confirmed these three
+locales and the Conversational style for Anusha. Unknown locale input falls back
+to `en-IN`. The browser and model cannot choose the voice identity.
+
 Speech recognition uses Deepgram Nova-3 with `language="multi"` and 100 ms
 endpointing for English/Hindi code-switching. The agent answers in concise
 Indian English and Hindi.
@@ -237,15 +254,68 @@ status, urgency, safe summary, completed checks and honest next step.
 Every ended browser or answered SIP session writes one minimal outcome to
 `data/analytics/fined.sqlite3`. A call is successful only when the learner
 receives grounded evidence, a trusted quote, a historical return calculation,
-a confirmed paper fill or a created human-help request. A greeting or abandoned
-conversation does not count as success.
+a confirmed paper fill, a verified tax rule or a created human-help request. A
+greeting or abandoned conversation does not count as success.
 
 The store publishes `data/analytics/public-summary.json` atomically after each
-ended call. It contains total, successful and failed counts, success rate and up
-to 20 recent anonymous rows. The schema has no caller ID, phone number, room
-name or transcript. The frontend validates this strict allowlist again and
-serves it at `/api/analytics`; the dashboard at `/analytics` refreshes every
-five seconds.
+ended call. Version 2 contains aggregate total duration, FinEd speaking time,
+TaxEd speaking time, committed handoffs, success counts and up to 20 recent
+anonymous rows with the same measurements. Existing rows migrate with zero
+speaking time and zero handoffs.
+
+The lifecycle measures speaking intervals from LiveKit
+`agent_state_changed` events with a monotonic clock. It attributes an interval
+only from `SessionState.active_agent_name`, closes an open interval at shutdown
+and persists the committed `SessionState.agent_handoff_count`. Unknown labels
+and invalid transitions add no time. The schema stores no audio, transcript,
+utterance text, caller identity, phone number or voice provider data. The
+frontend validates the strict allowlist again and serves it at `/api/analytics`.
+The dashboard at `/analytics` refreshes every five seconds.
+
+## Day 9 TaxEd handoff and operator demo
+
+TaxEd handles only sourced general rules for Indian investment taxation. FinEd
+offers the specialist only for an in-scope tax question and does not answer that
+rule from model knowledge. A new explicit yes must immediately follow the exact
+permission prompt. An earlier yes, silence, an unclear response or a no cannot
+switch agents. TaxEd uses the same consent rule before returning to FinEd.
+
+The FinEd to TaxEd prompts are fixed by locale:
+
+- English: "This is an investment-tax question. Would you like me to connect you to TaxEd?"
+- Hindi: "यह निवेश कर से जुड़ा सवाल है। क्या आप TaxEd से जुड़ना चाहेंगे?"
+- Hinglish: "Yeh investment tax ka sawaal hai. Kya aap TaxEd se connect hona chahenge?"
+
+The local registry was checked against official sources on 2026-08-14. For a
+transaction or payment from 1 April 2026, use the Income-tax Act, 2025 as
+amended by the Finance Act, 2026. Earlier assessment or payment periods can
+remain under the Income-tax Act, 1961. TaxEd asks for the applicable period
+before stating a section or rate when the date is unclear.
+
+TaxEd cannot trade, prepare a paper order, calculate personal tax liability or
+file an ITR. It cannot recommend tax avoidance, mutate caller memory or use
+general model knowledge as a tax source. An unsupported or stale rule produces
+a fixed abstention.
+
+Use this operator demo:
+
+1. Ask "What is an ETF?" and confirm FinEd answers directly.
+2. Ask "How is an equity ETF taxed in India?"
+3. Wait for the permission prompt then answer with a fresh yes.
+4. Confirm the active badge changes to TaxEd with Anusha.
+5. Confirm the answer includes an applicability date and an official link.
+6. Ask a non-tax learning question then approve the return to FinEd.
+
+Refresh `last_verified_on` and `review_due_on` only after reopening each cited
+official source and confirming the rule text, dates and applicability note.
+The loader accepts only reviewed government, regulator or exchange hosts. Run:
+
+```bash
+uv run pytest tests/test_tax_rules.py -q
+```
+
+A rule past `review_due_on` is stale and unavailable until this official-source
+review is completed.
 
 ## Knowledge-index behavior
 
@@ -255,7 +325,7 @@ warning and installs an unavailable retriever whose searches return no evidence.
 The knowledge tool then tells the agent that evidence is unavailable, so it
 cannot invent a source-backed answer.
 
-If `current` exists—including as a broken symlink or malformed pointer—the
+If `current` exists, including as a broken symlink or malformed pointer, the
 backend attempts to load it and propagates the validation failure. This keeps a
 bad build distinct from an index that has never been published.
 
@@ -370,7 +440,9 @@ backend/
 - [LiveKit Agents](https://docs.livekit.io/agents/)
 - [Deepgram Nova-3](https://developers.deepgram.com/docs/models-languages-overview)
 - [Gemini models](https://ai.google.dev/gemini-api/docs/models)
+- [Income-tax Act, 2025 as amended by Finance Act, 2026](https://www.incometaxindia.gov.in/documents/d/guest/income_tax_act_2025_as_amended_by_fa_act_2026-pdf)
+- [Income Tax Department transition FAQ](https://www.incometax.gov.in/iec/foportal/help/all-topics/e-filing-services/General%20Questions-faqs?mobile-app=1)
 
 ## License
 
-MIT — see the repository's `LICENSE` file.
+MIT. See the repository's `LICENSE` file.

@@ -2,6 +2,7 @@ export type CallChannel = 'browser' | 'sip';
 export type CallOutcome = 'successful' | 'failed';
 export type CallDetail =
   | 'grounded_answer_delivered'
+  | 'tax_rule_delivered'
   | 'market_quote_delivered'
   | 'historical_return_calculated'
   | 'paper_fill_completed'
@@ -13,13 +14,17 @@ export type CallDetail =
   | 'system_error';
 
 export interface CallAnalyticsSummary {
-  version: 1;
+  version: 2;
   success_definition: string;
   totals: {
     total_calls: number;
     successful_calls: number;
     failed_calls: number;
     success_rate_percent: number;
+    total_duration_seconds: number;
+    fined_talk_seconds: number;
+    taxed_talk_seconds: number;
+    handoff_count: number;
   };
   recent_calls: Array<{
     call_id: string;
@@ -28,27 +33,38 @@ export interface CallAnalyticsSummary {
     channel: CallChannel;
     outcome: CallOutcome;
     detail: CallDetail;
+    fined_talk_seconds: number;
+    taxed_talk_seconds: number;
+    handoff_count: number;
   }>;
 }
 
 const SUMMARY_KEYS = ['recent_calls', 'success_definition', 'totals', 'version'] as const;
 const TOTAL_KEYS = [
   'failed_calls',
+  'fined_talk_seconds',
+  'handoff_count',
   'success_rate_percent',
   'successful_calls',
+  'taxed_talk_seconds',
   'total_calls',
+  'total_duration_seconds',
 ] as const;
 const CALL_KEYS = [
   'call_id',
   'channel',
   'detail',
   'duration_seconds',
+  'fined_talk_seconds',
+  'handoff_count',
   'outcome',
   'started_at',
+  'taxed_talk_seconds',
 ] as const;
 const CALL_ID = /^CALL-(?:[A-F0-9]{4}-){5}[A-F0-9]{4}$/;
 const DETAILS = new Set<CallDetail>([
   'grounded_answer_delivered',
+  'tax_rule_delivered',
   'market_quote_delivered',
   'historical_return_calculated',
   'paper_fill_completed',
@@ -61,6 +77,7 @@ const DETAILS = new Set<CallDetail>([
 ]);
 const SUCCESS_DETAILS = new Set<CallDetail>([
   'grounded_answer_delivered',
+  'tax_rule_delivered',
   'market_quote_delivered',
   'historical_return_calculated',
   'paper_fill_completed',
@@ -83,21 +100,25 @@ function safeCount(value: unknown): number {
 
 export function emptyCallAnalyticsSummary(): CallAnalyticsSummary {
   return {
-    version: 1,
+    version: 2,
     success_definition:
-      'The learner completed a verified action using grounded evidence, trusted data, paper practice or human help.',
+      'The learner completed a verified action using grounded evidence, trusted data, a verified tax rule, paper practice or human help.',
     totals: {
       total_calls: 0,
       successful_calls: 0,
       failed_calls: 0,
       success_rate_percent: 0,
+      total_duration_seconds: 0,
+      fined_talk_seconds: 0,
+      taxed_talk_seconds: 0,
+      handoff_count: 0,
     },
     recent_calls: [],
   };
 }
 
 export function decodeCallAnalyticsSummary(value: unknown): CallAnalyticsSummary {
-  if (!isRecord(value) || !hasExactKeys(value, SUMMARY_KEYS) || value.version !== 1) {
+  if (!isRecord(value) || !hasExactKeys(value, SUMMARY_KEYS) || value.version !== 2) {
     throw new Error('Invalid analytics summary');
   }
   if (
@@ -113,6 +134,10 @@ export function decodeCallAnalyticsSummary(value: unknown): CallAnalyticsSummary
   const totalCalls = safeCount(value.totals.total_calls);
   const successfulCalls = safeCount(value.totals.successful_calls);
   const failedCalls = safeCount(value.totals.failed_calls);
+  const totalDuration = safeCount(value.totals.total_duration_seconds);
+  const finedTalk = safeCount(value.totals.fined_talk_seconds);
+  const taxedTalk = safeCount(value.totals.taxed_talk_seconds);
+  const handoffs = safeCount(value.totals.handoff_count);
   const rate = value.totals.success_rate_percent;
   if (
     successfulCalls + failedCalls !== totalCalls ||
@@ -121,7 +146,8 @@ export function decodeCallAnalyticsSummary(value: unknown): CallAnalyticsSummary
     rate < 0 ||
     rate > 100 ||
     Math.abs(rate - (totalCalls ? Math.round((successfulCalls * 1000) / totalCalls) / 10 : 0)) >
-      0.001
+      0.001 ||
+    finedTalk + taxedTalk > totalDuration + totalCalls
   ) {
     throw new Error('Inconsistent analytics totals');
   }
@@ -158,6 +184,12 @@ export function decodeCallAnalyticsSummary(value: unknown): CallAnalyticsSummary
     if ((outcome === 'successful') !== SUCCESS_DETAILS.has(detail)) {
       throw new Error('Inconsistent call outcome');
     }
+    const finedTalkSeconds = safeCount(candidate.fined_talk_seconds);
+    const taxedTalkSeconds = safeCount(candidate.taxed_talk_seconds);
+    const handoffCount = safeCount(candidate.handoff_count);
+    if (finedTalkSeconds + taxedTalkSeconds > duration + 1) {
+      throw new Error('Inconsistent call speaking time');
+    }
     return {
       call_id: candidate.call_id,
       started_at: candidate.started_at,
@@ -165,17 +197,24 @@ export function decodeCallAnalyticsSummary(value: unknown): CallAnalyticsSummary
       channel,
       outcome,
       detail,
+      fined_talk_seconds: finedTalkSeconds,
+      taxed_talk_seconds: taxedTalkSeconds,
+      handoff_count: handoffCount,
     };
   });
 
   return {
-    version: 1,
+    version: 2,
     success_definition: value.success_definition,
     totals: {
       total_calls: totalCalls,
       successful_calls: successfulCalls,
       failed_calls: failedCalls,
       success_rate_percent: rate,
+      total_duration_seconds: totalDuration,
+      fined_talk_seconds: finedTalk,
+      taxed_talk_seconds: taxedTalk,
+      handoff_count: handoffs,
     },
     recent_calls: recentCalls,
   };

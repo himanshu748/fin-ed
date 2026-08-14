@@ -9,6 +9,7 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
+from time import monotonic
 from typing import Protocol
 
 from dotenv import load_dotenv
@@ -17,6 +18,7 @@ from livekit import api, rtc
 from livekit.agents import (
     AgentServer,
     AgentSession,
+    AgentStateChangedEvent,
     ErrorEvent,
     JobContext,
     JobProcess,
@@ -40,6 +42,7 @@ from fined.agent import (
 )
 from fined.agent_status_bridge import LiveKitAgentStatusBridge
 from fined.call_analytics import (
+    AgentTalkTimeTracker,
     CallAnalyticsInput,
     SQLiteCallAnalyticsStore,
     new_call_id,
@@ -470,6 +473,7 @@ async def my_agent(ctx: JobContext) -> None:
             )
 
         usage = metrics.UsageCollector()
+        talk_time_tracker = AgentTalkTimeTracker(clock=monotonic)
 
         @session.on("metrics_collected")
         def on_metrics(event: MetricsCollectedEvent) -> None:
@@ -495,6 +499,14 @@ async def my_agent(ctx: JobContext) -> None:
                     logger.warning("LLM fallback speech failed")
 
             llm_fallback_task = asyncio.create_task(speak_llm_fallback())
+
+        @session.on("agent_state_changed")
+        def on_agent_state_changed(event: AgentStateChangedEvent) -> None:
+            talk_time_tracker.on_agent_state_changed(
+                event.old_state,
+                event.new_state,
+                state.active_agent_name,
+            )
 
         async def on_paper_order_result(data: rtc.RpcInvocationData) -> str:
             if data.caller_identity != participant.identity:
@@ -584,6 +596,7 @@ async def my_agent(ctx: JobContext) -> None:
                     else:
                         failure_type = "no_completed_action"
                 try:
+                    talk_times = talk_time_tracker.close()
                     analytics_store.record(
                         CallAnalyticsInput(
                             call_id=analytics_call_id,
@@ -594,6 +607,9 @@ async def my_agent(ctx: JobContext) -> None:
                             ended_at=datetime.now(UTC),
                             success_condition=state.analytics_success_condition,
                             failure_type=failure_type,
+                            fined_talk_seconds=talk_times["fined_talk_seconds"],
+                            taxed_talk_seconds=talk_times["taxed_talk_seconds"],
+                            handoff_count=state.agent_handoff_count,
                         )
                     )
                 except Exception:
