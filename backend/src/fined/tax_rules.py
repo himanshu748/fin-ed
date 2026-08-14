@@ -102,6 +102,7 @@ class TaxRuleRegistry:
         as_of_date: date,
         category: str | None = None,
         limit: int = _MAX_RESULTS,
+        checked_on: date | None = None,
     ) -> list[TaxRule]:
         """Return keyword-matched, currently reviewed rule records.
 
@@ -112,6 +113,8 @@ class TaxRuleRegistry:
             raise ValueError("query must be bounded text")
         if not isinstance(as_of_date, date):
             raise ValueError("as_of_date must be a date")
+        if checked_on is not None and not isinstance(checked_on, date):
+            raise ValueError("checked_on must be a date")
         if category is not None and (
             not isinstance(category, str) or len(category) > _MAX_TEXT_LENGTH
         ):
@@ -121,11 +124,14 @@ class TaxRuleRegistry:
         if limit <= 0:
             return []
 
-        query_tokens = frozenset(_tokens(query))
+        query_tokens = _tokens(query)
+        review_check_date = checked_on or date.today()
         category_key = category.casefold() if category is not None else None
         matches: list[tuple[int, str, TaxRule]] = []
         for rule in self._rules:
-            if rule.review_due_on < as_of_date or rule.effective_from > as_of_date:
+            if rule.review_due_on < review_check_date:
+                continue
+            if rule.effective_from > as_of_date:
                 continue
             if rule.effective_to is not None and rule.effective_to < as_of_date:
                 continue
@@ -137,7 +143,7 @@ class TaxRuleRegistry:
             score = sum(
                 1
                 for keyword in rule.keywords
-                if query_tokens.intersection(_tokens(keyword))
+                if _keyword_matches(query_tokens, _tokens(keyword))
             )
             if score:
                 matches.append((score, rule.rule_id, rule))
@@ -217,6 +223,10 @@ def _parse_rule(raw_rule: dict[str, Any], index: int) -> TaxRule:
     status = raw_rule["status"]
     if status not in ("current", "superseded"):
         raise TaxRuleConfigurationError(f"Tax rule {index} has an invalid status")
+    if status == "superseded" and effective_to is None:
+        raise TaxRuleConfigurationError(
+            f"Tax rule {index} superseded records require an effective_to date"
+        )
     return TaxRule(
         rule_id=rule_id,
         topic=topic,
@@ -284,3 +294,15 @@ def _official_url(value: Any, index: int) -> str:
 
 def _tokens(text: str) -> tuple[str, ...]:
     return tuple(token.casefold() for token in _TOKEN_PATTERN.findall(text.casefold()))
+
+
+def _keyword_matches(
+    query_tokens: Sequence[str], keyword_tokens: Sequence[str]
+) -> bool:
+    if not keyword_tokens or len(keyword_tokens) > len(query_tokens):
+        return False
+    width = len(keyword_tokens)
+    return any(
+        query_tokens[index : index + width] == keyword_tokens
+        for index in range(len(query_tokens) - width + 1)
+    )

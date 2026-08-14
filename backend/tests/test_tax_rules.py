@@ -14,6 +14,11 @@ from fined.tax_rules import (
     validate_tax_rule_data,
 )
 
+AMENDED_ACT_URL = (
+    "https://www.incometaxindia.gov.in/documents/d/guest/"
+    "income_tax_act_2025_as_amended_by_fa_act_2026-pdf"
+)
+
 
 def packaged_rule_data() -> list[dict[str, object]]:
     rule_file = resources.files("fined.data").joinpath(
@@ -64,6 +69,21 @@ def test_current_equity_etf_lookup_prefers_section_198_and_serializes_source() -
     )
 
 
+def test_packaged_dividend_rule_uses_section_93_no_deduction_boundary() -> None:
+    dividend_rule = next(
+        rule
+        for rule in packaged_rule_data()
+        if rule["rule_id"] == "ita2025_resident_dividends"
+    )
+
+    assert dividend_rule["official_source_url"] == AMENDED_ACT_URL
+    assert dividend_rule["plain_explanation"] == (
+        "From 1 April 2026, Section 93(2) permits no deduction for dividend "
+        "income or income from units of a mutual fund specified under section "
+        "10(4)(d)."
+    )
+
+
 @pytest.mark.parametrize(
     ("url", "message"),
     [
@@ -101,6 +121,11 @@ def test_validation_rejects_duplicate_rule_ids() -> None:
         validate_tax_rule_data([rule_data(), duplicate])
 
 
+def test_validation_rejects_open_ended_superseded_rule() -> None:
+    with pytest.raises(TaxRuleConfigurationError, match="superseded"):
+        validate_tax_rule_data([rule_data(status="superseded")])
+
+
 def test_search_filters_by_effective_date_category_and_expired_review() -> None:
     rules = validate_tax_rule_data(
         [
@@ -136,8 +161,67 @@ def test_search_filters_by_effective_date_category_and_expired_review() -> None:
         rules[2]
     ]
     assert (
-        registry.search("gain", as_of_date=date(2026, 10, 1), category="equity") == []
+        registry.search(
+            "gain",
+            as_of_date=date(2026, 10, 1),
+            category="equity",
+            checked_on=date(2026, 10, 1),
+        )
+        == []
     )
+
+
+def test_search_fails_closed_when_checked_after_review_due_date() -> None:
+    registry = TaxRuleRegistry(validate_tax_rule_data([rule_data(keywords=["gain"])]))
+
+    assert (
+        registry.search(
+            "gain",
+            as_of_date=date(2026, 8, 1),
+            checked_on=date(2026, 9, 15),
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_rule_ids"),
+    [
+        ("How is a gold ETF taxed?", []),
+        ("How are debt funds taxed?", ["ita2025_section76_debt_and_unlisted_bonds"]),
+        ("How are dividends taxed?", ["ita2025_resident_dividends"]),
+    ],
+)
+def test_uncategorized_search_matches_complete_stored_keyword_phrases(
+    query: str, expected_rule_ids: list[str]
+) -> None:
+    results = load_packaged_tax_rules().search(
+        query,
+        as_of_date=date(2026, 8, 14),
+        checked_on=date(2026, 8, 14),
+    )
+
+    assert [rule.rule_id for rule in results] == expected_rule_ids
+
+
+def test_transition_search_selects_the_act_for_the_question_date() -> None:
+    registry = load_packaged_tax_rules()
+
+    historical_results = registry.search(
+        "Which Income-tax Act applies for this tax year?",
+        as_of_date=date(2026, 3, 31),
+        checked_on=date(2026, 8, 14),
+    )
+    current_results = registry.search(
+        "Which Income-tax Act applies for this tax year?",
+        as_of_date=date(2026, 4, 1),
+        checked_on=date(2026, 8, 14),
+    )
+
+    assert [rule.rule_id for rule in historical_results] == [
+        "ita1961_transition_before_2026"
+    ]
+    assert [rule.rule_id for rule in current_results] == ["ita2025_transition_2026"]
 
 
 def test_search_ranks_keyword_matches_deterministically() -> None:
