@@ -242,6 +242,66 @@ def test_natural_comet_agreement_returns_to_fined() -> None:
 
 
 @pytest.mark.parametrize(
+    "agreement",
+    [
+        "Switch me back to FinEd.",
+        "Switching over to FinEd.",
+        "Connect me back to FinEd.",
+        "Go back to FinEd.",
+        "FinEd par wapas le chalo.",
+        "मुझे FinEd पर वापस ले चलिए।",
+    ],
+)
+def test_direct_fined_return_command_is_an_agreement(agreement: str) -> None:
+    pending = create_pending_handoff(
+        direction="fined",
+        question="Can you explain what an ETF is?",
+        locale="en-IN",
+        question_turn_id="turn-direct-return",
+        now=10.0,
+    )
+
+    assert (
+        validate_handoff_agreement(
+            pending,
+            _consent_context(pending, agreement),
+            now=20.0,
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "I used FinEd yesterday.",
+        "You switched me to FinEd yesterday.",
+        "Maybe switch me to FinEd later.",
+        "Do not switch me back to FinEd.",
+    ],
+)
+def test_fined_reference_without_a_direct_return_command_is_not_agreement(
+    statement: str,
+) -> None:
+    pending = create_pending_handoff(
+        direction="fined",
+        question="Can you explain what an ETF is?",
+        locale="en-IN",
+        question_turn_id="turn-return-boundary",
+        now=10.0,
+    )
+
+    assert (
+        validate_handoff_agreement(
+            pending,
+            _consent_context(pending, statement),
+            now=20.0,
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
     ("direction", "wrong_target"),
     [
         ("taxed", "Yes, reconnect me to FinEd."),

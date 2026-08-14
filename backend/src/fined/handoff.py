@@ -655,11 +655,21 @@ def _is_affirmation_for_direction(text: str, direction: HandoffDirection) -> boo
     if any(phrase in normalized for phrase in ("don t", "won t", "cannot")):
         return False
 
-    opposite_target_phrases = {
-        "taxed": ("fined", "finette", "fin ed"),
-        "fined": ("taxed", "tax ed"),
+    direction_target_words = {
+        "taxed": {"taxed"},
+        "fined": {"fined", "finette"},
     }
-    if any(target in normalized for target in opposite_target_phrases[direction]):
+    direction_target_phrases = {
+        "taxed": ("tax ed",),
+        "fined": ("fin ed",),
+    }
+    opposite_direction: HandoffDirection = "fined" if direction == "taxed" else "taxed"
+    has_opposite_target = bool(
+        words & direction_target_words[opposite_direction]
+    ) or any(
+        target in normalized for target in direction_target_phrases[opposite_direction]
+    )
+    if has_opposite_target:
         return False
 
     positive_words = {
@@ -683,22 +693,42 @@ def _is_affirmation_for_direction(text: str, direction: HandoffDirection) -> boo
     )
     action_phrases = (
         "go ahead",
+        "go back",
         "kar do",
         "kar dijiye",
+        "wapas",
+        "le chalo",
         "कर दो",
         "कर दीजिए",
+        "वापस",
+        "ले चलिए",
         "जोड़",
         "जोड़",
         "मिला",
+        "लौट",
     )
     has_positive = bool(words & positive_words) or any(
         phrase in normalized for phrase in positive_phrases
     )
-    has_action = any(
-        word.startswith(("connect", "reconnect", "switch", "transfer"))
-        for word in words
+    has_action = bool(
+        words
+        & {
+            "connect",
+            "connecting",
+            "reconnect",
+            "reconnecting",
+            "switch",
+            "switching",
+            "transfer",
+            "transferring",
+            "return",
+            "returning",
+        }
     ) or any(phrase in normalized for phrase in action_phrases)
-    return has_positive and has_action
+    has_expected_target = bool(words & direction_target_words[direction]) or any(
+        target in normalized for target in direction_target_phrases[direction]
+    )
+    return has_action and (has_positive or has_expected_target)
 
 
 def _redact_long_digit_candidate(match: re.Match[str]) -> str:
