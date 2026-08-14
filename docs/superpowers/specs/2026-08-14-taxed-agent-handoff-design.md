@@ -73,11 +73,9 @@ specialty: null | Investment Tax Specialist
 
 The frontend rejects unknown fields, invalid combinations, oversized payloads and calls from any participant other than the connected backend agent.
 
-The separate citation payload is also versioned and contains only `message_id`, `rule_id`, `source_title`, `source_url` and `applicability`. The backend builds it from the validated registry result. The frontend cannot submit or alter citations.
-
 ### Transcript sources
 
-TaxEd's transcript answer includes a concise official source link and the rule's applicability date. The link is sent as a structured, registry-sourced citation event and rendered beside the answer. It is not part of the TTS text. Spoken audio names the source in natural language but does not read a URL aloud.
+TaxEd's transcript answer includes a concise official source link and the rule's applicability date. TaxEd reuses the existing speech normalizer, which removes Markdown URLs from the text sent to TTS while preserving the visible transcript. Spoken audio names the source in natural language but does not read a URL aloud.
 
 ## Architecture
 
@@ -286,7 +284,6 @@ The event may count as the Day 8 successful outcome. A handoff by itself does no
 
 - Add the validated active-agent state to the voice workspace controller.
 - Register one scoped RPC handler for versioned agent status payloads.
-- Register one strict read-only citation event whose URL and dates come only from a validated registry record.
 - Render the active-agent badge near the existing session status.
 - Keep the room, transcript, session list and paper-practice state mounted across handoffs.
 - Render official transcript source links as safe external links with descriptive labels.
