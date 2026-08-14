@@ -288,9 +288,12 @@ _LEAVE_REPORTING_OFF = re.compile(
     re.IGNORECASE,
 )
 _TAX_SAVING_MARKERS = (
+    "elss",
     "tax-saving",
     "tax saving",
     "save tax",
+    "reduce tax",
+    "reduce my tax",
     "bachane wala",
     "tax bachane",
     "tax bacha",
@@ -304,6 +307,7 @@ _RECOMMENDATION_MARKERS = (
     "recommend",
     "suggest",
     "choose",
+    "pick",
     "buy",
     "take",
     "invest",
@@ -331,6 +335,7 @@ _TRADE_ACTIONS = (
     "बेच",
     "खरीदो",
     "बेचो",
+    "लगा दो",
 )
 _TRADE_ASSETS = (
     "share",
@@ -361,8 +366,9 @@ _TRADE_EXECUTION_MARKERS = (
     "मेरे लिए",
     "कर दो",
     "करो",
+    "लगा दो",
 )
-_PAPER_ORDER_MARKERS = ("paper trade", "paper order")
+_PAPER_ORDER_MARKERS = ("paper trade", "paper order", "पेपर ऑर्डर")
 _LEADING_TRADE_ACTION = re.compile(
     r"^(?:please\s+)?(?:buy|sell|purchase|place|execute|confirm)\b",
     re.IGNORECASE,

@@ -189,6 +189,8 @@ def test_taxed_prompt_requires_sourced_date_bound_fail_closed_answers() -> None:
         "Income mat dikhao ITR mein.",
         "Recommend a tax-saving transaction for me.",
         "Which tax-saving fund should I buy?",
+        "Which ELSS fund should I pick to reduce my tax?",
+        "Which fund should I pick to reduce my tax?",
         "मेरे लिए टैक्स बचाने वाला फंड चुन दो।",
         "कर बचाने के लिए कौन सी योजना लूँ?",
         "Mere liye tax-saving fund suggest karo.",
@@ -196,6 +198,7 @@ def test_taxed_prompt_requires_sourced_date_bound_fail_closed_answers() -> None:
         "Prepare a paper order to buy this ETF.",
         "Put in a paper order for 10 Reliance shares.",
         "Paper trade mein 10 Reliance shares buy kar do.",
+        "मेरे लिए शेयर का पेपर ऑर्डर लगा दो।",
         "Place a real sell order for my shares.",
         "Buy 10 Reliance shares for me.",
         "मेरे लिए 10 रिलायंस शेयर खरीद दो।",
@@ -242,6 +245,9 @@ async def test_taxed_refuses_prohibited_requests_before_provider_inference(
         "Tax-saving fund kya hota hai?",
         "ITR filing kaise kaam karti hai?",
         "Paper order kaise kaam karta hai?",
+        "What is an ELSS fund?",
+        "How can ELSS reduce my tax?",
+        "शेयर का पेपर ऑर्डर क्या होता है?",
     ],
 )
 async def test_taxed_shared_boundary_keeps_neutral_education_with_provider(
