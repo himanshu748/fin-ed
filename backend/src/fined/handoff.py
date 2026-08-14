@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import re
 import secrets
 import unicodedata
 from dataclasses import dataclass
+from functools import lru_cache
+from importlib import resources
 from typing import Literal, cast
 
 from livekit.agents import llm
+
+from .tax_rules import TaxRuleConfigurationError, validate_tax_rule_data
 
 TaxLocale = Literal["en-IN", "hi-IN", "hi-LATN"]
 HandoffDirection = Literal["taxed", "fined"]
@@ -79,7 +84,7 @@ _LABELLED_PRIVATE_VALUE = re.compile(
     r"password|token|username|user\s+id)"
     r")\b"
     r"(\s*(?:is\s+|[:=]\s*|[-]\s*|\#\s*|no[.]?\s*)?)"
-    r"([^\n,;.?!]+)",
+    r"([^\n]+)",
 )
 _TOKEN = re.compile(
     r"(?i)(?<![a-z0-9])(?:sk|pk|api|token|secret)[-_][a-z0-9_-]{8,}(?![a-z0-9])"
@@ -92,7 +97,6 @@ _SUSPICIOUS_IDENTIFIER = re.compile(
     r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{24,}(?![A-Za-z0-9_-])"
 )
 _WHITESPACE = re.compile(r"\s+")
-_ROUTING_WORDS = re.compile(r"[^\w%₹]+", re.UNICODE)
 
 _REFUSAL_PATTERNS = tuple(
     re.compile(pattern)
@@ -121,6 +125,10 @@ _TAX_TERMS = (
     "tds",
     "withholding",
     "कर",
+    "टैक्स",
+    "जीएसटी",
+    "एसटीटी",
+    "पूंजीगत लाभ",
 )
 _INVESTMENT_TERMS = (
     "share",
@@ -136,7 +144,6 @@ _INVESTMENT_TERMS = (
     "bond",
     "bonds",
     "debt fund",
-    "security",
     "securities",
     "future",
     "futures",
@@ -148,6 +155,21 @@ _INVESTMENT_TERMS = (
     "buy-back",
     "investment",
     "निवेश",
+    "शेयर",
+    "स्टॉक",
+    "इक्विटी",
+    "ईटीएफ",
+    "म्यूचुअल फंड",
+    "सोना",
+    "बॉन्ड",
+)
+_INTRINSIC_INVESTMENT_TAX_TERMS = (
+    "capital gain",
+    "capital gains",
+    "stt",
+    "securities transaction tax",
+    "पूंजीगत लाभ",
+    "एसटीटी",
 )
 
 
@@ -195,14 +217,19 @@ def classify_tax_route(question: str) -> TaxRoute:
     raw = unicodedata.normalize("NFKC", question)
     if len(raw) > _QUESTION_MAX_CHARS:
         return "fined"
-    normalized = _WHITESPACE.sub(" ", _ROUTING_WORDS.sub(" ", raw.casefold())).strip()
+    normalized = _normalize_routing_text(raw)
     if not normalized:
         return "fined"
     if any(pattern.search(normalized) for pattern in _REFUSAL_PATTERNS):
         return "refuse"
     has_tax_intent = _contains_fixed_term(normalized, _TAX_TERMS)
     has_investment_intent = _contains_fixed_term(normalized, _INVESTMENT_TERMS)
-    if has_tax_intent and has_investment_intent:
+    has_intrinsic_investment_tax_intent = _contains_fixed_term(
+        normalized, _INTRINSIC_INVESTMENT_TAX_TERMS
+    )
+    if has_intrinsic_investment_tax_intent or (
+        has_tax_intent and has_investment_intent
+    ):
         return "offer_taxed"
     return "fined"
 
@@ -277,30 +304,58 @@ def validate_fresh_consent(
     if _fingerprint(pending.question) != pending.question_fingerprint:
         return False
 
-    messages = [item for item in chat_ctx.items if isinstance(item, llm.ChatMessage)]
     question_indices = [
         index
-        for index, message in enumerate(messages)
-        if message.id == pending.question_turn_id
+        for index, item in enumerate(chat_ctx.items)
+        if isinstance(item, llm.ChatMessage) and item.id == pending.question_turn_id
     ]
     if len(question_indices) != 1:
         return False
     question_index = question_indices[0]
-    if question_index + 2 != len(messages) - 1:
-        return False
-
-    question_message, permission_message, affirmation_message = messages[
-        question_index : question_index + 3
-    ]
+    question_message = chat_ctx.items[question_index]
     if question_message.role != "user":
         return False
     question_text = sanitize_handoff_text(question_message.text_content or "")
     if _fingerprint(question_text) != pending.question_fingerprint:
         return False
+
+    cursor = question_index + 1
+    allowed_offer_tool = (
+        "offer_tax_handoff" if pending.direction == "taxed" else "offer_fined_return"
+    )
+    call_ids: set[str] = set()
+    completed_call_ids: set[str] = set()
+    while cursor < len(chat_ctx.items) and isinstance(
+        chat_ctx.items[cursor], (llm.FunctionCall, llm.FunctionCallOutput)
+    ):
+        item = chat_ctx.items[cursor]
+        if item.name != allowed_offer_tool:
+            return False
+        if isinstance(item, llm.FunctionCall):
+            if item.call_id in call_ids:
+                return False
+            call_ids.add(item.call_id)
+        else:
+            if item.call_id not in call_ids or item.call_id in completed_call_ids:
+                return False
+            completed_call_ids.add(item.call_id)
+        cursor += 1
+    if call_ids != completed_call_ids:
+        return False
+    if cursor >= len(chat_ctx.items):
+        return False
+    permission_message = chat_ctx.items[cursor]
     if (
-        permission_message.role != "assistant"
+        not isinstance(permission_message, llm.ChatMessage)
+        or permission_message.role != "assistant"
         or permission_message.text_content != pending.permission_text
     ):
+        return False
+    cursor += 1
+    if cursor != len(chat_ctx.items) - 1:
+        return False
+    affirmation_message = chat_ctx.items[cursor]
+    if not isinstance(affirmation_message, llm.ChatMessage):
         return False
     if affirmation_message.role != "user":
         return False
@@ -319,6 +374,7 @@ def sanitize_handoff_text(text: str) -> str:
         for character in sanitized
         if character in "\n\t" or not unicodedata.category(character).startswith("C")
     )
+    sanitized, protected_urls = _protect_official_source_urls(sanitized)
     sanitized = _LABELLED_PRIVATE_VALUE.sub(r"\1\2[REDACTED]", sanitized)
     sanitized = _EMAIL.sub("[REDACTED]", sanitized)
     sanitized = _PAN.sub("[REDACTED]", sanitized)
@@ -327,7 +383,8 @@ def sanitize_handoff_text(text: str) -> str:
     sanitized = _DIGIT_CANDIDATE.sub(_redact_long_digit_candidate, sanitized)
     if _contains_uncertain_identifier(sanitized):
         return ""
-    return _WHITESPACE.sub(" ", sanitized).strip()
+    sanitized = _WHITESPACE.sub(" ", sanitized).strip()
+    return _restore_official_source_urls(sanitized, protected_urls)
 
 
 def build_handoff_chat_context(
@@ -436,6 +493,48 @@ def _is_valid_pending_handoff(pending: PendingHandoff) -> bool:
 def _contains_fixed_term(text: str, terms: tuple[str, ...]) -> bool:
     bounded = f" {text} "
     return any(f" {term} " in bounded for term in terms)
+
+
+def _normalize_routing_text(text: str) -> str:
+    normalized_characters = []
+    for character in text.casefold():
+        category = unicodedata.category(character)
+        normalized_characters.append(
+            character if category.startswith(("L", "M", "N")) else " "
+        )
+    return _WHITESPACE.sub(" ", "".join(normalized_characters)).strip()
+
+
+@lru_cache(maxsize=1)
+def _packaged_official_source_urls() -> frozenset[str]:
+    rule_file = resources.files("fined.data").joinpath(
+        "indian_investment_tax_rules.json"
+    )
+    try:
+        raw_rules = json.loads(rule_file.read_text(encoding="utf-8"))
+        rules = validate_tax_rule_data(raw_rules)
+    except (OSError, json.JSONDecodeError, TaxRuleConfigurationError):
+        return frozenset()
+    return frozenset(rule.official_source_url for rule in rules)
+
+
+def _protect_official_source_urls(text: str) -> tuple[str, dict[str, str]]:
+    protected: dict[str, str] = {}
+    for index, source_url in enumerate(
+        sorted(_packaged_official_source_urls(), key=len, reverse=True)
+    ):
+        if source_url not in text:
+            continue
+        placeholder = f"\ue000{index}\ue001"
+        text = text.replace(source_url, placeholder)
+        protected[placeholder] = source_url
+    return text, protected
+
+
+def _restore_official_source_urls(text: str, protected: dict[str, str]) -> str:
+    for placeholder, source_url in protected.items():
+        text = text.replace(placeholder, source_url)
+    return text
 
 
 def _normalize_affirmation(text: str) -> str:

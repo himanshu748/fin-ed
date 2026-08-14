@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import replace
+from importlib import resources
 
 import pytest
 from livekit.agents import llm
@@ -16,6 +18,15 @@ from fined.handoff import (
     permission_prompt,
     sanitize_handoff_text,
     validate_fresh_consent,
+)
+
+_PACKAGED_RULES = json.loads(
+    resources.files("fined.data")
+    .joinpath("indian_investment_tax_rules.json")
+    .read_text(encoding="utf-8")
+)
+_OFFICIAL_SOURCE_URLS = sorted(
+    {rule["official_source_url"] for rule in _PACKAGED_RULES}
 )
 
 
@@ -197,6 +208,77 @@ def test_intervening_assistant_question_invalidates_consent() -> None:
     assert validate_fresh_consent(pending, chat_ctx, now=20.0) is False
 
 
+def test_offer_tool_activity_before_permission_preserves_fresh_consent() -> None:
+    # Catches original-context adjacency rejecting the offer tool that made the prompt.
+    pending = create_pending_handoff(
+        direction="taxed",
+        question="What STT applies to futures?",
+        locale="en-IN",
+        question_turn_id="turn-tax-offer-tool",
+        now=10.0,
+    )
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(
+        role="user",
+        content=pending.question,
+        id=pending.question_turn_id,
+    )
+    chat_ctx.items.append(
+        llm.FunctionCall(
+            call_id="offer-call",
+            name="offer_tax_handoff",
+            arguments='{"language":"en-IN"}',
+        )
+    )
+    chat_ctx.items.append(
+        llm.FunctionCallOutput(
+            call_id="offer-call",
+            name="offer_tax_handoff",
+            output=pending.permission_text,
+            is_error=False,
+        )
+    )
+    chat_ctx.add_message(role="assistant", content=pending.permission_text)
+    chat_ctx.add_message(role="user", content="yes")
+
+    assert validate_fresh_consent(pending, chat_ctx, now=20.0) is True
+
+
+@pytest.mark.parametrize("intervening_type", ["call", "output"])
+def test_tool_activity_after_permission_invalidates_consent(
+    intervening_type: str,
+) -> None:
+    # Catches a yes after post-prompt tool activity being treated as direct consent.
+    pending = create_pending_handoff(
+        direction="taxed",
+        question="What STT applies to futures?",
+        locale="en-IN",
+        question_turn_id="turn-tax-post-prompt-tool",
+        now=10.0,
+    )
+    chat_ctx = _consent_context(pending, None)
+    if intervening_type == "call":
+        chat_ctx.items.append(
+            llm.FunctionCall(
+                call_id="late-call",
+                name="lookup_market_price",
+                arguments="{}",
+            )
+        )
+    else:
+        chat_ctx.items.append(
+            llm.FunctionCallOutput(
+                call_id="late-call",
+                name="lookup_market_price",
+                output="private tool output",
+                is_error=False,
+            )
+        )
+    chat_ctx.add_message(role="user", content="yes")
+
+    assert validate_fresh_consent(pending, chat_ctx, now=20.0) is False
+
+
 def test_expired_offer_requires_a_fresh_permission_question() -> None:
     # Catches a once-valid affirmative being accepted outside its sixty-second window.
     pending = create_pending_handoff(
@@ -319,6 +401,12 @@ def test_cleared_offer_cannot_be_replayed() -> None:
         ("How can I hide my stock gains and evade tax?", "refuse"),
         ("How do I evade capital gains tax on stock trades?", "refuse"),
         ("What is the taxi fare for a stock exchange visit?", "fined"),
+        ("How are capital gains taxed?", "offer_taxed"),
+        ("What is STT?", "offer_taxed"),
+        ("कर शेयर पर कितना लगेगा?", "offer_taxed"),
+        ("Share par capital gains tax kitna lagega?", "offer_taxed"),
+        ("ETF par tax kaise lagta hai?", "offer_taxed"),
+        ("How is a security deposit taxed?", "fined"),
     ],
 )
 def test_tax_route_matrix_is_bounded_and_deterministic(
@@ -338,6 +426,7 @@ def test_tax_route_matrix_is_bounded_and_deterministic(
         "OTP: 654321",
         "API token sk-live-very-secret-value",
         "broker password: Hunt3r2!",
+        "password: Hunter2!stillsecret",
     ],
 )
 def test_sanitize_handoff_text_removes_private_identifiers(private_text: str) -> None:
@@ -349,20 +438,55 @@ def test_sanitize_handoff_text_removes_private_identifiers(private_text: str) ->
 
 
 @pytest.mark.parametrize(
-    ("private_text", "secret_value"),
+    ("private_text", "secret_value", "secret_suffix"),
     [
-        ("broker username: learner42", "learner42"),
-        ("secret phrase: blue river orchid", "blue river orchid"),
+        ("broker username: learner42", "learner42", "learner42"),
+        ("secret phrase: blue river orchid", "blue river orchid", "orchid"),
+        ("secret phrase: blue river!orchid", "blue river!orchid", "orchid"),
+        ("password: Hunter2!stillsecret", "Hunter2!stillsecret", "stillsecret"),
     ],
 )
 def test_sanitize_handoff_text_removes_labelled_multiword_credentials(
-    private_text: str, secret_value: str
+    private_text: str, secret_value: str, secret_suffix: str
 ) -> None:
     # Catches credential values leaking because only their first token was redacted.
     sanitized = sanitize_handoff_text(f"Tax question. {private_text}.")
 
     assert secret_value not in sanitized
+    assert secret_suffix not in sanitized
     assert "[REDACTED]" in sanitized
+
+
+@pytest.mark.parametrize("source_url", _OFFICIAL_SOURCE_URLS)
+def test_context_transfer_preserves_each_packaged_official_source_url(
+    source_url: str,
+) -> None:
+    # Catches privacy scanning dropping a validated source link with an opaque path.
+    source = llm.ChatContext.empty()
+    source.add_message(
+        role="user",
+        content="How are equity ETF gains taxed?",
+        id="turn-source-tax",
+    )
+    source.add_message(
+        role="assistant",
+        content=(
+            f"Official source: [Tax rule]({source_url}). Account number 123456789012."
+        ),
+    )
+    pending = create_pending_handoff(
+        direction="taxed",
+        question="How are equity ETF gains taxed?",
+        locale="en-IN",
+        question_turn_id="turn-source-tax",
+        now=10.0,
+    )
+
+    copied = build_handoff_chat_context(source, pending)
+    copied_text = "\n".join(message.text_content or "" for message in copied.messages())
+
+    assert source_url in copied_text
+    assert "123456789012" not in copied_text
 
 
 def test_context_transfer_is_fresh_bounded_and_conversational_only() -> None:
