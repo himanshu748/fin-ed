@@ -225,10 +225,14 @@ Source URLs must use HTTPS and match a reviewed host allowlist for these authori
 - gold and gold investment products
 - bonds and debt instruments
 - Securities Transaction Tax and other transaction-linked taxes
+- share buy-backs, including the rules effective from 1 April 2026
+- transition between the Income-tax Act, 1961 and Income-tax Act, 2025
 
 ### Lookup behavior
 
 The lookup accepts a bounded query plus optional asset category and transaction or tax-year date. It returns matching verified rule records, not a composed personal answer.
+
+For a transaction or payment on or after 1 April 2026, TaxEd uses the Income-tax Act, 2025 as amended by the Finance Act, 2026. Earlier assessment and payment periods may remain under the Income-tax Act, 1961. When the applicable period is not clear, TaxEd asks for it before stating a section number or rate.
 
 If the asset, date or tax event is unclear, TaxEd asks one concise clarification. If no applicable verified rule exists, TaxEd says it cannot verify the rule and recommends checking with a qualified Indian tax professional. It must not fill the gap from general model knowledge.
 
@@ -386,5 +390,8 @@ Exact file changes and task order belong in the implementation plan after this s
 - [Murf Voice for Bharat Day 9 task](https://github.com/murf-ai/voice-for-bharat-challenge-2026/blob/main/challenges/Day%209%20Task.md)
 - [LiveKit agent handoffs](https://docs.livekit.io/agents/logic/agents-handoffs/)
 - [Murf voice catalogue API](https://murf.ai/api/docs/api-reference/voices/get-voices)
+- [Income-tax Act, 2025 as amended by Finance Act, 2026](https://www.incometaxindia.gov.in/documents/d/guest/income_tax_act_2025_as_amended_by_fa_act_2026-pdf)
+- [Income Tax Department transition FAQ](https://www.incometax.gov.in/iec/foportal/help/all-topics/e-filing-services/General%20Questions-faqs?mobile-app=1)
+- [NSE Securities Transaction Tax rates](https://www.nseindia.com/static/products-services/equity-derivatives-securities-transaction-tax)
 
 The live Murf catalogue was checked on 2026-08-14 to confirm Anusha's listed locales and Conversational styles.
