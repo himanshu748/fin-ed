@@ -34,7 +34,7 @@ where = ["src"]
 "" = "src"
 
 [tool.setuptools.package-data]
-"fined.data" = ["angel_one_schedules.json"]
+"fined.data" = ["angel_one_schedules.json", "indian_investment_tax_rules.json"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
