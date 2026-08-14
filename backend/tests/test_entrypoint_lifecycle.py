@@ -74,6 +74,34 @@ class FakeUsageCollector:
         return {"requests": 0}
 
 
+class FakeTTS:
+    def __init__(
+        self,
+        events: list[str],
+        kwargs: dict[str, object],
+        *,
+        fail_prewarm: bool = False,
+    ) -> None:
+        self.events = events
+        self.kwargs = kwargs
+        self.fail_prewarm = fail_prewarm
+        self.fail_close = False
+        self.prewarm_attempts = 0
+        self.close_attempts = 0
+
+    def prewarm(self) -> None:
+        self.prewarm_attempts += 1
+        self.events.append("tts_prewarm")
+        if self.fail_prewarm:
+            raise RuntimeError("private prewarm failure")
+
+    async def aclose(self) -> None:
+        self.close_attempts += 1
+        self.events.append("tts_close")
+        if self.fail_close:
+            raise RuntimeError("private close failure")
+
+
 class FakeSession:
     def __init__(self, events: list[str], fail_at: str | None) -> None:
         self.events = events
@@ -205,7 +233,7 @@ class LifecycleHarness:
     llm_kwargs: dict[str, object]
     stt_kwargs: dict[str, object]
     tts_kwargs: dict[str, object]
-    tts_instances: list[tuple[object, dict[str, object]]]
+    tts_instances: list[tuple[FakeTTS, dict[str, object]]]
     tokenizer_instances: list[tuple[object, dict[str, object]]]
     turn_detection_kwargs: dict[str, object]
     tax_registry: object
@@ -220,6 +248,7 @@ def _install_lifecycle_fakes(
     knowledge_available: bool = True,
     analytics_directory: Path | None = None,
     tax_registry_error: Exception | None = None,
+    taxed_prewarm_error: bool = False,
 ) -> LifecycleHarness:
     events: list[str] = []
     client = FakeEmbeddingClient(events)
@@ -229,7 +258,7 @@ def _install_lifecycle_fakes(
     llm_kwargs: dict[str, object] = {}
     stt_kwargs: dict[str, object] = {}
     tts_kwargs: dict[str, object] = {}
-    tts_instances: list[tuple[object, dict[str, object]]] = []
+    tts_instances: list[tuple[FakeTTS, dict[str, object]]] = []
     tokenizer_instances: list[tuple[object, dict[str, object]]] = []
     turn_detection_kwargs: dict[str, object] = {}
     tax_registry = object()
@@ -294,7 +323,13 @@ def _install_lifecycle_fakes(
         if fail_at == "tts":
             raise LifecycleAbort("tts")
         tts_kwargs.update(kwargs)
-        tts = object()
+        tts = FakeTTS(
+            events,
+            dict(kwargs),
+            fail_prewarm=(
+                taxed_prewarm_error and kwargs.get("voice") == "en-IN-anusha"
+            ),
+        )
         tts_instances.append((tts, dict(kwargs)))
         return tts
 
@@ -626,6 +661,166 @@ async def test_browser_job_wires_one_recursive_taxed_factory_with_anusha_locales
     assert returning_fined.taxed_factory is fined_agent.taxed_factory
     assert returning_fined.status_bridge is fined_agent.status_bridge
     assert returning_fined.announce_entry is True
+
+
+@pytest.mark.asyncio
+async def test_taxed_exit_closes_its_prewarmed_voice_exactly_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Catches a handed-off TaxEd voice surviving its LiveKit Agent.on_exit hook.
+    harness = _install_lifecycle_fakes(monkeypatch, None, tmp_path / "generated")
+    await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
+    fined_agent = harness.session.start_kwargs["agent"]
+    assert isinstance(fined_agent, entrypoint.FinEdAssistant)
+    assert fined_agent.taxed_factory is not None
+
+    specialist = fined_agent.taxed_factory("en-IN", llm.ChatContext.empty())
+    taxed_tts = harness.tts_instances[1][0]
+
+    assert len(harness.tts_instances) == 2
+    assert taxed_tts.prewarm_attempts == 1
+    assert taxed_tts.close_attempts == 0
+
+    await specialist.on_exit()
+    await specialist.on_exit()
+
+    assert taxed_tts.close_attempts == 1
+    assert harness.tts_instances[0][0].close_attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_shutdown_closes_active_taxed_voice_once_across_cleanup_replay(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Catches shutdown replay leaking or double-closing an active specialist voice.
+    harness = _install_lifecycle_fakes(monkeypatch, None, tmp_path / "generated")
+    await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
+    fined_agent = harness.session.start_kwargs["agent"]
+    assert isinstance(fined_agent, entrypoint.FinEdAssistant)
+    assert fined_agent.taxed_factory is not None
+    fined_agent.taxed_factory("hi-IN", llm.ChatContext.empty())
+    taxed_tts = harness.tts_instances[1][0]
+
+    callback = harness.context.shutdown_callbacks[0]
+    await callback("normal shutdown")
+    await callback("duplicate shutdown")
+
+    assert taxed_tts.prewarm_attempts == 1
+    assert taxed_tts.close_attempts == 1
+    assert harness.tts_instances[0][0].close_attempts == 0
+    assert harness.client.aio.close_attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_repeated_taxed_activations_close_each_owned_voice_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Catches a later TaxEd handoff reusing or orphaning an earlier voice resource.
+    harness = _install_lifecycle_fakes(monkeypatch, None, tmp_path / "generated")
+    await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
+    fined_agent = harness.session.start_kwargs["agent"]
+    assert isinstance(fined_agent, entrypoint.FinEdAssistant)
+    assert fined_agent.taxed_factory is not None
+
+    for locale in ("en-IN", "hi-IN", "hi-LATN"):
+        specialist = fined_agent.taxed_factory(locale, llm.ChatContext.empty())
+        await specialist.on_exit()
+
+    taxed_instances = [tts for tts, _ in harness.tts_instances[1:]]
+    assert len(taxed_instances) == 3
+    assert [tts.prewarm_attempts for tts in taxed_instances] == [1, 1, 1]
+    assert [tts.close_attempts for tts in taxed_instances] == [1, 1, 1]
+
+    await harness.context.shutdown_callbacks[0]("normal shutdown")
+    assert [tts.close_attempts for tts in taxed_instances] == [1, 1, 1]
+
+
+@pytest.mark.asyncio
+async def test_one_taxed_close_failure_does_not_block_other_job_cleanup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Catches one provider cleanup error skipping later voices or the embedder close.
+    harness = _install_lifecycle_fakes(monkeypatch, None, tmp_path / "generated")
+    await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
+    fined_agent = harness.session.start_kwargs["agent"]
+    assert isinstance(fined_agent, entrypoint.FinEdAssistant)
+    assert fined_agent.taxed_factory is not None
+    for locale in ("en-IN", "hi-IN", "hi-LATN"):
+        fined_agent.taxed_factory(locale, llm.ChatContext.empty())
+    taxed_instances = [tts for tts, _ in harness.tts_instances[1:]]
+    taxed_instances[0].fail_close = True
+    warnings: list[tuple[str, tuple[object, ...]]] = []
+    monkeypatch.setattr(
+        entrypoint.logger,
+        "warning",
+        lambda message, *args: warnings.append((message, args)),
+    )
+
+    await harness.context.shutdown_callbacks[0]("normal shutdown")
+
+    assert [tts.close_attempts for tts in taxed_instances] == [1, 1, 1]
+    assert harness.client.aio.close_attempts == 1
+    assert warnings == [(entrypoint.TAXED_TTS_CLEANUP_WARNING, ())]
+    assert "private close failure" not in repr(warnings)
+
+
+@pytest.mark.asyncio
+async def test_partial_taxed_factory_failure_closes_created_voice_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Catches an Anusha resource leak when prewarm fails before agent construction.
+    harness = _install_lifecycle_fakes(
+        monkeypatch,
+        None,
+        tmp_path / "generated",
+        taxed_prewarm_error=True,
+    )
+    await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
+    fined_agent = harness.session.start_kwargs["agent"]
+    assert isinstance(fined_agent, entrypoint.FinEdAssistant)
+    assert fined_agent.taxed_factory is not None
+
+    with pytest.raises(RuntimeError, match="private prewarm failure"):
+        fined_agent.taxed_factory("en-IN", llm.ChatContext.empty())
+    await asyncio.sleep(0)
+
+    taxed_tts = harness.tts_instances[1][0]
+    assert taxed_tts.prewarm_attempts == 1
+    assert taxed_tts.close_attempts == 1
+    await harness.context.shutdown_callbacks[0]("normal shutdown")
+    assert taxed_tts.close_attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_partial_taxed_agent_construction_closes_prewarmed_voice_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Catches a prewarmed voice leak when the TaxEd Agent cannot be constructed.
+    harness = _install_lifecycle_fakes(monkeypatch, None, tmp_path / "generated")
+    await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
+    fined_agent = harness.session.start_kwargs["agent"]
+    assert isinstance(fined_agent, entrypoint.FinEdAssistant)
+    assert fined_agent.taxed_factory is not None
+
+    class FailingTaxEdAssistant:
+        def __init__(self, **kwargs: object) -> None:
+            del kwargs
+            raise RuntimeError("agent construction failed")
+
+    monkeypatch.setattr(
+        entrypoint,
+        "_JobTaxEdAssistant",
+        FailingTaxEdAssistant,
+        raising=False,
+    )
+
+    with pytest.raises(RuntimeError, match="agent construction failed"):
+        fined_agent.taxed_factory("en-IN", llm.ChatContext.empty())
+    await asyncio.sleep(0)
+
+    taxed_tts = harness.tts_instances[1][0]
+    assert taxed_tts.prewarm_attempts == 1
+    assert taxed_tts.close_attempts == 1
 
 
 @pytest.mark.asyncio

@@ -4,10 +4,12 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
+from typing import Protocol
 
 from dotenv import load_dotenv
 from google import genai
@@ -95,6 +97,7 @@ KNOWLEDGE_UNAVAILABLE_WARNING = (
 TAX_REGISTRY_UNAVAILABLE_WARNING = (
     "Tax rule registry is unavailable; starting FinEd without TaxEd"
 )
+TAXED_TTS_CLEANUP_WARNING = "TaxEd voice cleanup failed"
 PAPER_ORDER_RESULT_METHOD = "fined.paper.v1.order_result"
 PAPER_HOLDING_QUOTES_METHOD = "fined.paper.v1.quote_holdings"
 PAPER_RESULT_ACK = '{"version":1,"paper":true,"acknowledged":true}'
@@ -102,6 +105,67 @@ PAPER_RESULT_SENTENCE = "The browser confirmed the simulated paper result."
 LLM_UNAVAILABLE_SENTENCE = (
     "The language model is temporarily busy. Please wait a moment, then ask again."
 )
+
+
+class _JobOwnedTaxEdTTS(Protocol):
+    def prewarm(self) -> None: ...
+
+    async def aclose(self) -> None: ...
+
+
+class _TaxEdTTSManager:
+    """Own each per-handoff TaxEd voice for one LiveKit job."""
+
+    def __init__(self) -> None:
+        self._instances: dict[int, _JobOwnedTaxEdTTS] = {}
+        self._cleanup_tasks: set[asyncio.Task[None]] = set()
+
+    def track(self, taxed_tts: _JobOwnedTaxEdTTS) -> None:
+        self._instances[id(taxed_tts)] = taxed_tts
+
+    async def close(self, taxed_tts: _JobOwnedTaxEdTTS) -> None:
+        owned_tts = self._instances.pop(id(taxed_tts), None)
+        if owned_tts is None:
+            return
+        try:
+            await owned_tts.aclose()
+        except Exception:
+            logger.warning(TAXED_TTS_CLEANUP_WARNING)
+
+    def close_soon(self, taxed_tts: _JobOwnedTaxEdTTS) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(self.close(taxed_tts))
+        self._cleanup_tasks.add(task)
+        task.add_done_callback(self._cleanup_tasks.discard)
+
+    async def close_all(self) -> None:
+        pending_cleanup = tuple(self._cleanup_tasks)
+        if pending_cleanup:
+            await asyncio.gather(*pending_cleanup)
+        for taxed_tts in tuple(self._instances.values()):
+            await self.close(taxed_tts)
+
+
+class _JobTaxEdAssistant(TaxEdAssistant):
+    """TaxEd agent whose LiveKit exit hook releases its job-owned voice."""
+
+    def __init__(
+        self,
+        *,
+        close_taxed_tts: Callable[[], Awaitable[None]],
+        **kwargs: object,
+    ) -> None:
+        self._close_taxed_tts = close_taxed_tts
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+
+    async def on_exit(self) -> None:
+        try:
+            await super().on_exit()
+        finally:
+            await self._close_taxed_tts()
 
 
 class _LiveKitOutboundCallControl:
@@ -272,6 +336,7 @@ async def my_agent(ctx: JobContext) -> None:
     paper_rpcs_unregistered = False
     analytics_recorded = False
     llm_fallback_task: asyncio.Task[None] | None = None
+    taxed_tts_manager = _TaxEdTTSManager()
 
     async def close_client_once() -> None:
         nonlocal client_closed
@@ -345,20 +410,28 @@ async def my_agent(ctx: JobContext) -> None:
                 )
 
             def create_taxed(locale: str, chat_ctx: llm.ChatContext) -> TaxEdAssistant:
-                return TaxEdAssistant(
-                    registry=tax_registry,
-                    chat_ctx=chat_ctx,
-                    fined_factory=create_fined,
-                    status_bridge=status_bridge,
-                    tts=murf.TTS(
-                        voice="en-IN-anusha",
-                        style="Conversational",
-                        model="falcon-2",
-                        locale=normalize_tax_locale(locale),
-                        tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
-                        text_pacing=True,
-                    ),
+                taxed_tts = murf.TTS(
+                    voice="en-IN-anusha",
+                    style="Conversational",
+                    model="falcon-2",
+                    locale=normalize_tax_locale(locale),
+                    tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
+                    text_pacing=True,
                 )
+                taxed_tts_manager.track(taxed_tts)
+                try:
+                    taxed_tts.prewarm()
+                    return _JobTaxEdAssistant(
+                        registry=tax_registry,
+                        chat_ctx=chat_ctx,
+                        fined_factory=create_fined,
+                        status_bridge=status_bridge,
+                        tts=taxed_tts,
+                        close_taxed_tts=lambda: taxed_tts_manager.close(taxed_tts),
+                    )
+                except BaseException:
+                    taxed_tts_manager.close_soon(taxed_tts)
+                    raise
 
         session = AgentSession[SessionState](
             userdata=state,
@@ -531,7 +604,10 @@ async def my_agent(ctx: JobContext) -> None:
                 try:
                     unregister_paper_rpcs_once()
                 finally:
-                    await close_client_once()
+                    try:
+                        await taxed_tts_manager.close_all()
+                    finally:
+                        await close_client_once()
 
         ctx.add_shutdown_callback(on_shutdown)
 
@@ -563,7 +639,10 @@ async def my_agent(ctx: JobContext) -> None:
         try:
             unregister_paper_rpcs_once()
         finally:
-            await close_client_once()
+            try:
+                await taxed_tts_manager.close_all()
+            finally:
+                await close_client_once()
         raise
 
 
