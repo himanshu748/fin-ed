@@ -132,12 +132,16 @@ def test_create_pending_handoff_binds_sanitized_question_and_expiry() -> None:
     [
         ("en-IN", "yes"),
         ("en-IN", "yes please"),
+        ("en-IN", "Yes, connect me."),
+        ("en-IN", "Yes please, connect me to TaxEd."),
         ("hi-IN", "हाँ"),
         ("hi-IN", "जी हाँ"),
         ("hi-IN", "कर दीजिए"),
+        ("hi-IN", "हाँ, मुझे TaxEd से जोड़ दीजिए।"),
         ("hi-LATN", "haan"),
         ("hi-LATN", "haan ji"),
         ("hi-LATN", "ji haan"),
+        ("hi-LATN", "Haan ji, TaxEd se connect kar dijiye."),
     ],
 )
 def test_fresh_exact_affirmation_validates(locale: str, affirmation: str) -> None:
@@ -152,6 +156,55 @@ def test_fresh_exact_affirmation_validates(locale: str, affirmation: str) -> Non
     chat_ctx = _consent_context(pending, affirmation)
 
     assert validate_fresh_consent(pending, chat_ctx, now=20.0) is True
+
+
+def test_live_spoken_reconnect_affirmation_returns_to_fined() -> None:
+    """Deepgram may punctuate speech and hear ``FinEd`` as ``Finette``."""
+    pending = create_pending_handoff(
+        direction="fined",
+        question="Can you explain what an ETF is?",
+        locale="en-IN",
+        question_turn_id="turn-fined-live-speech",
+        now=10.0,
+    )
+
+    assert (
+        validate_fresh_consent(
+            pending,
+            _consent_context(pending, "Yes. Can you reconnect me to Finette?"),
+            now=20.0,
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    ("direction", "wrong_target"),
+    [
+        ("taxed", "Yes, reconnect me to FinEd."),
+        ("fined", "Yes, connect me to TaxEd."),
+    ],
+)
+def test_targeted_affirmation_cannot_confirm_the_opposite_handoff(
+    direction: str,
+    wrong_target: str,
+) -> None:
+    pending = create_pending_handoff(
+        direction=direction,
+        question="Please explain this learning concept.",
+        locale="en-IN",
+        question_turn_id=f"turn-{direction}-wrong-target",
+        now=10.0,
+    )
+
+    assert (
+        validate_fresh_consent(
+            pending,
+            _consent_context(pending, wrong_target),
+            now=20.0,
+        )
+        is False
+    )
 
 
 def test_livekit_current_handoff_call_after_affirmation_preserves_consent() -> None:
@@ -217,6 +270,9 @@ def test_only_the_current_directional_handoff_call_may_follow_consent(
         "yes if you only explain the rate",
         "do not connect me, yes",
         "haan but no",
+        "yes, but do not connect me",
+        "haan ji, lekin connect mat karo",
+        "हाँ, लेकिन मुझे मत जोड़िए",
     ],
 )
 def test_missing_negated_or_conditional_consent_fails_closed(

@@ -60,15 +60,54 @@ _AFFIRMATIONS = frozenset(
     {
         "yes",
         "yes please",
+        "yes connect me",
+        "yes please connect me",
+        "yeah",
+        "yeah please",
+        "sure connect me",
+        "okay connect me",
+        "ok connect me",
         "please do",
         "हाँ",
         "जी हाँ",
         "कर दीजिए",
+        "हाँ मुझे जोड़ दीजिए",
+        "जी हाँ मुझे जोड़ दीजिए",
         "haan",
+        "han",
         "haan ji",
+        "han ji",
         "ji haan",
+        "haan connect kar dijiye",
+        "haan ji connect kar dijiye",
     }
 )
+
+_DIRECTIONAL_AFFIRMATIONS: dict[HandoffDirection, frozenset[str]] = {
+    "taxed": frozenset(
+        {
+            "yes connect me to taxed",
+            "yes please connect me to taxed",
+            "हाँ मुझे taxed से जोड़ दीजिए",
+            "जी हाँ मुझे taxed से जोड़ दीजिए",
+            "haan taxed se connect kar dijiye",
+            "haan ji taxed se connect kar dijiye",
+        }
+    ),
+    "fined": frozenset(
+        {
+            "yes reconnect me to fined",
+            "yes please reconnect me to fined",
+            "yes can you reconnect me to fined",
+            # Deepgram can hear the spoken product name "FinEd" as "Finette".
+            "yes can you reconnect me to finette",
+            "हाँ मुझे fined से दोबारा जोड़ दीजिए",
+            "जी हाँ मुझे fined से दोबारा जोड़ दीजिए",
+            "haan fined se reconnect kar dijiye",
+            "haan ji fined se reconnect kar dijiye",
+        }
+    ),
+}
 
 _EMAIL = re.compile(
     r"(?i)\b[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+\b"
@@ -412,9 +451,8 @@ def validate_fresh_consent(
         return False
     if affirmation_message.role != "user":
         return False
-    if (
-        _normalize_affirmation(affirmation_message.text_content or "")
-        not in _AFFIRMATIONS
+    if not _is_affirmation_for_direction(
+        affirmation_message.text_content or "", pending.direction
     ):
         return False
     cursor += 1
@@ -635,28 +673,27 @@ def _restore_official_source_urls(text: str, protected: dict[str, str]) -> str:
 
 def _normalize_affirmation(text: str) -> str:
     normalized = unicodedata.normalize("NFKC", text).casefold()
-    normalized = _strip_surrounding_punctuation(normalized)
+    normalized = "".join(
+        " " if unicodedata.category(character).startswith(("P", "S")) else character
+        for character in normalized
+    )
     return _WHITESPACE.sub(" ", normalized).strip()
 
 
 def _is_affirmation(text: str) -> bool:
-    return _normalize_affirmation(text) in _AFFIRMATIONS
+    normalized = _normalize_affirmation(text)
+    return normalized in _AFFIRMATIONS or any(
+        normalized in affirmations
+        for affirmations in _DIRECTIONAL_AFFIRMATIONS.values()
+    )
 
 
-def _strip_surrounding_punctuation(text: str) -> str:
-    start = 0
-    end = len(text)
-    while start < end and (
-        text[start].isspace()
-        or unicodedata.category(text[start]).startswith(("P", "S"))
-    ):
-        start += 1
-    while end > start and (
-        text[end - 1].isspace()
-        or unicodedata.category(text[end - 1]).startswith(("P", "S"))
-    ):
-        end -= 1
-    return text[start:end]
+def _is_affirmation_for_direction(text: str, direction: HandoffDirection) -> bool:
+    normalized = _normalize_affirmation(text)
+    return (
+        normalized in _AFFIRMATIONS
+        or normalized in _DIRECTIONAL_AFFIRMATIONS[direction]
+    )
 
 
 def _redact_long_digit_candidate(match: re.Match[str]) -> str:
