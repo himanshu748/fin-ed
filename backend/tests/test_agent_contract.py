@@ -564,6 +564,87 @@ async def test_llm_node_delegates_safe_education_to_the_provider(
     assert output == ["An ETF trades on an exchange."]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user_request",
+    [
+        "What tax do I personally owe after selling 100 Reliance shares?",
+        "Buy 10 Reliance shares for me.",
+        "Which tax-saving fund should I buy?",
+        "मेरा ITR फाइल कर दो।",
+        "Mera ITR file kar do.",
+        "मेरे शेयर का मुनाफा छुपाकर टैक्स बचा दो।",
+        "Mere share gains chhupa ke tax bacha do.",
+        "मेरे लिए टैक्स बचाने वाला फंड चुन दो।",
+        "Mere liye tax-saving fund suggest karo.",
+        "मेरे लिए 10 रिलायंस शेयर खरीद दो।",
+        "Mere liye 10 Reliance shares buy kar do.",
+        "Paper trade mein 10 Reliance shares buy kar do.",
+    ],
+)
+async def test_fined_refuses_shared_prohibited_intents_before_provider_inference(
+    user_request: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Catches phrase-fragile boundaries allowing unsafe requests into inference.
+    provider_called = False
+
+    async def fake_llm_node(*args, **kwargs):
+        nonlocal provider_called
+        del args, kwargs
+        provider_called = True
+        yield "unsafe provider answer"
+
+    monkeypatch.setattr(Agent.default, "llm_node", fake_llm_node)
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=user_request)
+
+    output = [
+        chunk
+        async for chunk in FinEdAssistant().llm_node(
+            chat_ctx,
+            [],
+            ModelSettings(),
+        )
+    ]
+
+    assert provider_called is False
+    assert len(output) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "education_request",
+    [
+        "What is a tax-saving fund?",
+        "How does ITR filing work?",
+        "Why is hiding gains from tax illegal?",
+        "How do people buy shares on an exchange?",
+    ],
+)
+async def test_fined_shared_boundary_keeps_neutral_education_with_provider(
+    education_request: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Catches structured intent features collapsing neutral education into action.
+    async def fake_llm_node(*args, **kwargs):
+        del args, kwargs
+        yield "safe educational answer"
+
+    monkeypatch.setattr(Agent.default, "llm_node", fake_llm_node)
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=education_request)
+
+    output = [
+        chunk
+        async for chunk in FinEdAssistant().llm_node(
+            chat_ctx,
+            [],
+            ModelSettings(),
+        )
+    ]
+
+    assert output == ["safe educational answer"]
+
+
 def test_fined_assistant_defaults_to_general_and_exposes_exact_tool_names() -> None:
     # Catches a broken starter import seam or renamed LiveKit tools.
     assistant = FinEdAssistant()
@@ -703,6 +784,26 @@ async def test_fined_offer_guard_rejects_non_taxed_routes(question: str) -> None
     # Catches the model transferring general education or prohibited personal work.
     source = ChatContext.empty()
     source.add_message(role="user", content=question)
+    assistant = FinEdAssistant(
+        chat_ctx=source,
+        taxed_factory=lambda locale, ctx: Agent(instructions="TaxEd"),
+    )
+    state = SessionState(profile=ParticipantProfile(), retriever=FakeRetriever([]))
+
+    with pytest.raises(ToolError):
+        await assistant.offer_tax_handoff(_context(state), "en-IN")
+
+    assert state.pending_handoff is None
+
+
+@pytest.mark.asyncio
+async def test_fined_does_not_offer_personal_liability_paraphrase_to_taxed() -> None:
+    # Catches classify_tax_route offering a specialist for prohibited personal work.
+    source = ChatContext.empty()
+    source.add_message(
+        role="user",
+        content="What tax do I personally owe after selling 100 Reliance shares?",
+    )
     assistant = FinEdAssistant(
         chat_ctx=source,
         taxed_factory=lambda locale, ctx: Agent(instructions="TaxEd"),

@@ -7,6 +7,7 @@ import re
 import time
 from collections.abc import AsyncIterable, Callable
 from datetime import date
+from typing import Literal, cast
 
 from livekit.agents import (
     Agent,
@@ -17,7 +18,12 @@ from livekit.agents import (
     llm,
 )
 
-from fined.agent import SessionState, _commit_agent_activation
+from fined.agent import (
+    SessionState,
+    _commit_agent_activation,
+    classify_prohibited_agent_intent,
+    render_prohibited_agent_refusal,
+)
 from fined.agent_status_bridge import (
     AgentStatus,
     AgentStatusBridge,
@@ -36,21 +42,51 @@ from fined.tax_rules import TaxRuleRegistry
 logger = logging.getLogger(__name__)
 
 FinEdFactory = Callable[[llm.ChatContext, bool], Agent]
+TaxRuleCategory = Literal[
+    "capital_assets",
+    "debt_instruments",
+    "derivatives_stt",
+    "dividends",
+    "equity_oriented_fund",
+    "listed_bonds",
+    "physical_gold",
+    "share_buyback",
+    "tax_year_transition",
+]
+TaxRuleCategoryInput = Literal[
+    "capital_assets",
+    "debt_instruments",
+    "derivatives_stt",
+    "dividends",
+    "equity_oriented_fund",
+    "listed_bonds",
+    "physical_gold",
+    "share_buyback",
+    "tax_year_transition",
+    "ETF",
+    "shares",
+    "bonds",
+]
 
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_PROHIBITED_REQUESTS = tuple(
-    re.compile(pattern, re.IGNORECASE)
-    for pattern in (
-        r"\b(?:calculate|compute)\b.{0,50}\b(?:my|personal)\b.{0,30}\btax\b",
-        r"\b(?:my|personal)\b.{0,30}\btax liability\b",
-        r"\b(?:file|prepare|submit|amend)\b.{0,20}\b(?:itr|tax return)\b",
-        r"\b(?:conceal|hide|evade|dodge)\b.{0,50}\b(?:tax|gain|income)\b",
-        r"\b(?:recommend|suggest|choose)\b.{0,50}\btax[- ]saving\b",
-        r"\btax[- ]saving\b.{0,50}\b(?:transaction|trade|investment|scheme)\b",
-        r"\b(?:paper|real|live)\b.{0,20}\b(?:order|trade)\b",
-        r"\b(?:place|prepare|confirm|execute)\b.{0,40}\b(?:order|trade)\b",
-    )
+_CANONICAL_TAX_CATEGORIES = frozenset(
+    {
+        "capital_assets",
+        "debt_instruments",
+        "derivatives_stt",
+        "dividends",
+        "equity_oriented_fund",
+        "listed_bonds",
+        "physical_gold",
+        "share_buyback",
+        "tax_year_transition",
+    }
 )
+_CATEGORY_ALIASES: dict[str, TaxRuleCategory] = {
+    "etf": "equity_oriented_fund",
+    "shares": "equity_oriented_fund",
+    "bonds": "debt_instruments",
+}
 _ASSET_TERMS = tuple(
     re.compile(rf"(?<!\w){re.escape(term)}(?!\w)", re.IGNORECASE)
     for term in (
@@ -85,6 +121,12 @@ _UNVERIFIED_RESULT: dict[str, object] = {
         "I cannot verify an applicable current rule from the official registry. "
         "Please check with a qualified Indian tax professional."
     ),
+}
+_UNKNOWN_CATEGORY_RESULT: dict[str, object] = {
+    "verified": False,
+    "clarification_required": True,
+    "rules": [],
+    "message": "Please clarify the supported investment category before lookup.",
 }
 
 
@@ -169,11 +211,9 @@ class TaxEdAssistant(Agent):
     ):
         """Refuse personal tax and all order actions before provider inference."""
         user_text = _latest_user_text(chat_ctx)
-        if any(pattern.search(user_text) for pattern in _PROHIBITED_REQUESTS):
-            yield (
-                "I can't help with personal tax work, tax-saving recommendations "
-                "or any paper or real order. I can explain a verified general rule."
-            )
+        prohibited_intent = classify_prohibited_agent_intent(user_text)
+        if prohibited_intent is not None:
+            yield render_prohibited_agent_refusal(prohibited_intent)
             return
         async for chunk in Agent.default.llm_node(
             self, chat_ctx, tools, model_settings
@@ -197,15 +237,16 @@ class TaxEdAssistant(Agent):
         context: RunContext[SessionState],
         query: str,
         as_of_date: str | None,
-        category: str | None,
+        category: TaxRuleCategoryInput | None,
     ) -> dict[str, object]:
         """Return at most four verified official registry records."""
         if not isinstance(query, str) or not query.strip() or len(query) > 1_000:
             raise ToolError("A bounded tax-rule query is required.")
         parsed_date = _strict_iso_date(as_of_date, self._today())
-        safe_category = category.strip() if isinstance(category, str) else None
-        if safe_category == "":
-            safe_category = None
+        try:
+            safe_category = _normalize_tax_category(category)
+        except ValueError:
+            return dict(_UNKNOWN_CATEGORY_RESULT)
         if safe_category is None and _generic_event_needs_asset(query):
             return {
                 "verified": False,
@@ -247,6 +288,9 @@ class TaxEdAssistant(Agent):
         if message is None:
             raise ToolError("A current learning question is required before a return.")
         question = message.text_content or ""
+        prohibited_intent = classify_prohibited_agent_intent(question)
+        if prohibited_intent is not None:
+            raise ToolError(render_prohibited_agent_refusal(prohibited_intent))
         if classify_tax_route(question) != "fined":
             raise ToolError("This question remains within TaxEd's tax scope.")
         try:
@@ -311,6 +355,21 @@ def _strict_iso_date(value: str | None, default: date) -> date:
         return date.fromisoformat(value)
     except ValueError:
         raise ToolError("as_of_date must use YYYY-MM-DD.") from None
+
+
+def _normalize_tax_category(
+    category: TaxRuleCategoryInput | str | None,
+) -> TaxRuleCategory | None:
+    if category is None:
+        return None
+    if not isinstance(category, str):
+        raise ValueError("unknown tax category")
+    normalized = category.strip().casefold()
+    if normalized in _CANONICAL_TAX_CATEGORIES:
+        return cast(TaxRuleCategory, normalized)
+    if normalized in _CATEGORY_ALIASES:
+        return _CATEGORY_ALIASES[normalized]
+    raise ValueError("unknown tax category")
 
 
 def _generic_event_needs_asset(query: str) -> bool:

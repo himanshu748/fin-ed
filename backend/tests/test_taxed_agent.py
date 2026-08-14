@@ -7,13 +7,27 @@ from typing import cast
 
 import pytest
 from livekit.agents import Agent, ModelSettings, RunContext, ToolError, llm
+from livekit.agents.llm.utils import build_legacy_openai_schema
 
 from fined.agent import ParticipantProfile, SessionState
 from fined.agent_status_bridge import AgentStatus
 from fined.handoff import permission_prompt
 from fined.knowledge.index import SearchHit
 from fined.modes import LearningMode
+from fined.tax_rules import load_packaged_tax_rules
 from fined.taxed_agent import TaxEdAssistant, build_taxed_prompt
+
+_CANONICAL_TAX_CATEGORIES = {
+    "capital_assets",
+    "debt_instruments",
+    "derivatives_stt",
+    "dividends",
+    "equity_oriented_fund",
+    "listed_bonds",
+    "physical_gold",
+    "share_buyback",
+    "tax_year_transition",
+}
 
 
 @dataclass
@@ -159,11 +173,23 @@ def test_taxed_prompt_requires_sourced_date_bound_fail_closed_answers() -> None:
     "user_request",
     [
         "Calculate my personal tax liability on these shares.",
+        "What tax do I personally owe after selling 100 Reliance shares?",
         "Please file my ITR.",
+        "मेरा ITR फाइल कर दो।",
+        "Mera ITR file kar do.",
         "How can I conceal gains and evade tax?",
+        "मेरे शेयर का मुनाफा छुपाकर टैक्स बचा दो।",
+        "Mere share gains chhupa ke tax bacha do.",
         "Recommend a tax-saving transaction for me.",
+        "Which tax-saving fund should I buy?",
+        "मेरे लिए टैक्स बचाने वाला फंड चुन दो।",
+        "Mere liye tax-saving fund suggest karo.",
         "Prepare a paper order to buy this ETF.",
+        "Paper trade mein 10 Reliance shares buy kar do.",
         "Place a real sell order for my shares.",
+        "Buy 10 Reliance shares for me.",
+        "मेरे लिए 10 रिलायंस शेयर खरीद दो।",
+        "Mere liye 10 Reliance shares buy kar do.",
     ],
 )
 async def test_taxed_refuses_prohibited_requests_before_provider_inference(
@@ -189,6 +215,132 @@ async def test_taxed_refuses_prohibited_requests_before_provider_inference(
     assert provider_called is False
     assert len(output) == 1
     assert "can't" in output[0].casefold()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "education_request",
+    [
+        "What is a tax-saving fund?",
+        "How does ITR filing work?",
+        "Why is hiding gains from tax illegal?",
+        "How do people buy shares on an exchange?",
+    ],
+)
+async def test_taxed_shared_boundary_keeps_neutral_education_with_provider(
+    education_request: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Catches shared classification turning neutral explanations into refusals.
+    async def fake_llm_node(*args, **kwargs):
+        del args, kwargs
+        yield "safe educational answer"
+
+    monkeypatch.setattr(Agent.default, "llm_node", fake_llm_node)
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content=education_request)
+
+    output = [
+        chunk async for chunk in _assistant().llm_node(chat_ctx, [], ModelSettings())
+    ]
+
+    assert output == ["safe educational answer"]
+
+
+def test_tax_lookup_tool_schema_exposes_only_canonical_categories_and_aliases() -> None:
+    # Catches a free-form category schema that lets the model invent taxonomy values.
+    schema = build_legacy_openai_schema(_assistant().search_tax_rules)
+    category_schema = schema["function"]["parameters"]["properties"]["category"]
+    variants = category_schema.get("anyOf", [category_schema])
+    exposed_values = {
+        value for variant in variants for value in variant.get("enum", [])
+    }
+
+    assert exposed_values == _CANONICAL_TAX_CATEGORIES | {
+        "ETF",
+        "shares",
+        "bonds",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("category", sorted(_CANONICAL_TAX_CATEGORIES))
+async def test_tax_lookup_preserves_every_canonical_registry_category(
+    category: str,
+) -> None:
+    # Catches a supported stored category being rewritten or dropped.
+    registry = FakeRegistry(results=[FakeRule()])
+
+    result = await _assistant(registry=registry).search_tax_rules(
+        _context(_state()),
+        query="Explain the applicable investment tax rule.",
+        as_of_date="2026-08-14",
+        category=category,
+    )
+
+    assert result["verified"] is True
+    assert registry.calls[0]["category"] == category
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("alias", "canonical"),
+    [
+        ("ETF", "equity_oriented_fund"),
+        ("shares", "equity_oriented_fund"),
+        ("bonds", "debt_instruments"),
+    ],
+)
+async def test_tax_lookup_normalizes_public_category_aliases(
+    alias: str, canonical: str
+) -> None:
+    # Catches a public label being sent to the registry as an unknown category.
+    registry = FakeRegistry(results=[FakeRule()])
+
+    result = await _assistant(registry=registry).search_tax_rules(
+        _context(_state()),
+        query="Explain the applicable investment tax rule.",
+        as_of_date="2026-08-14",
+        category=alias,
+    )
+
+    assert result["verified"] is True
+    assert registry.calls[0]["category"] == canonical
+
+
+@pytest.mark.asyncio
+async def test_tax_lookup_rejects_unknown_category_before_registry_search() -> None:
+    # Catches silent fallback from an invented category to a broad tax rule.
+    registry = FakeRegistry(results=[FakeRule()])
+
+    result = await _assistant(registry=registry).search_tax_rules(
+        _context(_state()),
+        query="How is crypto taxed?",
+        as_of_date="2026-08-14",
+        category="crypto",
+    )
+
+    assert result["verified"] is False
+    assert result["clarification_required"] is True
+    assert registry.calls == []
+
+
+@pytest.mark.asyncio
+async def test_natural_etf_alias_retrieves_official_equity_fund_rule() -> None:
+    # Catches alias normalization that still misses the packaged ETF rule category.
+    assistant = _assistant(registry=load_packaged_tax_rules())  # type: ignore[arg-type]
+
+    result = await assistant.search_tax_rules(
+        _context(_state()),
+        query="How is a long-term equity ETF gain taxed?",
+        as_of_date="2026-08-14",
+        category="ETF",
+    )
+
+    assert result["verified"] is True
+    assert [rule["rule_id"] for rule in result["rules"][:2]] == [
+        "ita2025_section198_equity_ltcg",
+        "ita2025_equity_fund_classification",
+    ]
 
 
 @pytest.mark.asyncio

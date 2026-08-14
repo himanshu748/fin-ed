@@ -7,11 +7,12 @@ import logging
 import re
 import secrets
 import time
+import unicodedata
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal, DecimalException, InvalidOperation
-from typing import Protocol
+from typing import Literal, Protocol
 from zoneinfo import ZoneInfo
 
 from livekit.agents import (
@@ -167,6 +168,183 @@ class OutboundCallControl(Protocol):
 
 
 TaxEdFactory = Callable[[TaxLocale, llm.ChatContext], Agent]
+ProhibitedAgentIntent = Literal[
+    "personal_tax_liability",
+    "tax_filing",
+    "tax_evasion",
+    "tax_saving_recommendation",
+    "trade_order",
+]
+
+_TAX_MARKERS = (
+    "tax",
+    "taxes",
+    "taxed",
+    "itr",
+    "tax return",
+    "टैक्स",
+    "कर",
+    "आयकर",
+)
+_PERSONAL_MARKERS = (
+    "personally",
+    "personal",
+    "my",
+    "i",
+    "me",
+    "mujhe",
+    "mera",
+    "meri",
+    "mere",
+    "मुझे",
+    "मेरा",
+    "मेरी",
+    "मेरे",
+    "व्यक्तिगत",
+)
+_LIABILITY_MARKERS = (
+    "owe",
+    "liability",
+    "pay",
+    "payable",
+    "due",
+    "calculate",
+    "compute",
+    "how much",
+    "kitna",
+    "dena",
+    "bharna",
+    "कितना",
+    "देना",
+    "देनी",
+    "भरना",
+)
+_FILING_SUBJECTS = ("itr", "tax return", "income tax return", "आयकर रिटर्न")
+_FILING_ACTIONS = (
+    "file",
+    "filing",
+    "prepare",
+    "submit",
+    "amend",
+    "फाइल",
+    "दाखिल",
+    "जमा",
+)
+_ACTION_REQUEST_MARKERS = (
+    "please",
+    "for me",
+    "help me",
+    "kar do",
+    "karo",
+    "mere liye",
+    "मेरे लिए",
+    "कर दो",
+    "करो",
+)
+_LEADING_FILING_ACTION = re.compile(
+    r"^(?:please\s+)?(?:file|prepare|submit|amend)\b",
+    re.IGNORECASE,
+)
+_EVASION_ACTIONS = (
+    "hide",
+    "conceal",
+    "evade",
+    "dodge",
+    "not report",
+    "fake",
+    "forge",
+    "chhupa",
+    "chupa",
+    "छुपा",
+    "छिपा",
+    "नहीं दिखा",
+)
+_EVASION_SUBJECTS = (
+    "tax",
+    "income",
+    "gain",
+    "gains",
+    "profit",
+    "itr",
+    "टैक्स",
+    "कर",
+    "आय",
+    "मुनाफा",
+    "लाभ",
+)
+_TAX_SAVING_MARKERS = (
+    "tax-saving",
+    "tax saving",
+    "save tax",
+    "bachane wala",
+    "tax bacha",
+    "कर बचत",
+    "टैक्स बचाने",
+    "टैक्स बचा",
+)
+_RECOMMENDATION_MARKERS = (
+    "should i",
+    "recommend",
+    "suggest",
+    "choose",
+    "buy",
+    "karo",
+    "batao",
+    "चुन",
+    "खरीद",
+    "बताओ",
+    "फंड",
+    "योजना",
+)
+_TRADE_ACTIONS = (
+    "buy",
+    "sell",
+    "purchase",
+    "place",
+    "execute",
+    "confirm",
+    "खरीद",
+    "बेच",
+    "खरीदो",
+    "बेचो",
+)
+_TRADE_ASSETS = (
+    "share",
+    "shares",
+    "stock",
+    "stocks",
+    "etf",
+    "fund",
+    "bond",
+    "bonds",
+    "security",
+    "securities",
+    "शेयर",
+    "स्टॉक",
+    "ईटीएफ",
+    "फंड",
+    "बॉन्ड",
+)
+_TRADE_EXECUTION_MARKERS = (
+    "for me",
+    "on my behalf",
+    "mere liye",
+    "kar do",
+    "karo",
+    "paper trade",
+    "paper order",
+    "real trade",
+    "real order",
+    "order",
+    "मेरे लिए",
+    "कर दो",
+    "करो",
+)
+_LEADING_TRADE_ACTION = re.compile(
+    r"^(?:please\s+)?(?:buy|sell|purchase|place|execute|confirm)\b",
+    re.IGNORECASE,
+)
+_QUANTITY = re.compile(r"(?<!\w)\d+(?!\w)")
 
 
 @dataclass(frozen=True)
@@ -521,6 +699,87 @@ def _latest_user_message(chat_ctx: llm.ChatContext) -> llm.ChatMessage | None:
     return None
 
 
+def classify_prohibited_agent_intent(
+    text: str,
+) -> ProhibitedAgentIntent | None:
+    """Classify personal tax work and order execution with fixed multilingual terms."""
+    if not isinstance(text, str) or len(text) > 2_000:
+        return None
+    normalized = _normalize_boundary_text(text)
+    if not normalized:
+        return None
+    if (
+        _has_any_term(normalized, _FILING_SUBJECTS)
+        and _has_any_term(normalized, _FILING_ACTIONS)
+        and (
+            _has_any_term(normalized, _PERSONAL_MARKERS)
+            or _has_any_term(normalized, _ACTION_REQUEST_MARKERS)
+            or _LEADING_FILING_ACTION.search(normalized) is not None
+        )
+    ):
+        return "tax_filing"
+    if _has_any_term(normalized, _EVASION_ACTIONS) and _has_any_term(
+        normalized, _EVASION_SUBJECTS
+    ):
+        return "tax_evasion"
+    if _has_any_term(normalized, _TAX_SAVING_MARKERS) and _has_any_term(
+        normalized, _RECOMMENDATION_MARKERS
+    ):
+        return "tax_saving_recommendation"
+    if (
+        _has_any_term(normalized, _TAX_MARKERS)
+        and _has_any_term(normalized, _PERSONAL_MARKERS)
+        and _has_any_term(normalized, _LIABILITY_MARKERS)
+    ):
+        return "personal_tax_liability"
+    if (
+        _has_any_term(normalized, _TRADE_ACTIONS)
+        and _has_any_term(normalized, _TRADE_ASSETS)
+        and (
+            _has_any_term(normalized, _TRADE_EXECUTION_MARKERS)
+            or _LEADING_TRADE_ACTION.search(normalized) is not None
+            or _QUANTITY.search(normalized) is not None
+        )
+    ):
+        return "trade_order"
+    return None
+
+
+def render_prohibited_agent_refusal(intent: ProhibitedAgentIntent) -> str:
+    """Return fixed public copy for a deterministic prohibited-intent result."""
+    if intent == "trade_order":
+        return (
+            "I can't place or confirm a paper or real order. "
+            "I can explain the investment concept and its risks."
+        )
+    return (
+        "I can't handle personal tax liability, filing, evasion or tax-saving "
+        "recommendations. I can explain a verified general tax rule."
+    )
+
+
+def _normalize_boundary_text(text: str) -> str:
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    return " ".join(normalized.split())
+
+
+def _has_any_term(text: str, terms: tuple[str, ...]) -> bool:
+    return any(_has_term(text, term) for term in terms)
+
+
+def _has_term(text: str, term: str) -> bool:
+    if term.isascii():
+        return (
+            re.search(
+                rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])",
+                text,
+                re.IGNORECASE,
+            )
+            is not None
+        )
+    return term in text
+
+
 def _commit_agent_activation(state: SessionState, agent_name: AgentName) -> None:
     previous = state.active_agent_name
     if previous in {"fined", "taxed"} and previous != agent_name:
@@ -614,6 +873,10 @@ class FinEdAssistant(Agent):
             except Exception:
                 yield "I could not end the reminder call safely. Please hang up."
             return
+        prohibited_intent = classify_prohibited_agent_intent(user_text)
+        if prohibited_intent is not None:
+            yield render_prohibited_agent_refusal(prohibited_intent)
+            return
         decision = evaluate_guardrail(user_text)
         if decision is not None:
             yield render_refusal(decision)
@@ -652,6 +915,9 @@ class FinEdAssistant(Agent):
         if message is None:
             raise ToolError("A current tax question is required before a handoff.")
         question = message.text_content or ""
+        prohibited_intent = classify_prohibited_agent_intent(question)
+        if prohibited_intent is not None:
+            raise ToolError(render_prohibited_agent_refusal(prohibited_intent))
         route = classify_tax_route(question)
         if route == "refuse":
             raise ToolError(
