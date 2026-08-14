@@ -271,6 +271,7 @@ git commit -m "feat: add fresh agent handoff consent"
 - Consumes: `TaxRuleRegistry` from Task 1 and consent/context helpers from Task 2.
 - Produces: `TaxEdAssistant`, `build_taxed_prompt()`, `AgentStatus`, `AgentStatusBridge`, `LiveKitAgentStatusBridge` and `AGENT_STATUS_RPC_METHOD = "fined.agent.v1.status"`.
 - `TaxEdFactory` is `Callable[[TaxLocale, llm.ChatContext], Agent]`. `FinEdFactory` is `Callable[[llm.ChatContext, bool], Agent]`, where the boolean requests a returning FinEd introduction.
+- `SessionState.active_agent_name` is the fixed literal `fined` or `taxed`. `SessionState.agent_handoff_count` increments only after an actual committed change between those agents.
 - FinEd tool signatures: `offer_tax_handoff(context, language) -> dict[str, object]` and `handoff_to_taxed(context) -> Agent`.
 - TaxEd tool signatures: `search_tax_rules(context, query, as_of_date, category) -> dict[str, object]`, `offer_fined_return(context, language) -> dict[str, object]` and `handoff_to_fined(context) -> Agent`.
 
@@ -305,6 +306,8 @@ Implement `LiveKitAgentStatusBridge.async publish(status)` with exact payload co
 - [ ] **Step 5: Add FinEd routing and two-stage tools**
 
 Extend `SessionState` with `pending_handoff: PendingHandoff | None`. Add `taxed_factory` and optional `chat_ctx` to `FinEdAssistant.__init__`. The offer captures the latest user message from `self.chat_ctx` rather than trusting model-supplied question text. The confirm tool validates the stored offer, speaks a localized connecting sentence through `context.session.say()` and returns the factory-created TaxEd agent.
+
+Set `state.active_agent_name` in each receiving agent's `on_enter` path before its first speech. Increment `state.agent_handoff_count` only when the prior fixed agent name differs and the receiving agent has actually entered. Initial FinEd activation does not count as a handoff. This state is the only attribution source for Task 6 speaking-time analytics.
 
 Update FinEd instructions so general ETF education stays with FinEd while Indian investment-tax intent must use the consent tools. Tax tools are unavailable in outbound reminder sessions.
 
