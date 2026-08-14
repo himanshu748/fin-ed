@@ -634,6 +634,11 @@ def test_sanitize_handoff_text_redacts_natural_pin_and_account_disclosures(
         ("My UCC is AB1234.", "AB1234"),
         ("My client code: AB-1234.", "AB-1234"),
         ("My UCC no. ZX9876.", "ZX9876"),
+        ("My UCC is 12345678.", "12345678"),
+        ("My client code is ABCDEF,", "ABCDEF"),
+        ("My client code is A_B123;", "A_B123"),
+        ("My client code = EQ1234!", "EQ1234"),
+        ("My UCC - HY5678?", "HY5678"),
     ],
 )
 def test_sanitize_handoff_text_redacts_short_broker_identifiers_only(
@@ -655,6 +660,8 @@ def test_sanitize_handoff_text_redacts_short_broker_identifiers_only(
     [
         "What does client code mean?",
         "How is UCC used by a broker?",
+        "Can you explain client code?",
+        "Is UCC required for every broker?",
     ],
 )
 def test_sanitize_handoff_text_preserves_broker_identifier_prose(
@@ -672,6 +679,11 @@ def test_sanitize_handoff_text_preserves_broker_identifier_prose(
         ("My UCC is AB1234.", "AB1234"),
         ("My client code: AB-1234.", "AB-1234"),
         ("My UCC no. ZX9876.", "ZX9876"),
+        ("My UCC is 12345678.", "12345678"),
+        ("My client code is ABCDEF,", "ABCDEF"),
+        ("My client code is A_B123;", "A_B123"),
+        ("My client code = EQ1234!", "EQ1234"),
+        ("My UCC - HY5678?", "HY5678"),
     ],
 )
 def test_context_transfer_excludes_short_broker_identifiers(
@@ -695,6 +707,41 @@ def test_context_transfer_excludes_short_broker_identifiers(
 
     assert private_identifier not in copied_text
     assert "[REDACTED]" in copied_text
+    assert "How are equity ETF gains taxed?" in copied_text
+
+
+def test_sanitize_handoff_text_fails_closed_on_uncertain_broker_id_format() -> None:
+    # Catches partial redaction exposing a suffix from an explicitly labelled value.
+    text = "My client code is ABC123/45. How are equity ETF gains taxed?"
+
+    assert sanitize_handoff_text(text) == ""
+
+
+def test_context_transfer_omits_uncertain_explicit_broker_id_format() -> None:
+    # Catches context assembly retaining a labelled value the sanitizer cannot bound.
+    source = llm.ChatContext.empty()
+    source.add_message(
+        role="user",
+        content="How are equity ETF gains taxed?",
+        id="turn-uncertain-broker-id-tax",
+    )
+    source.add_message(
+        role="assistant",
+        content="My client code is ABC123/45. This may affect the tax answer.",
+    )
+    pending = create_pending_handoff(
+        direction="taxed",
+        question="How are equity ETF gains taxed?",
+        locale="en-IN",
+        question_turn_id="turn-uncertain-broker-id-tax",
+        now=10.0,
+    )
+
+    copied = build_handoff_chat_context(source, pending)
+    copied_text = "\n".join(message.text_content or "" for message in copied.messages())
+
+    assert "ABC123/45" not in copied_text
+    assert "This may affect the tax answer." not in copied_text
     assert "How are equity ETF gains taxed?" in copied_text
 
 

@@ -73,16 +73,26 @@ _EMAIL = re.compile(
     r"(?i)\b[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+\b"
 )
 _PAN = re.compile(r"(?i)(?<![a-z0-9])[a-z]{5}[0-9]{4}[a-z](?![a-z0-9])")
+_BROKER_IDENTIFIER_TERMINATOR = r"(?=$|\s|[.,;!?](?:\s|$))"
+_EXPLICIT_BROKER_IDENTIFIER_PREFIX = re.compile(
+    r"(?ix)"
+    r"\b(?:client\s+code|ucc)\b"
+    r"\s*(?:is\b|no(?:[.]|\b)|[:=#-])\s*"
+)
 _BROKER_IDENTIFIER_VALUE = re.compile(
     r"(?ix)"
     r"\b(client\s+code|ucc)\b"
-    r"(\s*(?:is\s+|no[.]?\s+|[:=]\s*|[-]\s*|\#\s*)?)"
+    r"(\s*(?:is\b|no(?:[.]|\b)|[:=#-])\s*)"
+    r"(\[redacted\]|[a-z0-9_-]{1,32})" + _BROKER_IDENTIFIER_TERMINATOR
+)
+_BARE_BROKER_IDENTIFIER_VALUE = re.compile(
+    r"(?x)"
+    r"(?i:\b(client\s+code|ucc)\b)"
+    r"(\s+)"
     r"("
-    r"(?=[a-z0-9-]{2,32}\b)"
-    r"(?=[a-z0-9-]*[a-z])"
-    r"(?=[a-z0-9-]*\d)"
-    r"[a-z0-9]+(?:-[a-z0-9]+)*"
-    r")"
+    r"(?:[A-Z]{2,32}|"
+    r"(?=[A-Za-z0-9_-]{0,31}[0-9_-])[A-Za-z0-9_-]{1,32})"
+    r")" + _BROKER_IDENTIFIER_TERMINATOR
 )
 _LABELLED_PRIVATE_VALUE = re.compile(
     r"(?ix)"
@@ -405,7 +415,10 @@ def sanitize_handoff_text(text: str) -> str:
         if character in "\n\t" or not unicodedata.category(character).startswith("C")
     )
     sanitized, protected_urls = _protect_official_source_urls(sanitized)
+    if _contains_uncertain_explicit_broker_identifier(sanitized):
+        return ""
     sanitized = _BROKER_IDENTIFIER_VALUE.sub(r"\1\2[REDACTED]", sanitized)
+    sanitized = _BARE_BROKER_IDENTIFIER_VALUE.sub(r"\1\2[REDACTED]", sanitized)
     sanitized = _LABELLED_PRIVATE_VALUE.sub(r"\1\2[REDACTED]", sanitized)
     sanitized = _EXPLICIT_PIN_VALUE.sub(r"\1\2[REDACTED]", sanitized)
     sanitized = _NATURAL_ACCOUNT_VALUE.sub(r"\1\2[REDACTED]", sanitized)
@@ -626,6 +639,13 @@ def _contains_uncertain_identifier(text: str) -> bool:
         ):
             return True
     return False
+
+
+def _contains_uncertain_explicit_broker_identifier(text: str) -> bool:
+    return any(
+        _BROKER_IDENTIFIER_VALUE.match(text, prefix.start()) is None
+        for prefix in _EXPLICIT_BROKER_IDENTIFIER_PREFIX.finditer(text)
+    )
 
 
 __all__ = [
