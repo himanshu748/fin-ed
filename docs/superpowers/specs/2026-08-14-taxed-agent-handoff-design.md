@@ -8,7 +8,7 @@ Challenge: 10 Days of Voice Agents, Day 9
 
 ## Summary
 
-FinEd Saathi will gain a second in-session specialist named TaxEd. FinEd remains the general financial learning agent with the Nikhil voice. TaxEd answers only sourced questions about Indian investment taxation with the Anusha voice.
+FinEd Saathi will gain a second in-session specialist named TaxEd. FinEd remains the general financial learning agent with the Nikhil voice. TaxEd answers only sourced questions about Indian investment taxation with Anusha for Indian English and Hinglish, or Anjali for Hindi.
 
 FinEd must ask for explicit permission before transferring the conversation. TaxEd must do the same before returning the user to FinEd. A handoff changes the active LiveKit `Agent` inside the existing room and `AgentSession`, so audio and transcript continuity are preserved.
 
@@ -19,7 +19,7 @@ TaxEd explains verified rules. It does not calculate a user's personal tax liabi
 - Complete the Day 9 requirement with a real specialist agent and native in-session handoff.
 - Route Indian investment-tax questions to a narrower agent after explicit consent.
 - Preserve the original tax question and only the relevant recent context.
-- Give TaxEd the Anusha Indian multilingual voice and FinEd the Nikhil voice.
+- Give TaxEd a verified female Falcon voice for each exposed language and FinEd the Nikhil voice.
 - Answer tax questions only when a current or historically applicable rule has an official source.
 - Show the active agent clearly in the call interface.
 - Allow TaxEd to offer a consented return to FinEd for non-tax questions.
@@ -58,6 +58,7 @@ The voice workspace shows one of two validated states:
 
 - `FinEd Saathi · Nikhil`
 - `TaxEd · Anusha · Investment Tax Specialist`
+- `TaxEd · Anjali · Investment Tax Specialist`
 
 The badge changes only after a handoff completes. Its update uses the existing scoped LiveKit RPC approach. If the visual event fails, the spoken introduction remains the source of truth and the conversation continues.
 
@@ -67,7 +68,7 @@ The versioned status payload has this fixed public shape:
 version: 1
 active_agent: fined | taxed
 display_name: FinEd Saathi | TaxEd
-voice_name: Nikhil | Anusha
+voice_name: Nikhil | Anusha | Anjali
 specialty: null | Investment Tax Specialist
 ```
 
@@ -90,26 +91,21 @@ Each agent owns its instructions, allowed tools and TTS configuration:
 | Agent | Scope | Murf voice | Allowed tool families |
 | --- | --- | --- | --- |
 | FinEd | General Indian financial learning, paper practice and current market education | Nikhil | Existing safe learning, quote, paper-practice, memory and human-help tools |
-| TaxEd | Sourced Indian investment-tax explanations | `en-IN-anusha` | Tax registry lookup and consented return handoff only |
+| TaxEd | Sourced Indian investment-tax explanations | Anusha or Anjali | Tax registry lookup and consented return handoff only |
 
 TaxEd must not receive paper trading, broker, quote, memory mutation, outbound calling or human-help tools.
 
 ### Voice and language selection
 
-The live Murf voice catalogue verified that `en-IN-anusha` supports:
+The official Murf Falcon 2 voice catalogue checked on 2026-08-14 lists Anusha only for Indian English `en-IN`. It does not list Anusha for `hi-IN`, so the product does not claim that she is an officially supported Hindi voice. The same catalogue lists the female voice Anjali for Hindi `hi-IN`.
 
-- Indian English: `en-IN`, Conversational
-- Hindi: `hi-IN`, Conversational
-- Hinglish: `hi-LATN`, Conversational
-- Kannada: `kn-IN`, Conversational
-- Telugu: `te-IN`, Conversational
+Day 9 exposes English, Hindi and Hinglish. The handoff stores one validated conversation locale enum: `en-IN`, `hi-IN` or `hi-LATN`. TTS selection is server-owned:
 
-Day 9 initially exposes English, Hindi and Hinglish. The handoff offer stores one validated locale enum: `en-IN`, `hi-IN` or `hi-LATN`. TaxEd is created with:
-
-- voice: `en-IN-anusha`
+- `en-IN`: voice `Anusha`, Murf locale `en-IN`
+- `hi-LATN`: voice `Anusha`, Murf locale `en-IN` for Indian-accent Roman-script code-switching
+- `hi-IN`: voice `Anjali`, Murf locale `hi-IN`
 - style: `Conversational`
 - model: `falcon-2`
-- locale: the validated handoff locale
 
 Unrecognized language values fall back to `en-IN`. Voice identity is never accepted from the model or browser.
 
@@ -315,7 +311,7 @@ The browser cannot request an agent change directly. It only displays backend-co
 
 ### Specialist boundaries
 
-- TaxEd uses Anusha while FinEd uses Nikhil.
+- TaxEd uses Anusha for Indian English and Hinglish, Anjali for Hindi and FinEd uses Nikhil.
 - TaxEd accepts only `en-IN`, `hi-IN` and `hi-LATN` locale values.
 - TaxEd has no paper trade, broker, quote, memory mutation, call or human-help tools.
 - TaxEd refuses personalized liability calculations and order requests.
@@ -353,7 +349,7 @@ Each fixture asserts whether FinEd stays active, offers TaxEd or refuses the uns
 
 - Complete one English tax handoff and answer.
 - Complete one Hindi or Hinglish tax handoff and answer.
-- Verify Nikhil changes to Anusha and back to Nikhil.
+- Verify Nikhil changes to Anusha or Anjali according to the validated language and returns to Nikhil.
 - Verify the room ID, transcript and session remain continuous.
 - Verify a failed registry lookup does not stop the call.
 
@@ -396,4 +392,4 @@ Exact file changes and task order belong in the implementation plan after this s
 - [Income Tax Department transition FAQ](https://www.incometax.gov.in/iec/foportal/help/all-topics/e-filing-services/General%20Questions-faqs?mobile-app=1)
 - [NSE Securities Transaction Tax rates](https://www.nseindia.com/static/products-services/equity-derivatives-securities-transaction-tax)
 
-The live Murf catalogue was checked on 2026-08-14 to confirm Anusha's listed locales and Conversational styles.
+The live Murf catalogue was checked on 2026-08-14 to confirm Anusha for `en-IN`, Anjali for `hi-IN` and their Conversational style.
