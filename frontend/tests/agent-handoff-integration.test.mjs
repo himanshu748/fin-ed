@@ -76,11 +76,13 @@ function createProviderHarness({
   queryResponses = [FINED_RESPONSE],
 } = {}) {
   const states = [];
+  const refs = [];
   const effects = [];
   const callbacks = [];
   const registrations = [];
   const queries = [];
   let stateCursor = 0;
+  let refCursor = 0;
   let callbackCursor = 0;
   let effectCursor = 0;
   let pendingEffects = [];
@@ -125,6 +127,11 @@ function createProviderHarness({
     useMemo(factory) {
       return factory();
     },
+    useRef(initialValue) {
+      const index = refCursor++;
+      if (!(index in refs)) refs[index] = { current: initialValue };
+      return refs[index];
+    },
     useState(initialValue) {
       const index = stateCursor++;
       if (!(index in states)) states[index] = initialValue;
@@ -155,6 +162,7 @@ function createProviderHarness({
 
   function render() {
     stateCursor = 0;
+    refCursor = 0;
     callbackCursor = 0;
     effectCursor = 0;
     pendingEffects = [];
@@ -280,6 +288,26 @@ test('a status update on the same participant SID preserves one provider registr
   assert.equal(harness.state().display_name, 'TaxEd');
   assert.equal(harness.registrations.length, 1);
   assert.equal(harness.queries.length, 1);
+});
+
+test('an authorized push invalidates an older status query for the same participant', async () => {
+  const stale = deferred();
+  const harness = createProviderHarness({ queryResponses: [stale.promise] });
+  harness.render();
+
+  await harness.registrations[0].handler({
+    callerIdentity: 'backend-fined',
+    payload: TAXED_RESPONSE,
+  });
+  harness.render();
+  assert.equal(harness.state().display_name, 'TaxEd');
+
+  stale.resolve(FINED_RESPONSE);
+  await harness.settleQueries();
+
+  assert.equal(harness.state().display_name, 'TaxEd');
+  assert.equal(harness.queries.length, 1);
+  assert.equal(harness.registrations.length, 1);
 });
 
 test('Strict Mode replay cleans the prior RPC and leaves one replacement registration', () => {

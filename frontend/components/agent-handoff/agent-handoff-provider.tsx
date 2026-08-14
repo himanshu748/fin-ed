@@ -7,6 +7,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import { useAgent, useSessionContext } from '@livekit/components-react';
@@ -51,12 +52,17 @@ export function AgentHandoffProvider({ children }: PropsWithChildren) {
   const agent = useAgent();
   const session = useSessionContext();
   const [activeAgent, setActiveAgent] = useState<ActiveAgentStatus>(FINED_ACTIVE_AGENT_STATUS);
+  const statusGenerationRef = useRef(0);
   const agentParticipant = agent.isConnected ? agent.internal.agentParticipant : null;
   const expectedAgentIdentity = agentParticipant?.identity.trim() || null;
   const agentParticipantSid = agentParticipant?.sid.trim() || null;
-  const applyStatus = useCallback((status: ActiveAgentStatus) => setActiveAgent(status), []);
+  const applyPushedStatus = useCallback((status: ActiveAgentStatus) => {
+    statusGenerationRef.current += 1;
+    setActiveAgent(status);
+  }, []);
 
   useEffect(() => {
+    statusGenerationRef.current += 1;
     setActiveAgent(FINED_ACTIVE_AGENT_STATUS);
   }, [agentParticipant, agentParticipantSid, expectedAgentIdentity]);
 
@@ -64,18 +70,21 @@ export function AgentHandoffProvider({ children }: PropsWithChildren) {
     if (!expectedAgentIdentity) return;
     let active = true;
     let unregister: (() => void) | undefined;
+    const queryGeneration = statusGenerationRef.current;
     try {
       unregister = registerAgentStatusRpcHandler(
         session.room.localParticipant,
         expectedAgentIdentity,
-        applyStatus
+        applyPushedStatus
       );
     } catch {
       return;
     }
     void queryActiveAgentStatus(session.room.localParticipant, expectedAgentIdentity)
       .then((status) => {
-        if (active) applyStatus(status);
+        if (active && statusGenerationRef.current === queryGeneration) {
+          setActiveAgent(status);
+        }
       })
       .catch(() => undefined);
     return () => {
@@ -85,7 +94,7 @@ export function AgentHandoffProvider({ children }: PropsWithChildren) {
   }, [
     agentParticipant,
     agentParticipantSid,
-    applyStatus,
+    applyPushedStatus,
     expectedAgentIdentity,
     session.room.localParticipant,
   ]);
