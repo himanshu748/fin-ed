@@ -19,6 +19,10 @@ AMENDED_ACT_URL = (
     "https://www.incometaxindia.gov.in/documents/d/guest/"
     "income_tax_act_2025_as_amended_by_fa_act_2026-pdf"
 )
+TRANSITION_FAQ_URL = (
+    "https://www.incometax.gov.in/iec/foportal/help/all-topics/"
+    "e-filing-services/General%20Questions-faqs?mobile-app=1"
+)
 CHECKED_ON = date(2026, 8, 14)
 
 
@@ -235,6 +239,41 @@ def test_transition_search_selects_the_act_for_the_question_date() -> None:
         "ita1961_transition_before_2026"
     ]
     assert [rule.rule_id for rule in current_results] == ["ita2025_transition_2026"]
+
+
+@pytest.mark.parametrize(
+    ("query", "as_of_date", "expected_rule_ids"),
+    [
+        (
+            "Did the Income-tax Act apply on 31 March 1961?",
+            date(1961, 3, 31),
+            [],
+        ),
+        (
+            "Did the Income-tax Act apply in Tax Year 1961-62?",
+            date(1961, 4, 1),
+            [],
+        ),
+        (
+            "Did the Income-tax Act apply on 1 April 1962?",
+            date(1962, 4, 1),
+            ["ita1961_transition_before_2026"],
+        ),
+    ],
+)
+def test_1961_act_transition_does_not_predate_its_commencement(
+    query: str, as_of_date: date, expected_rule_ids: list[str]
+) -> None:
+    results = load_packaged_tax_rules().search(
+        query,
+        as_of_date=as_of_date,
+        checked_on=CHECKED_ON,
+    )
+
+    assert [rule.rule_id for rule in results] == expected_rule_ids
+    if results:
+        assert results[0].official_source_url == TRANSITION_FAQ_URL
+        assert results[0].review_due_on == date(2026, 9, 14)
 
 
 def test_uncategorized_gold_gain_abstains_without_a_verified_gold_gain_rule() -> None:
