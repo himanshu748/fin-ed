@@ -46,11 +46,12 @@ export function AgentHandoffProvider({ children }: PropsWithChildren) {
   const [activeAgent, setActiveAgent] = useState<ActiveAgentStatus>(FINED_ACTIVE_AGENT_STATUS);
   const agentParticipant = agent.isConnected ? agent.internal.agentParticipant : null;
   const expectedAgentIdentity = agentParticipant?.identity.trim() || null;
+  const agentParticipantSid = agentParticipant?.sid.trim() || null;
   const applyStatus = useCallback((status: ActiveAgentStatus) => setActiveAgent(status), []);
 
   useEffect(() => {
     setActiveAgent(FINED_ACTIVE_AGENT_STATUS);
-  }, [expectedAgentIdentity]);
+  }, [agentParticipant, agentParticipantSid, expectedAgentIdentity]);
 
   useEffect(() => {
     if (!expectedAgentIdentity) return;
@@ -63,7 +64,13 @@ export function AgentHandoffProvider({ children }: PropsWithChildren) {
     } catch {
       return;
     }
-  }, [applyStatus, expectedAgentIdentity, session.room.localParticipant]);
+  }, [
+    agentParticipant,
+    agentParticipantSid,
+    applyStatus,
+    expectedAgentIdentity,
+    session.room.localParticipant,
+  ]);
 
   const value = useMemo<AgentHandoffContextValue>(() => ({ activeAgent }), [activeAgent]);
 

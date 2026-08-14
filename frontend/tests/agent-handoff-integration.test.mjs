@@ -44,14 +44,20 @@ function dependenciesChanged(previous, next) {
   return previous.some((value, index) => !Object.is(value, next[index]));
 }
 
-function createProviderHarness({ agentIdentity = 'backend-fined', registerError = null } = {}) {
+function createProviderHarness({
+  agentIdentity = 'backend-fined',
+  agentSid = 'PA_fined_1',
+  registerError = null,
+} = {}) {
   const states = [];
   const effects = [];
+  const callbacks = [];
   const registrations = [];
   let stateCursor = 0;
+  let callbackCursor = 0;
   let effectCursor = 0;
   let pendingEffects = [];
-  let currentIdentity = agentIdentity;
+  let currentAgent = agentIdentity ? { identity: agentIdentity, sid: agentSid } : null;
   const context = { current: null };
   const room = {
     registerRpcMethod(method, handler) {
@@ -66,8 +72,12 @@ function createProviderHarness({ agentIdentity = 'backend-fined', registerError 
     createContext() {
       return context;
     },
-    useCallback(callback) {
-      return callback;
+    useCallback(callback, dependencies) {
+      const index = callbackCursor++;
+      if (dependenciesChanged(callbacks[index]?.dependencies, dependencies)) {
+        callbacks[index] = { callback, dependencies };
+      }
+      return callbacks[index].callback;
     },
     useContext() {
       return context.current;
@@ -99,8 +109,8 @@ function createProviderHarness({ agentIdentity = 'backend-fined', registerError 
         '@livekit/components-react',
         {
           useAgent: () => ({
-            isConnected: Boolean(currentIdentity),
-            internal: { agentParticipant: currentIdentity ? { identity: currentIdentity } : null },
+            isConnected: currentAgent !== null,
+            internal: { agentParticipant: currentAgent },
           }),
           useSessionContext: () => ({ room: { localParticipant: room } }),
         },
@@ -111,6 +121,7 @@ function createProviderHarness({ agentIdentity = 'backend-fined', registerError 
 
   function render() {
     stateCursor = 0;
+    callbackCursor = 0;
     effectCursor = 0;
     pendingEffects = [];
     Provider({ children: null });
@@ -120,6 +131,7 @@ function createProviderHarness({ agentIdentity = 'backend-fined', registerError 
       effects[pending.index] = {
         cleanup: typeof cleanup === 'function' ? cleanup : null,
         dependencies: pending.dependencies,
+        effect: pending.effect,
       };
     }
   }
@@ -128,7 +140,19 @@ function createProviderHarness({ agentIdentity = 'backend-fined', registerError 
     registrations,
     render,
     setAgentIdentity(identity) {
-      currentIdentity = identity;
+      currentAgent = identity ? { identity, sid: currentAgent?.sid ?? 'PA_fined_1' } : null;
+    },
+    replaceAgentParticipant({ identity, sid }) {
+      currentAgent = { identity, sid };
+    },
+    strictModeReplayEffects() {
+      for (const record of effects) record?.cleanup?.();
+      for (let index = 0; index < effects.length; index += 1) {
+        const record = effects[index];
+        if (!record) continue;
+        const cleanup = record.effect();
+        effects[index] = { ...record, cleanup: typeof cleanup === 'function' ? cleanup : null };
+      }
     },
     state() {
       return states[0];
@@ -160,6 +184,71 @@ test('provider scopes one status RPC to the current connected agent and resets o
   assert.equal(harness.registrations[1].method, 'fined.agent.v1.status');
   assert.equal(harness.registrations[2].method, 'fined.agent.v1.status');
   assert.equal(harness.state().display_name, 'FinEd Saathi');
+});
+
+test('same-identity participant replacement resets status and replaces the scoped RPC once', async () => {
+  const harness = createProviderHarness();
+  harness.render();
+  await harness.registrations[0].handler({
+    callerIdentity: 'backend-fined',
+    payload: JSON.stringify({
+      version: 1,
+      active_agent: 'taxed',
+      display_name: 'TaxEd',
+      voice_name: 'Anusha',
+      specialty: 'Investment Tax Specialist',
+    }),
+  });
+  harness.render();
+  assert.equal(harness.state().display_name, 'TaxEd');
+
+  harness.replaceAgentParticipant({ identity: 'backend-fined', sid: 'PA_fined_2' });
+  harness.render();
+
+  assert.equal(harness.state().display_name, 'FinEd Saathi');
+  assert.deepEqual(
+    harness.registrations.map(({ method, handler }) => ({ method, registered: handler !== null })),
+    [
+      { method: 'fined.agent.v1.status', registered: true },
+      { method: 'fined.agent.v1.status', registered: false },
+      { method: 'fined.agent.v1.status', registered: true },
+    ]
+  );
+});
+
+test('a status update on the same participant SID preserves one provider registration', async () => {
+  const harness = createProviderHarness();
+  harness.render();
+  await harness.registrations[0].handler({
+    callerIdentity: 'backend-fined',
+    payload: JSON.stringify({
+      version: 1,
+      active_agent: 'taxed',
+      display_name: 'TaxEd',
+      voice_name: 'Anusha',
+      specialty: 'Investment Tax Specialist',
+    }),
+  });
+  harness.render();
+
+  assert.equal(harness.state().display_name, 'TaxEd');
+  assert.equal(harness.registrations.length, 1);
+});
+
+test('Strict Mode replay cleans the prior RPC and leaves one replacement registration', () => {
+  const harness = createProviderHarness();
+  harness.render();
+
+  harness.strictModeReplayEffects();
+
+  assert.deepEqual(
+    harness.registrations.map(({ method, handler }) => ({ method, registered: handler !== null })),
+    [
+      { method: 'fined.agent.v1.status', registered: true },
+      { method: 'fined.agent.v1.status', registered: false },
+      { method: 'fined.agent.v1.status', registered: true },
+    ]
+  );
 });
 
 test('provider tolerates an RPC registration failure', () => {
