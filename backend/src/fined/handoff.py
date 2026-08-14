@@ -77,15 +77,17 @@ _LABELLED_PRIVATE_VALUE = re.compile(
     r"(?ix)"
     r"\b("
     r"one[\s-]*time\s+password|otp|pan|aadhaar|aadhar|"
-    r"account(?:\s+(?:number|no|id))?|demat(?:\s+(?:number|no|id))?|"
-    r"client(?:\s+(?:number|no|id))?|api\s+key|api\s+token|access\s+token|"
+    r"account\s+(?:number|no|id)|"
+    r"demat(?:\s+account)?\s+(?:number|no|id)|"
+    r"client\s+(?:number|no|id)|api\s+key|api\s+token|access\s+token|"
     r"auth(?:entication)?\s+token|bearer\s+token|secret(?:\s+phrase)?|"
-    r"password|passcode|pin|broker(?:age)?\s+(?:login|credential|credentials|"
+    r"password|passcode|broker(?:age)?\s+(?:login|credential|credentials|"
     r"password|token|username|user\s+id)"
     r")\b"
     r"(\s*(?:is\s+|[:=]\s*|[-]\s*|\#\s*|no[.]?\s*)?)"
     r"([^\n]+)",
 )
+_EXPLICIT_PIN_VALUE = re.compile(r"(?ix)\b(pin)\b(\s*(?:[:=]\s*|[-]\s*|\#\s*))([^\n]+)")
 _TOKEN = re.compile(
     r"(?i)(?<![a-z0-9])(?:sk|pk|api|token|secret)[-_][a-z0-9_-]{8,}(?![a-z0-9])"
 )
@@ -116,6 +118,7 @@ _REFUSAL_PATTERNS = tuple(
 )
 _TAX_TERMS = (
     "tax",
+    "taxes",
     "taxed",
     "taxation",
     "capital gain",
@@ -145,8 +148,8 @@ _INVESTMENT_TERMS = (
     "bonds",
     "debt fund",
     "securities",
-    "future",
     "futures",
+    "future contract",
     "option",
     "options",
     "derivative",
@@ -156,12 +159,15 @@ _INVESTMENT_TERMS = (
     "investment",
     "निवेश",
     "शेयर",
+    "शेयरों",
     "स्टॉक",
     "इक्विटी",
     "ईटीएफ",
     "म्यूचुअल फंड",
     "सोना",
+    "सोने",
     "बॉन्ड",
+    "लाभांश",
 )
 _INTRINSIC_INVESTMENT_TAX_TERMS = (
     "capital gain",
@@ -338,9 +344,13 @@ def validate_fresh_consent(
         else:
             if item.call_id not in call_ids or item.call_id in completed_call_ids:
                 return False
+            if item.is_error or not _offer_output_matches_permission(
+                item.output, pending.permission_text
+            ):
+                return False
             completed_call_ids.add(item.call_id)
         cursor += 1
-    if call_ids != completed_call_ids:
+    if len(call_ids) != 1 or call_ids != completed_call_ids:
         return False
     if cursor >= len(chat_ctx.items):
         return False
@@ -376,6 +386,7 @@ def sanitize_handoff_text(text: str) -> str:
     )
     sanitized, protected_urls = _protect_official_source_urls(sanitized)
     sanitized = _LABELLED_PRIVATE_VALUE.sub(r"\1\2[REDACTED]", sanitized)
+    sanitized = _EXPLICIT_PIN_VALUE.sub(r"\1\2[REDACTED]", sanitized)
     sanitized = _EMAIL.sub("[REDACTED]", sanitized)
     sanitized = _PAN.sub("[REDACTED]", sanitized)
     sanitized = _JWT.sub("[REDACTED]", sanitized)
@@ -493,6 +504,22 @@ def _is_valid_pending_handoff(pending: PendingHandoff) -> bool:
 def _contains_fixed_term(text: str, terms: tuple[str, ...]) -> bool:
     bounded = f" {text} "
     return any(f" {term} " in bounded for term in terms)
+
+
+def _offer_output_matches_permission(output: str, permission_text: str) -> bool:
+    if output == permission_text:
+        return True
+    try:
+        public_output = json.loads(output)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    if isinstance(public_output, str):
+        return public_output == permission_text
+    if not isinstance(public_output, dict):
+        return False
+    if "offered" in public_output and public_output["offered"] is not True:
+        return False
+    return public_output.get("permission") == permission_text
 
 
 def _normalize_routing_text(text: str) -> str:

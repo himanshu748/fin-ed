@@ -42,6 +42,24 @@ def _consent_context(
         content=pending.question,
         id=pending.question_turn_id,
     )
+    offer_tool = (
+        "offer_tax_handoff" if pending.direction == "taxed" else "offer_fined_return"
+    )
+    chat_ctx.items.append(
+        llm.FunctionCall(
+            call_id="current-offer",
+            name=offer_tool,
+            arguments="{}",
+        )
+    )
+    chat_ctx.items.append(
+        llm.FunctionCallOutput(
+            call_id="current-offer",
+            name=offer_tool,
+            output=pending.permission_text,
+            is_error=False,
+        )
+    )
     chat_ctx.add_message(role="assistant", content=pending.permission_text)
     if intervening_assistant is not None:
         chat_ctx.add_message(role="assistant", content=intervening_assistant)
@@ -244,6 +262,113 @@ def test_offer_tool_activity_before_permission_preserves_fresh_consent() -> None
     assert validate_fresh_consent(pending, chat_ctx, now=20.0) is True
 
 
+def test_json_offer_output_must_contain_the_exact_stored_permission() -> None:
+    # Catches Task 3's dictionary tool result being rejected despite exact binding.
+    pending = create_pending_handoff(
+        direction="taxed",
+        question="What STT applies to futures?",
+        locale="en-IN",
+        question_turn_id="turn-tax-json-offer",
+        now=10.0,
+    )
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(
+        role="user",
+        content=pending.question,
+        id=pending.question_turn_id,
+    )
+    chat_ctx.items.append(
+        llm.FunctionCall(
+            call_id="json-offer",
+            name="offer_tax_handoff",
+            arguments="{}",
+        )
+    )
+    chat_ctx.items.append(
+        llm.FunctionCallOutput(
+            call_id="json-offer",
+            name="offer_tax_handoff",
+            output=json.dumps(
+                {"offered": True, "permission": pending.permission_text},
+                ensure_ascii=False,
+            ),
+            is_error=False,
+        )
+    )
+    chat_ctx.add_message(role="assistant", content=pending.permission_text)
+    chat_ctx.add_message(role="user", content="yes")
+
+    assert validate_fresh_consent(pending, chat_ctx, now=20.0) is True
+
+
+@pytest.mark.parametrize(
+    ("mode", "second_call_id", "output", "is_error"),
+    [
+        ("missing", None, None, False),
+        ("failed", None, "offer failed", True),
+        ("wrong_output", None, "a different permission question", False),
+        ("mismatched_id", "other-offer", None, False),
+        ("duplicate", None, None, False),
+    ],
+)
+def test_consent_requires_exactly_one_successful_bound_offer_pair(
+    mode: str,
+    second_call_id: str | None,
+    output: str | None,
+    is_error: bool,
+) -> None:
+    # Catches missing, failed, repeated or unbound offer activity confirming consent.
+    pending = create_pending_handoff(
+        direction="taxed",
+        question="What STT applies to futures?",
+        locale="en-IN",
+        question_turn_id=f"turn-tax-{mode}",
+        now=10.0,
+    )
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(
+        role="user",
+        content=pending.question,
+        id=pending.question_turn_id,
+    )
+    if mode != "missing":
+        chat_ctx.items.append(
+            llm.FunctionCall(
+                call_id="first-offer",
+                name="offer_tax_handoff",
+                arguments="{}",
+            )
+        )
+        chat_ctx.items.append(
+            llm.FunctionCallOutput(
+                call_id=second_call_id or "first-offer",
+                name="offer_tax_handoff",
+                output=output or pending.permission_text,
+                is_error=is_error,
+            )
+        )
+    if mode == "duplicate":
+        chat_ctx.items.append(
+            llm.FunctionCall(
+                call_id="second-offer",
+                name="offer_tax_handoff",
+                arguments="{}",
+            )
+        )
+        chat_ctx.items.append(
+            llm.FunctionCallOutput(
+                call_id="second-offer",
+                name="offer_tax_handoff",
+                output=pending.permission_text,
+                is_error=False,
+            )
+        )
+    chat_ctx.add_message(role="assistant", content=pending.permission_text)
+    chat_ctx.add_message(role="user", content="yes")
+
+    assert validate_fresh_consent(pending, chat_ctx, now=20.0) is False
+
+
 @pytest.mark.parametrize("intervening_type", ["call", "output"])
 def test_tool_activity_after_permission_invalidates_consent(
     intervening_type: str,
@@ -407,6 +532,12 @@ def test_cleared_offer_cannot_be_replayed() -> None:
         ("Share par capital gains tax kitna lagega?", "offer_taxed"),
         ("ETF par tax kaise lagta hai?", "offer_taxed"),
         ("How is a security deposit taxed?", "fined"),
+        ("What taxes apply to shares?", "offer_taxed"),
+        ("Shares pe taxes kaise lagte hain?", "offer_taxed"),
+        ("शेयरों पर टैक्स कैसे लगता है?", "offer_taxed"),
+        ("सोने पर कर कैसे लगता है?", "offer_taxed"),
+        ("लाभांश पर कर कैसे लगता है?", "offer_taxed"),
+        ("How will future tax rates change?", "fined"),
     ],
 )
 def test_tax_route_matrix_is_bounded_and_deterministic(
@@ -444,6 +575,7 @@ def test_sanitize_handoff_text_removes_private_identifiers(private_text: str) ->
         ("secret phrase: blue river orchid", "blue river orchid", "orchid"),
         ("secret phrase: blue river!orchid", "blue river!orchid", "orchid"),
         ("password: Hunter2!stillsecret", "Hunter2!stillsecret", "stillsecret"),
+        ("PIN: 4321!keepprivate", "4321!keepprivate", "keepprivate"),
     ],
 )
 def test_sanitize_handoff_text_removes_labelled_multiword_credentials(
@@ -455,6 +587,21 @@ def test_sanitize_handoff_text_removes_labelled_multiword_credentials(
     assert secret_value not in sanitized
     assert secret_suffix not in sanitized
     assert "[REDACTED]" in sanitized
+
+
+@pytest.mark.parametrize(
+    "ordinary_question",
+    [
+        "My account has shares. How are capital gains taxed?",
+        "My demat account has shares. How are capital gains taxed?",
+        "What does PIN mean for account security?",
+    ],
+)
+def test_sanitize_handoff_text_preserves_ordinary_account_and_pin_prose(
+    ordinary_question: str,
+) -> None:
+    # Catches broad credential labels destroying ordinary investment questions.
+    assert sanitize_handoff_text(ordinary_question) == ordinary_question
 
 
 @pytest.mark.parametrize("source_url", _OFFICIAL_SOURCE_URLS)
