@@ -383,6 +383,25 @@ _PAPER_ORDER_MARKERS = (
     "virtual money",
     "पेपर ऑर्डर",
 )
+_ORDER_CLAUSE_SEPARATOR = re.compile(r"[.!?।;]+")
+_NEGATED_CONTEXT_PREFIX = re.compile(
+    r"(?:\bdo\s+not(?:\s+use)?|\bdon't(?:\s+use)?|"
+    r"\bnot(?:\s+(?:a|an|the|in))?|\bwithout|\bno)\s*$",
+    re.IGNORECASE,
+)
+_EXPLICIT_REAL_ORDER_PATTERNS = (
+    re.compile(
+        r"(?<![a-z0-9])real(?:\s+[a-z0-9&.-]+){0,3}\s+"
+        r"(?:shares?|stocks?|orders?|trades?|securities|etfs?|funds?|bonds?)"
+        r"(?![a-z0-9])",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?<![a-z0-9])(?:use|using|through|via)\s+(?:my\s+)?broker"
+        r"(?![a-z0-9])",
+        re.IGNORECASE,
+    ),
+)
 _LEADING_TRADE_ACTION = re.compile(
     r"^(?:please\s+)?(?:buy|sell|purchase|place|execute|confirm)\b",
     re.IGNORECASE,
@@ -788,7 +807,9 @@ def classify_prohibited_agent_intent(
             or _QUANTITY.search(normalized) is not None
         )
     ):
-        if _has_any_term(normalized, _PAPER_ORDER_MARKERS):
+        if _has_bound_real_order_context(normalized):
+            return "real_trade_order"
+        if _has_bound_paper_order_context(normalized):
             return "paper_order"
         return "real_trade_order"
     return None
@@ -832,6 +853,52 @@ def _has_term(text: str, term: str) -> bool:
             is not None
         )
     return term in text
+
+
+def _has_bound_real_order_context(text: str) -> bool:
+    return any(
+        any(
+            not _context_is_negated(clause, match.start())
+            for pattern in _EXPLICIT_REAL_ORDER_PATTERNS
+            for match in pattern.finditer(clause)
+        )
+        for clause in _trade_request_clauses(text)
+    )
+
+
+def _has_bound_paper_order_context(text: str) -> bool:
+    return any(
+        any(
+            not _context_is_negated(clause, start)
+            for term in _PAPER_ORDER_MARKERS
+            for start in _term_start_positions(clause, term)
+        )
+        for clause in _trade_request_clauses(text)
+    )
+
+
+def _trade_request_clauses(text: str) -> tuple[str, ...]:
+    return tuple(
+        clause.strip()
+        for clause in _ORDER_CLAUSE_SEPARATOR.split(text)
+        if _has_any_term(clause, _TRADE_ACTIONS)
+        and _has_any_term(clause, _TRADE_ASSETS)
+    )
+
+
+def _context_is_negated(text: str, start: int) -> bool:
+    prefix = text[max(0, start - 24) : start]
+    return _NEGATED_CONTEXT_PREFIX.search(prefix) is not None
+
+
+def _term_start_positions(text: str, term: str) -> tuple[int, ...]:
+    if term.isascii():
+        pattern = re.compile(
+            rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])",
+            re.IGNORECASE,
+        )
+        return tuple(match.start() for match in pattern.finditer(text))
+    return tuple(match.start() for match in re.finditer(re.escape(term), text))
 
 
 def _commit_agent_activation(state: SessionState, agent_name: AgentName) -> None:

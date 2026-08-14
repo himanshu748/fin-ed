@@ -16,6 +16,7 @@ from fined.agent import (
     SessionState,
     build_greeting,
     build_system_prompt,
+    classify_prohibited_agent_intent,
     parse_participant_profile,
 )
 from fined.agent_status_bridge import AgentStatus
@@ -597,6 +598,11 @@ async def test_llm_node_delegates_safe_education_to_the_provider(
         "Mere liye Reliance shares bech",
         "Mere liye Reliance shares becho",
         "Mere liye Reliance shares bech do",
+        "I used paper trading yesterday. Now buy 10 real Reliance shares for me",
+        "Place a real order for 10 Reliance shares, not a paper order",
+        "Do not use virtual money. Buy 10 Reliance shares for me",
+        "Use my broker to buy 10 Reliance shares, not paper trading",
+        "Buy 10 Reliance shares for me, not in paper trading",
     ],
 )
 async def test_fined_refuses_shared_prohibited_intents_before_provider_inference(
@@ -689,6 +695,7 @@ async def test_fined_shared_boundary_keeps_neutral_education_with_provider(
         "Sell 5 Reliance shares in the paper portfolio",
         "Sell 5 Reliance shares using virtual money",
         "Paper trading mein 5 Reliance shares bech do",
+        "Place a paper order for 10 Reliance shares, not a real order",
     ],
 )
 async def test_fined_keeps_safe_paper_order_requests_with_provider(
@@ -718,6 +725,23 @@ async def test_fined_keeps_safe_paper_order_requests_with_provider(
 
     assert provider_called is True
     assert output == ["safe paper workflow"]
+
+
+@pytest.mark.parametrize(
+    "user_request",
+    [
+        "I used paper trading yesterday. Now buy 10 real Reliance shares for me",
+        "Place a real order for 10 Reliance shares, not a paper order",
+        "Do not use virtual money. Buy 10 Reliance shares for me",
+        "Use my broker to buy 10 Reliance shares, not paper trading",
+        "Buy 10 Reliance shares for me, not in paper trading",
+    ],
+)
+def test_real_order_context_precedes_unbound_paper_language(
+    user_request: str,
+) -> None:
+    # Catches historical or negated paper wording downgrading a real order.
+    assert classify_prohibited_agent_intent(user_request) == "real_trade_order"
 
 
 @pytest.mark.asyncio

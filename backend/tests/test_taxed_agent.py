@@ -207,6 +207,7 @@ def test_taxed_prompt_requires_sourced_date_bound_fail_closed_answers() -> None:
         "Sell 5 Reliance shares in the paper portfolio",
         "Sell 5 Reliance shares using virtual money",
         "Paper trading mein 5 Reliance shares bech do",
+        "Place a paper order for 10 Reliance shares, not a real order",
         "Place a real sell order for my shares.",
         "Buy 10 Reliance shares for me.",
         "मेरे लिए 10 रिलायंस शेयर खरीद दो।",
@@ -218,6 +219,11 @@ def test_taxed_prompt_requires_sourced_date_bound_fail_closed_answers() -> None:
         "Mere liye Reliance shares bech",
         "Mere liye Reliance shares becho",
         "Mere liye Reliance shares bech do",
+        "I used paper trading yesterday. Now buy 10 real Reliance shares for me",
+        "Place a real order for 10 Reliance shares, not a paper order",
+        "Do not use virtual money. Buy 10 Reliance shares for me",
+        "Use my broker to buy 10 Reliance shares, not paper trading",
+        "Buy 10 Reliance shares for me, not in paper trading",
     ],
 )
 async def test_taxed_refuses_prohibited_requests_before_provider_inference(
