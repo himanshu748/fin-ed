@@ -21,6 +21,7 @@ from livekit.agents import (
     MetricsCollectedEvent,
     cli,
     inference,
+    llm,
     metrics,
     room_io,
     tokenize,
@@ -35,6 +36,7 @@ from fined.agent import (
     build_system_prompt,
     parse_participant_profile,
 )
+from fined.agent_status_bridge import LiveKitAgentStatusBridge
 from fined.call_analytics import (
     CallAnalyticsInput,
     SQLiteCallAnalyticsStore,
@@ -44,6 +46,7 @@ from fined.chat_model import create_gemini_llm
 from fined.escalation_bridge import LiveKitHumanHelpBridge
 from fined.escalation_callback import LiveKitHumanHelpCallback
 from fined.escalations import SQLiteEscalationStore
+from fined.handoff import normalize_tax_locale
 from fined.knowledge.embeddings import GeminiEmbedder
 from fined.knowledge.index import KnowledgeIndex, UnavailableKnowledgeRetriever
 from fined.market_data.angel_one import create_market_data_provider
@@ -66,6 +69,8 @@ from fined.paper_trading.models import (
     decode_paper_order_result,
     paper_holding_quotes_rpc_payload,
 )
+from fined.tax_rules import load_packaged_tax_rules
+from fined.taxed_agent import TaxEdAssistant
 
 logger = logging.getLogger("agent")
 
@@ -86,6 +91,9 @@ ANALYTICS_SNAPSHOT_PATH = (
 )
 KNOWLEDGE_UNAVAILABLE_WARNING = (
     "Knowledge index is unavailable; starting in evidence-unavailable mode"
+)
+TAX_REGISTRY_UNAVAILABLE_WARNING = (
+    "Tax rule registry is unavailable; starting FinEd without TaxEd"
 )
 PAPER_ORDER_RESULT_METHOD = "fined.paper.v1.order_result"
 PAPER_HOLDING_QUOTES_METHOD = "fined.paper.v1.quote_holdings"
@@ -287,6 +295,16 @@ async def my_agent(ctx: JobContext) -> None:
         install_current_websocket_serializer()
         embedder = GeminiEmbedder(embedding_client)
         index = _load_knowledge_retriever(KNOWLEDGE_DIRECTORY, embedder)
+        status_bridge = None
+        tax_registry = None
+        if outbound_reminder is None:
+            status_bridge = LiveKitAgentStatusBridge(
+                ctx.room.local_participant, participant.identity
+            )
+            try:
+                tax_registry = load_packaged_tax_rules()
+            except Exception:
+                logger.warning(TAX_REGISTRY_UNAVAILABLE_WARNING)
         state = SessionState(
             profile=profile,
             retriever=index,
@@ -311,6 +329,37 @@ async def my_agent(ctx: JobContext) -> None:
             )
         elif outbound_reminder == PAPER_PRACTICE_REMINDER:
             state.paper_trading = CallPaperTradingBridge()
+
+        if tax_registry is not None:
+
+            def create_fined(
+                chat_ctx: llm.ChatContext | None = None,
+                announce_entry: bool = False,
+            ) -> FinEdAssistant:
+                return FinEdAssistant(
+                    profile,
+                    chat_ctx=chat_ctx,
+                    taxed_factory=create_taxed,
+                    status_bridge=status_bridge,
+                    announce_entry=announce_entry,
+                )
+
+            def create_taxed(locale: str, chat_ctx: llm.ChatContext) -> TaxEdAssistant:
+                return TaxEdAssistant(
+                    registry=tax_registry,
+                    chat_ctx=chat_ctx,
+                    fined_factory=create_fined,
+                    status_bridge=status_bridge,
+                    tts=murf.TTS(
+                        voice="en-IN-anusha",
+                        style="Conversational",
+                        model="falcon-2",
+                        locale=normalize_tax_locale(locale),
+                        tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
+                        text_pacing=True,
+                    ),
+                )
+
         session = AgentSession[SessionState](
             userdata=state,
             stt=deepgram.STT(
@@ -336,6 +385,15 @@ async def my_agent(ctx: JobContext) -> None:
                 session,
                 ctx,
                 participant.identity,
+            )
+        if tax_registry is not None:
+            initial_agent = create_fined()
+        else:
+            initial_agent = FinEdAssistant(
+                profile,
+                outbound_reminder=outbound_reminder,
+                outbound_call_control=state.outbound_call_control,
+                status_bridge=status_bridge,
             )
 
         usage = metrics.UsageCollector()
@@ -478,11 +536,7 @@ async def my_agent(ctx: JobContext) -> None:
         ctx.add_shutdown_callback(on_shutdown)
 
         await session.start(
-            agent=FinEdAssistant(
-                profile,
-                outbound_reminder=outbound_reminder,
-                outbound_call_control=state.outbound_call_control,
-            ),
+            agent=initial_agent,
             room=ctx.room,
             room_options=room_io.RoomOptions(
                 audio_input=room_io.AudioInputOptions(

@@ -12,8 +12,15 @@ from typing import Any
 
 import pytest
 from livekit import rtc
+from livekit.agents import llm
 
 import agent as entrypoint
+from fined.agent_status_bridge import (
+    AGENT_STATUS_RPC_METHOD,
+    AgentStatus,
+    LiveKitAgentStatusBridge,
+    UnavailableAgentStatusBridge,
+)
 from fined.call_analytics import SQLiteCallAnalyticsStore
 from fined.knowledge.ingest import BuildError
 from fined.market_data.models import MarketQuote
@@ -27,6 +34,7 @@ from fined.outbound import (
     build_outbound_metadata,
 )
 from fined.paper_trading import PaperOrderDraft
+from fined.taxed_agent import TaxEdAssistant
 
 
 class LifecycleAbort(BaseException):
@@ -75,6 +83,7 @@ class FakeSession:
         self.spoken: list[str] = []
         self.generated_replies: list[dict[str, object]] = []
         self.callbacks: dict[str, list[Any]] = {}
+        self.start_kwargs: dict[str, object] = {}
 
     def on(self, event_name: str):
         assert event_name in {"metrics_collected", "error"}
@@ -98,6 +107,7 @@ class FakeSession:
         if self.fail_at == "start":
             raise LifecycleAbort("start")
         assert kwargs["room"] is not None
+        self.start_kwargs = kwargs
 
     async def say(self, greeting: str) -> None:
         self.events.append("say")
@@ -133,6 +143,8 @@ class FakeLocalParticipant:
 
     async def perform_rpc(self, **kwargs: object) -> str:
         self.outbound_rpc_calls.append(kwargs)
+        if kwargs.get("method") == AGENT_STATUS_RPC_METHOD:
+            return '{"version":1,"accepted":true}'
         if kwargs.get("method") == "fined.escalation.v1.show_request":
             return '{"version":1,"opened":true}'
         return '{"version":1,"paper":true,"opened":true}'
@@ -193,7 +205,11 @@ class LifecycleHarness:
     llm_kwargs: dict[str, object]
     stt_kwargs: dict[str, object]
     tts_kwargs: dict[str, object]
+    tts_instances: list[tuple[object, dict[str, object]]]
+    tokenizer_instances: list[tuple[object, dict[str, object]]]
     turn_detection_kwargs: dict[str, object]
+    tax_registry: object
+    tax_registry_loads: list[None]
 
 
 def _install_lifecycle_fakes(
@@ -203,6 +219,7 @@ def _install_lifecycle_fakes(
     *,
     knowledge_available: bool = True,
     analytics_directory: Path | None = None,
+    tax_registry_error: Exception | None = None,
 ) -> LifecycleHarness:
     events: list[str] = []
     client = FakeEmbeddingClient(events)
@@ -212,7 +229,11 @@ def _install_lifecycle_fakes(
     llm_kwargs: dict[str, object] = {}
     stt_kwargs: dict[str, object] = {}
     tts_kwargs: dict[str, object] = {}
+    tts_instances: list[tuple[object, dict[str, object]]] = []
+    tokenizer_instances: list[tuple[object, dict[str, object]]] = []
     turn_detection_kwargs: dict[str, object] = {}
+    tax_registry = object()
+    tax_registry_loads: list[None] = []
 
     analytics_root = analytics_directory or knowledge_directory.parent / "analytics"
     monkeypatch.setenv("FINED_ANALYTICS_DB_PATH", str(analytics_root / "fined.sqlite3"))
@@ -273,7 +294,25 @@ def _install_lifecycle_fakes(
         if fail_at == "tts":
             raise LifecycleAbort("tts")
         tts_kwargs.update(kwargs)
-        return object()
+        tts = object()
+        tts_instances.append((tts, dict(kwargs)))
+        return tts
+
+    def tokenizer_factory(*args: object, **kwargs: object) -> object:
+        assert not args
+        events.append("tokenizer")
+        if fail_at == "tokenizer":
+            raise LifecycleAbort("tokenizer")
+        tokenizer = object()
+        tokenizer_instances.append((tokenizer, dict(kwargs)))
+        return tokenizer
+
+    def tax_registry_factory() -> object:
+        events.append("tax_registry")
+        tax_registry_loads.append(None)
+        if tax_registry_error is not None:
+            raise tax_registry_error
+        return tax_registry
 
     def turn_detection_factory(*args: object, **kwargs: object) -> object:
         assert not args
@@ -318,9 +357,15 @@ def _install_lifecycle_fakes(
     monkeypatch.setattr(entrypoint.deepgram, "STT", stt_factory)
     monkeypatch.setattr(entrypoint.google, "LLM", llm_factory)
     monkeypatch.setattr(
-        entrypoint.tokenize.basic, "SentenceTokenizer", stage("tokenizer", object())
+        entrypoint.tokenize.basic, "SentenceTokenizer", tokenizer_factory
     )
     monkeypatch.setattr(entrypoint.murf, "TTS", tts_factory)
+    monkeypatch.setattr(
+        entrypoint,
+        "load_packaged_tax_rules",
+        tax_registry_factory,
+        raising=False,
+    )
     monkeypatch.setattr(entrypoint.inference, "TurnDetector", turn_detection_factory)
     monkeypatch.setattr(entrypoint, "AgentSession", SessionFactory)
     monkeypatch.setattr(
@@ -338,7 +383,11 @@ def _install_lifecycle_fakes(
         llm_kwargs,
         stt_kwargs,
         tts_kwargs,
+        tts_instances,
+        tokenizer_instances,
         turn_detection_kwargs,
+        tax_registry,
+        tax_registry_loads,
     )
 
 
@@ -417,6 +466,7 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
         "client",
         "embedder",
         "index",
+        "tax_registry",
         "provider",
         "llm",
         "tokenizer",
@@ -503,6 +553,128 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
     assert entrypoint.PAPER_HOLDING_QUOTES_METHOD not in (
         harness.context.local_participant.rpc_methods
     )
+
+
+@pytest.mark.asyncio
+async def test_browser_job_wires_one_recursive_taxed_factory_with_anusha_locales(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Catches loading more than one registry or sharing Nikhil with TaxEd.
+    harness = _install_lifecycle_fakes(monkeypatch, None, tmp_path / "generated")
+
+    await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
+
+    assert harness.tax_registry_loads == [None]
+    fined_agent = harness.session.start_kwargs["agent"]
+    assert isinstance(fined_agent, entrypoint.FinEdAssistant)
+    assert isinstance(fined_agent.status_bridge, LiveKitAgentStatusBridge)
+    assert fined_agent.taxed_factory is not None
+    assert len(harness.tts_instances) == 1
+    default_tts = harness.tts_instances[0][1]
+    assert {key: default_tts[key] for key in ("voice", "style", "model", "locale")} == {
+        "voice": "Nikhil",
+        "style": "Conversational",
+        "model": "falcon-2",
+        "locale": "en-IN",
+    }
+
+    await fined_agent.status_bridge.publish(AgentStatus.fined())
+    assert (
+        harness.context.local_participant.outbound_rpc_calls[-1]["destination_identity"]
+        == "learner-1"
+    )
+    assert (
+        harness.context.local_participant.outbound_rpc_calls[-1]["method"]
+        == AGENT_STATUS_RPC_METHOD
+    )
+
+    specialists: list[TaxEdAssistant] = []
+    for requested_locale in ("en-IN", "hi-IN", "hi-LATN", "unknown"):
+        specialist = fined_agent.taxed_factory(
+            requested_locale,  # type: ignore[arg-type]
+            llm.ChatContext.empty(),
+        )
+        assert isinstance(specialist, TaxEdAssistant)
+        assert specialist.registry is harness.tax_registry
+        assert specialist.status_bridge is fined_agent.status_bridge
+        specialists.append(specialist)
+
+    assert harness.tax_registry_loads == [None]
+    for expected_locale, (tokenizer, tokenizer_kwargs), (_, tts_kwargs) in zip(
+        ("en-IN", "hi-IN", "hi-LATN", "en-IN"),
+        harness.tokenizer_instances[1:],
+        harness.tts_instances[1:],
+        strict=True,
+    ):
+        assert tokenizer_kwargs == {"min_sentence_len": 2}
+        assert tts_kwargs["tokenizer"] is tokenizer
+        assert {
+            key: tts_kwargs[key]
+            for key in ("voice", "style", "model", "locale", "text_pacing")
+        } == {
+            "voice": "en-IN-anusha",
+            "style": "Conversational",
+            "model": "falcon-2",
+            "locale": expected_locale,
+            "text_pacing": True,
+        }
+
+    return_factory = specialists[0].fined_factory
+    assert return_factory is not None
+    returning_fined = return_factory(llm.ChatContext.empty(), True)
+    assert isinstance(returning_fined, entrypoint.FinEdAssistant)
+    assert returning_fined.taxed_factory is fined_agent.taxed_factory
+    assert returning_fined.status_bridge is fined_agent.status_bridge
+    assert returning_fined.announce_entry is True
+
+
+@pytest.mark.asyncio
+async def test_outbound_job_never_loads_or_exposes_taxed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Catches reminder calls inheriting browser-only specialist capabilities.
+    harness = _install_lifecycle_fakes(monkeypatch, None, tmp_path / "generated")
+    harness.context.job = SimpleNamespace(  # type: ignore[attr-defined]
+        metadata=build_outbound_metadata(PAPER_PRACTICE_REMINDER)
+    )
+
+    await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
+
+    fined_agent = harness.session.start_kwargs["agent"]
+    assert isinstance(fined_agent, entrypoint.FinEdAssistant)
+    assert fined_agent.taxed_factory is None
+    assert isinstance(fined_agent.status_bridge, UnavailableAgentStatusBridge)
+    assert harness.tax_registry_loads == []
+    assert len(harness.tts_instances) == 1
+
+
+@pytest.mark.asyncio
+async def test_registry_failure_logs_fixed_copy_and_keeps_fined_available(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Catches corrupt registry details leaking or aborting the general agent.
+    private_detail = "private-registry-path-and-secret"
+    harness = _install_lifecycle_fakes(
+        monkeypatch,
+        None,
+        tmp_path / "generated",
+        tax_registry_error=RuntimeError(private_detail),
+    )
+    warnings: list[tuple[str, tuple[object, ...]]] = []
+    monkeypatch.setattr(
+        entrypoint.logger,
+        "warning",
+        lambda message, *args: warnings.append((message, args)),
+    )
+
+    await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
+
+    fined_agent = harness.session.start_kwargs["agent"]
+    assert isinstance(fined_agent, entrypoint.FinEdAssistant)
+    assert fined_agent.taxed_factory is None
+    assert isinstance(fined_agent.status_bridge, LiveKitAgentStatusBridge)
+    assert warnings == [(entrypoint.TAX_REGISTRY_UNAVAILABLE_WARNING, ())]
+    assert private_detail not in repr(warnings)
 
 
 @pytest.mark.asyncio
