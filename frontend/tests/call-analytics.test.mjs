@@ -155,6 +155,42 @@ test('rejects recent rows that exceed aggregate counts or measurements', () => {
   }
 });
 
+test('rejects a recent verified tax success when aggregate successful calls is zero', () => {
+  const call = validSummary().recent_calls[0];
+  assert.throws(() =>
+    decodeCallAnalyticsSummary(
+      validSummary({
+        totals: {
+          ...validSummary().totals,
+          total_calls: 1,
+          successful_calls: 0,
+          failed_calls: 1,
+          success_rate_percent: 0,
+        },
+        recent_calls: [{ ...call, detail: 'tax_rule_delivered' }],
+      })
+    )
+  );
+});
+
+test('rejects a recent failed row when aggregate failed calls is zero', () => {
+  const call = validSummary().recent_calls[0];
+  assert.throws(() =>
+    decodeCallAnalyticsSummary(
+      validSummary({
+        totals: {
+          ...validSummary().totals,
+          total_calls: 1,
+          successful_calls: 1,
+          failed_calls: 0,
+          success_rate_percent: 100,
+        },
+        recent_calls: [{ ...call, outcome: 'failed', detail: 'incomplete' }],
+      })
+    )
+  );
+});
+
 test('accepts twenty recent rows when aggregate measurements include older calls', () => {
   const recentCalls = Array.from({ length: 20 }, (_, index) => ({
     ...validSummary().recent_calls[0],
@@ -164,9 +200,9 @@ test('accepts twenty recent rows when aggregate measurements include older calls
     validSummary({
       totals: {
         total_calls: 25,
-        successful_calls: 20,
-        failed_calls: 5,
-        success_rate_percent: 80,
+        successful_calls: 21,
+        failed_calls: 4,
+        success_rate_percent: 84,
         total_duration_seconds: 900,
         fined_talk_seconds: 500,
         taxed_talk_seconds: 300,

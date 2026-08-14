@@ -211,8 +211,12 @@ export function decodeCallAnalyticsSummary(value: unknown): CallAnalyticsSummary
       handoff_count: handoffCount,
     };
   });
+  const recentSuccessfulCalls = recentCalls.filter((call) => call.outcome === 'successful').length;
+  const recentFailedCalls = recentCalls.length - recentSuccessfulCalls;
   if (
     recentCalls.length > totalCalls ||
+    recentSuccessfulCalls > successfulCalls ||
+    recentFailedCalls > failedCalls ||
     !sumDoesNotExceed(
       recentCalls.map((call) => call.duration_seconds),
       totalDuration
