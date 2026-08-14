@@ -1,0 +1,373 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import date
+from types import SimpleNamespace
+from typing import cast
+
+import pytest
+from livekit.agents import Agent, ModelSettings, RunContext, ToolError, llm
+
+from fined.agent import ParticipantProfile, SessionState
+from fined.agent_status_bridge import AgentStatus
+from fined.handoff import permission_prompt
+from fined.knowledge.index import SearchHit
+from fined.modes import LearningMode
+from fined.taxed_agent import TaxEdAssistant, build_taxed_prompt
+
+
+@dataclass
+class FakeRetriever:
+    async def search(
+        self,
+        query: str,
+        learning_mode: LearningMode,
+        as_of_date: date | None = None,
+        broker: str | None = None,
+        top_k: int = 4,
+    ) -> list[SearchHit]:
+        del query, learning_mode, as_of_date, broker, top_k
+        return []
+
+
+@dataclass(frozen=True)
+class FakeRule:
+    rule_id: str = "rule-equity-ltcg"
+
+    def to_public_dict(self) -> dict[str, object]:
+        return {
+            "rule_id": self.rule_id,
+            "topic": "Equity-oriented fund long-term capital gains",
+            "investment_category": "equity_oriented_fund",
+            "plain_explanation": "A verified general rule explanation.",
+            "effective_from": "2026-04-01",
+            "effective_to": None,
+            "applicability_note": "Applies from 1 April 2026.",
+            "official_source_title": "Income-tax Act, 2025",
+            "official_source_url": "https://www.incometaxindia.gov.in/example",
+            "last_verified_on": "2026-08-14",
+            "review_due_on": "2026-09-14",
+            "source_link": (
+                "[Income-tax Act, 2025](https://www.incometaxindia.gov.in/example)"
+            ),
+        }
+
+
+@dataclass
+class FakeRegistry:
+    results: list[FakeRule] = field(default_factory=list)
+    calls: list[dict[str, object]] = field(default_factory=list)
+    fail: bool = False
+
+    def search(self, query: str, **kwargs: object) -> list[FakeRule]:
+        self.calls.append({"query": query, **kwargs})
+        if self.fail:
+            raise RuntimeError("/private/registry/path must stay hidden")
+        return self.results
+
+
+@dataclass
+class FakeStatusBridge:
+    statuses: list[AgentStatus] = field(default_factory=list)
+    fail: bool = False
+
+    async def publish(self, status: AgentStatus) -> None:
+        self.statuses.append(status)
+        if self.fail:
+            raise RuntimeError("private UI failure")
+
+
+@dataclass
+class FakeSession:
+    userdata: SessionState
+    said: list[str] = field(default_factory=list)
+    generated_instructions: list[str] = field(default_factory=list)
+
+    async def say(self, text: str) -> None:
+        self.said.append(text)
+
+    def generate_reply(self, *, instructions: str) -> None:
+        self.generated_instructions.append(instructions)
+
+
+def _state() -> SessionState:
+    return SessionState(
+        profile=ParticipantProfile(LearningMode.GENERAL),
+        retriever=FakeRetriever(),
+    )
+
+
+def _context(state: SessionState, session: FakeSession | None = None):
+    active_session = session or FakeSession(state)
+    return cast(
+        RunContext[SessionState],
+        SimpleNamespace(userdata=state, session=active_session),
+    )
+
+
+def _assistant(
+    *,
+    registry: FakeRegistry | None = None,
+    chat_ctx: llm.ChatContext | None = None,
+    fined_factory=None,
+    status_bridge: FakeStatusBridge | None = None,
+) -> TaxEdAssistant:
+    return TaxEdAssistant(
+        registry=registry or FakeRegistry(),
+        fined_factory=fined_factory,
+        status_bridge=status_bridge or FakeStatusBridge(),
+        chat_ctx=chat_ctx,
+        tts=cast(object, SimpleNamespace()),
+        today=lambda: date(2026, 8, 14),
+        monotonic_clock=lambda: 20.0,
+    )
+
+
+def test_taxed_exposes_only_three_specialist_tools() -> None:
+    # Catches TaxEd inheriting market, broker, memory, help or outbound capabilities.
+    assistant = _assistant()
+
+    assert {tool.info.name for tool in assistant.tools} == {
+        "search_tax_rules",
+        "offer_fined_return",
+        "handoff_to_fined",
+    }
+
+
+def test_taxed_prompt_requires_sourced_date_bound_fail_closed_answers() -> None:
+    # Catches a prompt regression that allows model-memory tax answers or advice.
+    prompt = build_taxed_prompt().casefold()
+
+    for required in (
+        "search_tax_rules",
+        "before every substantive tax",
+        "applicability date",
+        "markdown",
+        "official source",
+        "cannot verify",
+        "personal tax liability",
+        "itr",
+        "tax-saving",
+        "paper order",
+        "real order",
+    ):
+        assert required in prompt
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user_request",
+    [
+        "Calculate my personal tax liability on these shares.",
+        "Please file my ITR.",
+        "How can I conceal gains and evade tax?",
+        "Recommend a tax-saving transaction for me.",
+        "Prepare a paper order to buy this ETF.",
+        "Place a real sell order for my shares.",
+    ],
+)
+async def test_taxed_refuses_prohibited_requests_before_provider_inference(
+    user_request: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Catches provider inference receiving prohibited personal or trading requests.
+    provider_called = False
+
+    async def fake_llm_node(*args, **kwargs):
+        nonlocal provider_called
+        del args, kwargs
+        provider_called = True
+        yield "unsafe provider answer"
+
+    monkeypatch.setattr(Agent.default, "llm_node", fake_llm_node)
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content=user_request)
+
+    output = [
+        chunk async for chunk in _assistant().llm_node(chat_ctx, [], ModelSettings())
+    ]
+
+    assert provider_called is False
+    assert len(output) == 1
+    assert "can't" in output[0].casefold()
+
+
+@pytest.mark.asyncio
+async def test_verified_lookup_returns_public_records_and_marks_success() -> None:
+    # Catches a sourced answer failing to record the privacy-safe success condition.
+    registry = FakeRegistry(results=[FakeRule()])
+    state = _state()
+
+    result = await _assistant(registry=registry).search_tax_rules(
+        _context(state),
+        query="How are equity ETF long-term gains taxed?",
+        as_of_date="2026-08-14",
+        category="equity_oriented_fund",
+    )
+
+    assert result == {"verified": True, "rules": [FakeRule().to_public_dict()]}
+    assert registry.calls == [
+        {
+            "query": "How are equity ETF long-term gains taxed?",
+            "as_of_date": date(2026, 8, 14),
+            "category": "equity_oriented_fund",
+            "limit": 4,
+            "checked_on": date(2026, 8, 14),
+        }
+    ]
+    assert state.analytics_success_condition == "tax_rule_delivered"
+
+
+@pytest.mark.asyncio
+async def test_empty_or_failed_lookup_abstains_without_marking_success() -> None:
+    # Catches unverified registry output being treated as a successful tax answer.
+    state = _state()
+    empty = await _assistant(registry=FakeRegistry()).search_tax_rules(
+        _context(state),
+        query="How are listed bond gains taxed?",
+        as_of_date="2026-08-14",
+        category="listed_bond",
+    )
+    failed = await _assistant(registry=FakeRegistry(fail=True)).search_tax_rules(
+        _context(state),
+        query="How are listed bond gains taxed?",
+        as_of_date="2026-08-14",
+        category="listed_bond",
+    )
+
+    assert empty["verified"] is False
+    assert failed == empty
+    assert "/private/" not in str(failed)
+    assert state.analytics_success_condition is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query",
+    [
+        "How are capital gains taxed?",
+        "What is STT?",
+        "What securities transaction tax applies?",
+    ],
+)
+async def test_generic_tax_event_requires_asset_clarification_before_lookup(
+    query: str,
+) -> None:
+    # Catches an asset-free query searching broad rules and inventing applicability.
+    registry = FakeRegistry(results=[FakeRule()])
+
+    result = await _assistant(registry=registry).search_tax_rules(
+        _context(_state()), query=query, as_of_date=None, category=None
+    )
+
+    assert result["verified"] is False
+    assert result["clarification_required"] is True
+    assert "asset" in str(result["message"]).casefold()
+    assert registry.calls == []
+
+
+@pytest.mark.asyncio
+async def test_lookup_uses_injected_current_date_and_strict_iso_dates() -> None:
+    # Catches stale system time or permissive date parsing selecting the wrong rule.
+    registry = FakeRegistry(results=[FakeRule()])
+    assistant = _assistant(registry=registry)
+
+    await assistant.search_tax_rules(
+        _context(_state()),
+        query="How are equity ETF gains taxed?",
+        as_of_date=None,
+        category="equity_oriented_fund",
+    )
+    with pytest.raises(ToolError, match="YYYY-MM-DD"):
+        await assistant.search_tax_rules(
+            _context(_state()),
+            query="How are equity ETF gains taxed?",
+            as_of_date="14-08-2026",
+            category="equity_oriented_fund",
+        )
+
+    assert registry.calls[0]["as_of_date"] == date(2026, 8, 14)
+
+
+@pytest.mark.asyncio
+async def test_taxed_return_requires_fresh_offer_and_consumes_it_once() -> None:
+    # Catches a return agent being constructed without immediate explicit consent.
+    source = llm.ChatContext.empty()
+    source.add_message(role="user", content="What is an ETF?", id="return-question")
+    created: list[tuple[llm.ChatContext, bool]] = []
+
+    def create_fined(chat_ctx: llm.ChatContext, announce_entry: bool) -> Agent:
+        created.append((chat_ctx, announce_entry))
+        return Agent(instructions="returning FinEd")
+
+    assistant = _assistant(chat_ctx=source, fined_factory=create_fined)
+    state = _state()
+    context = _context(state)
+
+    with pytest.raises(ToolError, match="permission"):
+        await assistant.handoff_to_fined(context)
+    offer = await assistant.offer_fined_return(context, "en-IN")
+
+    assert offer == {
+        "offered": True,
+        "permission": permission_prompt("fined", "en-IN"),
+    }
+    assert created == []
+
+    assistant._chat_ctx.items.extend(  # type: ignore[attr-defined]
+        [
+            llm.FunctionCall(
+                call_id="return-offer",
+                name="offer_fined_return",
+                arguments='{"language":"en-IN"}',
+            ),
+            llm.FunctionCallOutput(
+                call_id="return-offer",
+                name="offer_fined_return",
+                output=(
+                    '{"offered":true,"permission":"'
+                    + permission_prompt("fined", "en-IN")
+                    + '"}'
+                ),
+                is_error=False,
+            ),
+        ]
+    )
+    assistant._chat_ctx.add_message(  # type: ignore[attr-defined]
+        role="assistant", content=permission_prompt("fined", "en-IN")
+    )
+    assistant._chat_ctx.add_message(role="user", content="yes")  # type: ignore[attr-defined]
+
+    returned = await assistant.handoff_to_fined(context)
+
+    assert isinstance(returned, Agent)
+    assert len(created) == 1
+    assert created[0][1] is True
+    copied_text = "\n".join(
+        message.text_content or "" for message in created[0][0].messages()
+    )
+    assert "What is an ETF?" in copied_text
+    with pytest.raises(ToolError, match="permission"):
+        await assistant.handoff_to_fined(context)
+
+
+@pytest.mark.asyncio
+async def test_taxed_on_enter_commits_agent_change_before_speech_and_status() -> None:
+    # Catches analytics attribution changing late or counting duplicate activation.
+    state = _state()
+    state.active_agent_name = "fined"
+    session = FakeSession(state)
+    status_bridge = FakeStatusBridge()
+    assistant = _assistant(status_bridge=status_bridge)
+    assistant._activity = SimpleNamespace(session=session)  # type: ignore[attr-defined]
+
+    await assistant.on_enter()
+
+    assert state.active_agent_name == "taxed"
+    assert state.agent_handoff_count == 1
+    assert session.said
+    assert len(session.generated_instructions) == 1
+    assert "transferred tax question" in session.generated_instructions[0]
+    assert status_bridge.statuses == [AgentStatus.taxed()]
+
+    await assistant.on_enter()
+    assert state.agent_handoff_count == 1

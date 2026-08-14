@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from livekit.agents import Agent, ChatContext, ModelSettings, RunContext, ToolError
+from livekit.agents import Agent, ChatContext, ModelSettings, RunContext, ToolError, llm
 
 from fined.agent import (
     FinEdAssistant,
@@ -18,7 +18,9 @@ from fined.agent import (
     build_system_prompt,
     parse_participant_profile,
 )
+from fined.agent_status_bridge import AgentStatus
 from fined.calculator import ScheduleConfigurationError, UnsupportedScheduleError
+from fined.handoff import permission_prompt
 from fined.knowledge.index import SearchHit
 from fined.market_data.angel_one import create_market_data_provider
 from fined.market_data.models import (
@@ -212,6 +214,30 @@ class FakeHumanHelpCallback:
 
 def _context(state: SessionState) -> RunContext[SessionState]:
     return cast(RunContext[SessionState], SimpleNamespace(userdata=state))
+
+
+@dataclass
+class FakeAgentSession:
+    userdata: SessionState
+    said: list[str] = field(default_factory=list)
+    generated_instructions: list[str] = field(default_factory=list)
+
+    async def say(self, text: str) -> None:
+        self.said.append(text)
+
+    def generate_reply(self, *, instructions: str) -> None:
+        self.generated_instructions.append(instructions)
+
+
+@dataclass
+class FakeAgentStatusBridge:
+    statuses: list[AgentStatus] = field(default_factory=list)
+    fail: bool = False
+
+    async def publish(self, status: AgentStatus) -> None:
+        self.statuses.append(status)
+        if self.fail:
+            raise RuntimeError("private browser error")
 
 
 def _paper_instrument(
@@ -567,6 +593,188 @@ def test_fined_assistant_defaults_to_general_and_exposes_exact_tool_names() -> N
     assert assistant.forget_caller_memory.info.name == "forget_caller_memory"
     assert assistant.end_outbound_call.info.name == "end_outbound_call"
     assert assistant.create_escalation.info.name == "create_escalation"
+
+
+def test_fined_prompt_keeps_general_education_and_requires_consented_tax_route() -> (
+    None
+):
+    # Catches FinEd answering investment-tax rules from general model knowledge.
+    prompt = build_system_prompt(ParticipantProfile(LearningMode.ETFS)).casefold()
+
+    for required in (
+        "general etf education stays with fined",
+        "classify_tax_route",
+        "offer_tax_handoff",
+        "handoff_to_taxed",
+        "fresh explicit",
+        "do not answer",
+    ):
+        assert required in prompt
+
+
+@pytest.mark.asyncio
+async def test_fined_tax_handoff_requires_fresh_consent_and_consumes_offer_once() -> (
+    None
+):
+    # Catches eager construction, model-supplied question trust or consent replay.
+    source = ChatContext.empty()
+    source.add_message(
+        role="user",
+        content="How are equity ETF gains taxed? PAN ABCDE1234F",
+        id="tax-question",
+    )
+    created: list[tuple[str, ChatContext]] = []
+
+    def create_taxed(locale: str, chat_ctx: ChatContext) -> Agent:
+        created.append((locale, chat_ctx))
+        return Agent(instructions="TaxEd")
+
+    assistant = FinEdAssistant(
+        chat_ctx=source,
+        taxed_factory=create_taxed,
+        monotonic_clock=lambda: 20.0,
+    )
+    state = SessionState(
+        profile=ParticipantProfile(LearningMode.ETFS),
+        retriever=FakeRetriever([]),
+    )
+    session = FakeAgentSession(state)
+    context = cast(
+        RunContext[SessionState], SimpleNamespace(userdata=state, session=session)
+    )
+
+    offer = await assistant.offer_tax_handoff(context, "en-IN")
+
+    assert offer == {
+        "offered": True,
+        "permission": permission_prompt("taxed", "en-IN"),
+    }
+    assert created == []
+
+    assistant._chat_ctx.items.extend(  # type: ignore[attr-defined]
+        [
+            llm.FunctionCall(
+                call_id="tax-offer",
+                name="offer_tax_handoff",
+                arguments='{"language":"en-IN"}',
+            ),
+            llm.FunctionCallOutput(
+                call_id="tax-offer",
+                name="offer_tax_handoff",
+                output=(
+                    '{"offered":true,"permission":"'
+                    + permission_prompt("taxed", "en-IN")
+                    + '"}'
+                ),
+                is_error=False,
+            ),
+        ]
+    )
+    assistant._chat_ctx.add_message(  # type: ignore[attr-defined]
+        role="assistant", content=permission_prompt("taxed", "en-IN")
+    )
+    assistant._chat_ctx.add_message(role="user", content="yes")  # type: ignore[attr-defined]
+
+    transferred = await assistant.handoff_to_taxed(context)
+
+    assert isinstance(transferred, Agent)
+    assert len(created) == 1
+    assert created[0][0] == "en-IN"
+    copied_text = "\n".join(
+        message.text_content or "" for message in created[0][1].messages()
+    )
+    assert "How are equity ETF gains taxed? PAN [REDACTED]" in copied_text
+    assert "ABCDE1234F" not in copied_text
+    assert session.said
+    with pytest.raises(ToolError, match="permission"):
+        await assistant.handoff_to_taxed(context)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "question",
+    [
+        "What is an ETF?",
+        "Please file my ITR.",
+        "Calculate my personal tax liability on shares.",
+    ],
+)
+async def test_fined_offer_guard_rejects_non_taxed_routes(question: str) -> None:
+    # Catches the model transferring general education or prohibited personal work.
+    source = ChatContext.empty()
+    source.add_message(role="user", content=question)
+    assistant = FinEdAssistant(
+        chat_ctx=source,
+        taxed_factory=lambda locale, ctx: Agent(instructions="TaxEd"),
+    )
+    state = SessionState(profile=ParticipantProfile(), retriever=FakeRetriever([]))
+
+    with pytest.raises(ToolError):
+        await assistant.offer_tax_handoff(_context(state), "en-IN")
+
+    assert state.pending_handoff is None
+
+
+@pytest.mark.asyncio
+async def test_fined_tax_tools_are_unavailable_in_outbound_sessions() -> None:
+    # Catches an outbound reminder constructing an in-session browser specialist.
+    source = ChatContext.empty()
+    source.add_message(role="user", content="How are equity ETF gains taxed?")
+    assistant = FinEdAssistant(
+        chat_ctx=source,
+        taxed_factory=lambda locale, ctx: Agent(instructions="TaxEd"),
+        outbound_reminder=PAPER_PRACTICE_REMINDER,
+    )
+    state = SessionState(
+        profile=ParticipantProfile(),
+        retriever=FakeRetriever([]),
+        outbound_reminder=PAPER_PRACTICE_REMINDER,
+    )
+
+    with pytest.raises(ToolError, match="unavailable during a short outbound"):
+        await assistant.offer_tax_handoff(_context(state), "en-IN")
+
+
+@pytest.mark.asyncio
+async def test_fined_on_enter_sets_initial_identity_without_counting_handoff() -> None:
+    # Catches the initial agent inflating the handoff analytics count.
+    state = SessionState(profile=ParticipantProfile(), retriever=FakeRetriever([]))
+    session = FakeAgentSession(state)
+    bridge = FakeAgentStatusBridge()
+    assistant = FinEdAssistant(status_bridge=bridge)
+    assistant._activity = SimpleNamespace(session=session)  # type: ignore[attr-defined]
+
+    await assistant.on_enter()
+
+    assert state.active_agent_name == "fined"
+    assert state.agent_handoff_count == 0
+    assert session.said == []
+    assert bridge.statuses == []
+
+
+@pytest.mark.asyncio
+async def test_returning_fined_commits_change_before_intro_and_swallows_ui_failure() -> (
+    None
+):
+    # Catches late attribution or a visual-status failure rolling back voice handoff.
+    state = SessionState(profile=ParticipantProfile(), retriever=FakeRetriever([]))
+    state.active_agent_name = "taxed"
+    session = FakeAgentSession(state)
+    bridge = FakeAgentStatusBridge(fail=True)
+    assistant = FinEdAssistant(
+        status_bridge=bridge,
+        announce_entry=True,
+    )
+    assistant._activity = SimpleNamespace(session=session)  # type: ignore[attr-defined]
+
+    await assistant.on_enter()
+
+    assert state.active_agent_name == "fined"
+    assert state.agent_handoff_count == 1
+    assert session.said
+    assert len(session.generated_instructions) == 1
+    assert "transferred learning question" in session.generated_instructions[0]
+    assert bridge.statuses == [AgentStatus.fined()]
 
 
 def test_prompt_requires_fresh_permission_for_limited_human_help() -> None:

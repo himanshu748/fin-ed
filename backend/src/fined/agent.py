@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import secrets
-from collections.abc import AsyncIterable
+import time
+from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal, DecimalException, InvalidOperation
@@ -21,6 +23,12 @@ from livekit.agents import (
     llm,
 )
 
+from fined.agent_status_bridge import (
+    AgentName,
+    AgentStatus,
+    AgentStatusBridge,
+    UnavailableAgentStatusBridge,
+)
 from fined.calculator import (
     BSE_GROUPS,
     DeliveryFill,
@@ -46,6 +54,14 @@ from fined.escalations import (
     EscalationValidationError,
 )
 from fined.guardrails import evaluate_guardrail, render_refusal
+from fined.handoff import (
+    PendingHandoff,
+    TaxLocale,
+    build_handoff_chat_context,
+    classify_tax_route,
+    create_pending_handoff,
+    validate_fresh_consent,
+)
 from fined.historical_returns import (
     HistoricalReturnInput,
     validate_historical_investment_amount,
@@ -83,6 +99,8 @@ from fined.paper_trading import (
 from fined.paper_trading.bridge import PAPER_TRADING_UI_UNAVAILABLE_MESSAGE
 from fined.speech import strip_markdown_links_for_speech
 
+logger = logging.getLogger(__name__)
+
 MAX_PARTICIPANT_METADATA_BYTES = 1024
 MAX_SEARCH_QUERY_BYTES = 4096
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -91,10 +109,11 @@ _SUPPORTED_PAPER_NSE_SERIES = frozenset({"EQ"})
 _PAPER_HUMAN_REVIEW_THRESHOLD_PAISE = 5_000_000
 _ANALYTICS_SUCCESS_RANK = {
     "grounded_answer_delivered": 1,
-    "market_quote_delivered": 2,
-    "historical_return_calculated": 3,
-    "human_help_created": 4,
-    "paper_fill_completed": 5,
+    "tax_rule_delivered": 2,
+    "market_quote_delivered": 3,
+    "historical_return_calculated": 4,
+    "human_help_created": 5,
+    "paper_fill_completed": 6,
 }
 _PAPER_INSTRUMENT_NOT_RESOLVED_MESSAGE = (
     "Use search_market_instruments and select a provider-resolved instrument first."
@@ -145,6 +164,9 @@ class KnowledgeRetriever(Protocol):
 
 class OutboundCallControl(Protocol):
     async def end_call(self) -> None: ...
+
+
+TaxEdFactory = Callable[[TaxLocale, llm.ChatContext], Agent]
 
 
 @dataclass(frozen=True)
@@ -227,6 +249,9 @@ class SessionState:
     analytics_failure_type: str | None = None
     outbound_reminder: OutboundReminder | None = None
     outbound_call_control: OutboundCallControl | None = None
+    pending_handoff: PendingHandoff | None = None
+    active_agent_name: AgentName | None = None
+    agent_handoff_count: int = 0
 
     def mark_analytics_success(self, condition: str) -> None:
         current_rank = _ANALYTICS_SUCCESS_RANK.get(
@@ -353,6 +378,17 @@ def _build_human_help_prompt(outbound_reminder: OutboundReminder | None) -> str:
 - Do not promise an immediate reply or a response time that is not guaranteed."""
 
 
+def _build_tax_handoff_prompt(outbound_reminder: OutboundReminder | None) -> str:
+    if outbound_reminder is not None:
+        return """- TaxEd handoff tools are unavailable during an outbound reminder.
+- Do not call offer_tax_handoff or handoff_to_taxed."""
+    return """- General ETF education stays with FinEd.
+- For an Indian investment-tax question, do not answer the tax rule from model knowledge.
+- Call offer_tax_handoff. Its classify_tax_route guard must approve the route.
+- Speak the exact returned permission question and wait for a fresh explicit yes.
+- Only then call handoff_to_taxed. Never infer consent from an earlier answer."""
+
+
 def build_system_prompt(
     profile: ParticipantProfile,
     outbound_reminder: OutboundReminder | None = None,
@@ -362,6 +398,7 @@ def build_system_prompt(
     outbound_prompt = _build_outbound_prompt(outbound_reminder)
     paper_trading_prompt = _build_paper_trading_prompt(outbound_reminder)
     human_help_prompt = _build_human_help_prompt(outbound_reminder)
+    tax_handoff_prompt = _build_tax_handoff_prompt(outbound_reminder)
     return f"""IDENTITY
 - You are FinEd Saathi, a voice-first Indian financial-markets tutor for beginners.
 - You work for the learner. You are not a broker, investment adviser, tax adviser, or account-support representative.
@@ -389,6 +426,9 @@ KNOWLEDGE
 - Explain that historical results use whole units and unadjusted daily closing prices. Dividends, splits, bonus issues, fees, taxes and inflation are excluded.
 - Say the result is not a total-return figure, forecast or recommendation. Never invent past prices or calculate historical returns from a current quote.
 - If current evidence is unavailable, say it could not be verified instead of guessing.
+
+TAX SPECIALIST
+{tax_handoff_prompt}
 
 PAPER TRADING
 {paper_trading_prompt}
@@ -474,6 +514,29 @@ def _latest_user_text(chat_ctx: llm.ChatContext) -> str:
     return ""
 
 
+def _latest_user_message(chat_ctx: llm.ChatContext) -> llm.ChatMessage | None:
+    for item in reversed(chat_ctx.items):
+        if isinstance(item, llm.ChatMessage) and item.role == "user":
+            return item
+    return None
+
+
+def _commit_agent_activation(state: SessionState, agent_name: AgentName) -> None:
+    previous = state.active_agent_name
+    if previous in {"fined", "taxed"} and previous != agent_name:
+        state.agent_handoff_count += 1
+    state.active_agent_name = agent_name
+    state.pending_handoff = None
+
+
+def _connecting_taxed_message(locale: TaxLocale) -> str:
+    if locale == "hi-IN":
+        return "मैं आपको अब TaxEd से जोड़ रहा हूँ।"
+    if locale == "hi-LATN":
+        return "Main aapko ab TaxEd se connect kar raha hoon."
+    return "I am connecting you to TaxEd now."
+
+
 def _require_browser_session(state: SessionState) -> None:
     if state.outbound_reminder is not None:
         raise ToolError(_OUTBOUND_TOOL_UNAVAILABLE_MESSAGE)
@@ -490,12 +553,47 @@ class FinEdAssistant(Agent):
         *,
         outbound_reminder: OutboundReminder | None = None,
         outbound_call_control: OutboundCallControl | None = None,
+        taxed_factory: TaxEdFactory | None = None,
+        chat_ctx: llm.ChatContext | None = None,
+        status_bridge: AgentStatusBridge | None = None,
+        announce_entry: bool = False,
+        monotonic_clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.profile = profile or ParticipantProfile()
         self.outbound_reminder = outbound_reminder
         self.outbound_call_control = outbound_call_control
-        super().__init__(
-            instructions=build_system_prompt(self.profile, outbound_reminder)
+        self.taxed_factory = taxed_factory
+        self.status_bridge = status_bridge or UnavailableAgentStatusBridge()
+        self.announce_entry = announce_entry
+        self._monotonic_clock = monotonic_clock
+        agent_options: dict[str, object] = {
+            "instructions": build_system_prompt(self.profile, outbound_reminder)
+        }
+        if chat_ctx is not None:
+            agent_options["chat_ctx"] = chat_ctx
+        super().__init__(**agent_options)  # type: ignore[arg-type]
+        if outbound_reminder is not None:
+            self._tools = [
+                tool
+                for tool in self._tools
+                if tool.info.name not in {"offer_tax_handoff", "handoff_to_taxed"}
+            ]
+
+    async def on_enter(self) -> None:
+        state = self.session.userdata
+        _commit_agent_activation(state, "fined")
+        if not self.announce_entry:
+            return
+        await self.session.say("FinEd is back. I can help with that learning question.")
+        try:
+            await self.status_bridge.publish(AgentStatus.fined())
+        except Exception:
+            logger.warning("Agent status update was unavailable.")
+        self.session.generate_reply(
+            instructions=(
+                "Answer the latest transferred learning question within FinEd's "
+                "education and safety boundaries."
+            )
         )
 
     async def llm_node(
@@ -538,6 +636,70 @@ class FinEdAssistant(Agent):
             strip_markdown_links_for_speech(text),
             model_settings,
         )
+
+    @function_tool(name="offer_tax_handoff")
+    async def offer_tax_handoff(
+        self,
+        context: RunContext[SessionState],
+        language: str,
+    ) -> dict[str, object]:
+        """Offer TaxEd only for the newest approved Indian investment-tax question."""
+        state = context.userdata
+        _require_browser_session(state)
+        if self.taxed_factory is None:
+            raise ToolError("TaxEd is unavailable right now.")
+        message = _latest_user_message(self.chat_ctx)
+        if message is None:
+            raise ToolError("A current tax question is required before a handoff.")
+        question = message.text_content or ""
+        route = classify_tax_route(question)
+        if route == "refuse":
+            raise ToolError(
+                "I can't transfer personal tax filing, liability or evasion requests."
+            )
+        if route != "offer_taxed":
+            raise ToolError("This question stays with FinEd for general education.")
+        try:
+            pending = create_pending_handoff(
+                direction="taxed",
+                question=question,
+                locale=language,
+                question_turn_id=message.id,
+                now=self._monotonic_clock(),
+            )
+        except Exception:
+            raise ToolError("TaxEd handoff is unavailable right now.") from None
+        state.pending_handoff = pending
+        return {"offered": True, "permission": pending.permission_text}
+
+    @function_tool(name="handoff_to_taxed")
+    async def handoff_to_taxed(
+        self,
+        context: RunContext[SessionState],
+    ) -> Agent:
+        """Return a TaxEd agent only after immediate fresh handoff consent."""
+        state = context.userdata
+        _require_browser_session(state)
+        pending = state.pending_handoff
+        if (
+            self.taxed_factory is None
+            or pending is None
+            or pending.direction != "taxed"
+            or not validate_fresh_consent(
+                pending, self.chat_ctx, now=self._monotonic_clock()
+            )
+        ):
+            raise ToolError("Fresh permission is required before connecting to TaxEd.")
+        transferred_context = build_handoff_chat_context(self.chat_ctx, pending)
+        try:
+            taxed = self.taxed_factory(pending.locale, transferred_context)
+            await context.session.say(_connecting_taxed_message(pending.locale))
+        except Exception:
+            raise ToolError(
+                "TaxEd is unavailable right now. Please try again."
+            ) from None
+        state.pending_handoff = None
+        return taxed
 
     @function_tool(name="lookup_caller_memory")
     async def lookup_caller_memory(

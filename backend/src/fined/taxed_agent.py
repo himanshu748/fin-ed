@@ -1,0 +1,348 @@
+"""Narrow, sourced Indian investment-tax specialist agent."""
+
+from __future__ import annotations
+
+import logging
+import re
+import time
+from collections.abc import AsyncIterable, Callable
+from datetime import date
+
+from livekit.agents import (
+    Agent,
+    ModelSettings,
+    RunContext,
+    ToolError,
+    function_tool,
+    llm,
+)
+
+from fined.agent import SessionState, _commit_agent_activation
+from fined.agent_status_bridge import (
+    AgentStatus,
+    AgentStatusBridge,
+)
+from fined.handoff import (
+    TaxLocale,
+    build_handoff_chat_context,
+    classify_tax_route,
+    create_pending_handoff,
+    normalize_tax_locale,
+    validate_fresh_consent,
+)
+from fined.speech import strip_markdown_links_for_speech
+from fined.tax_rules import TaxRuleRegistry
+
+logger = logging.getLogger(__name__)
+
+FinEdFactory = Callable[[llm.ChatContext, bool], Agent]
+
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_PROHIBITED_REQUESTS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\b(?:calculate|compute)\b.{0,50}\b(?:my|personal)\b.{0,30}\btax\b",
+        r"\b(?:my|personal)\b.{0,30}\btax liability\b",
+        r"\b(?:file|prepare|submit|amend)\b.{0,20}\b(?:itr|tax return)\b",
+        r"\b(?:conceal|hide|evade|dodge)\b.{0,50}\b(?:tax|gain|income)\b",
+        r"\b(?:recommend|suggest|choose)\b.{0,50}\btax[- ]saving\b",
+        r"\btax[- ]saving\b.{0,50}\b(?:transaction|trade|investment|scheme)\b",
+        r"\b(?:paper|real|live)\b.{0,20}\b(?:order|trade)\b",
+        r"\b(?:place|prepare|confirm|execute)\b.{0,40}\b(?:order|trade)\b",
+    )
+)
+_ASSET_TERMS = tuple(
+    re.compile(rf"(?<!\w){re.escape(term)}(?!\w)", re.IGNORECASE)
+    for term in (
+        "share",
+        "shares",
+        "stock",
+        "stocks",
+        "equity",
+        "etf",
+        "mutual fund",
+        "gold",
+        "bond",
+        "bonds",
+        "debt fund",
+        "futures",
+        "option",
+        "options",
+        "derivative",
+        "buyback",
+        "dividend",
+        "dividends",
+    )
+)
+_GENERIC_TAX_EVENT = re.compile(
+    r"(?<!\w)(?:capital[\s-]+gains?|stt|securities transaction tax)(?!\w)",
+    re.IGNORECASE,
+)
+_UNVERIFIED_RESULT: dict[str, object] = {
+    "verified": False,
+    "rules": [],
+    "message": (
+        "I cannot verify an applicable current rule from the official registry. "
+        "Please check with a qualified Indian tax professional."
+    ),
+}
+
+
+def build_taxed_prompt() -> str:
+    """Build TaxEd's complete specialist-only instruction boundary."""
+    return """IDENTITY
+- You are TaxEd, an Indian investment-tax education specialist.
+- You explain only general verified rules from the local official-source registry.
+
+SOURCE CONTRACT
+- Call search_tax_rules before every substantive tax explanation.
+- Use only records returned with verified true. Never fill a gap from model memory.
+- State the investment category, tax event and applicability date.
+- Preserve each concise Markdown official source link in the visible transcript.
+- If a lookup is unverified, stale or unsupported, say you cannot verify the rule.
+- Ask which asset or investment category applies before searching a generic capital-gains or STT question.
+
+BOUNDARIES
+- Never calculate personal tax liability or provide personalised tax advice.
+- Never file, prepare, submit or amend an ITR.
+- Never help evade tax, conceal income or fabricate a deduction.
+- Never recommend a tax-saving transaction, product or scheme.
+- Refuse every paper order and every real order. Never buy, sell, prepare, confirm or execute a trade.
+- Do not use market quotes, broker access, memory, outbound calls or human-help tools.
+
+HANDOFF
+- For a non-tax learning question, call offer_fined_return and speak its exact permission question.
+- Call handoff_to_fined only after a new direct affirmation to that question.
+
+STYLE
+- Keep speech concise and conversational.
+- Name the official source naturally but never speak a URL.
+- Do not use an Oxford comma or an em dash."""
+
+
+class TaxEdAssistant(Agent):
+    def __init__(
+        self,
+        *,
+        registry: TaxRuleRegistry,
+        fined_factory: FinEdFactory | None,
+        status_bridge: AgentStatusBridge,
+        tts: object,
+        chat_ctx: llm.ChatContext | None = None,
+        today: Callable[[], date] = date.today,
+        monotonic_clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.registry = registry
+        self.fined_factory = fined_factory
+        self.status_bridge = status_bridge
+        self._today = today
+        self._monotonic_clock = monotonic_clock
+        self.locale = _locale_from_context(chat_ctx)
+        agent_options: dict[str, object] = {
+            "instructions": build_taxed_prompt(),
+            "tts": tts,
+        }
+        if chat_ctx is not None:
+            agent_options["chat_ctx"] = chat_ctx
+        super().__init__(**agent_options)  # type: ignore[arg-type]
+
+    async def on_enter(self) -> None:
+        state = self.session.userdata
+        _commit_agent_activation(state, "taxed")
+        await self.session.say(_taxed_introduction(self.locale))
+        try:
+            await self.status_bridge.publish(AgentStatus.taxed())
+        except Exception:
+            logger.warning("Agent status update was unavailable.")
+        self.session.generate_reply(
+            instructions=(
+                "Answer the transferred tax question. Call search_tax_rules before "
+                "stating any substantive rule and abstain if it is unverified."
+            )
+        )
+
+    async def llm_node(
+        self,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool],
+        model_settings: ModelSettings,
+    ):
+        """Refuse personal tax and all order actions before provider inference."""
+        user_text = _latest_user_text(chat_ctx)
+        if any(pattern.search(user_text) for pattern in _PROHIBITED_REQUESTS):
+            yield (
+                "I can't help with personal tax work, tax-saving recommendations "
+                "or any paper or real order. I can explain a verified general rule."
+            )
+            return
+        async for chunk in Agent.default.llm_node(
+            self, chat_ctx, tools, model_settings
+        ):
+            yield chunk
+
+    def tts_node(
+        self,
+        text: AsyncIterable[str],
+        model_settings: ModelSettings,
+    ):
+        return Agent.default.tts_node(
+            self,
+            strip_markdown_links_for_speech(text),
+            model_settings,
+        )
+
+    @function_tool(name="search_tax_rules")
+    async def search_tax_rules(
+        self,
+        context: RunContext[SessionState],
+        query: str,
+        as_of_date: str | None,
+        category: str | None,
+    ) -> dict[str, object]:
+        """Return at most four verified official registry records."""
+        if not isinstance(query, str) or not query.strip() or len(query) > 1_000:
+            raise ToolError("A bounded tax-rule query is required.")
+        parsed_date = _strict_iso_date(as_of_date, self._today())
+        safe_category = category.strip() if isinstance(category, str) else None
+        if safe_category == "":
+            safe_category = None
+        if safe_category is None and _generic_event_needs_asset(query):
+            return {
+                "verified": False,
+                "clarification_required": True,
+                "rules": [],
+                "message": (
+                    "Which asset or investment category is this capital-gains "
+                    "or STT question about?"
+                ),
+            }
+        try:
+            rules = self.registry.search(
+                query.strip(),
+                as_of_date=parsed_date,
+                category=safe_category,
+                limit=4,
+                checked_on=self._today(),
+            )
+        except Exception:
+            return dict(_UNVERIFIED_RESULT)
+        if not rules:
+            return dict(_UNVERIFIED_RESULT)
+        context.userdata.mark_analytics_success("tax_rule_delivered")
+        return {
+            "verified": True,
+            "rules": [rule.to_public_dict() for rule in rules[:4]],
+        }
+
+    @function_tool(name="offer_fined_return")
+    async def offer_fined_return(
+        self,
+        context: RunContext[SessionState],
+        language: str,
+    ) -> dict[str, object]:
+        """Offer FinEd for the newest non-tax learning request."""
+        if self.fined_factory is None:
+            raise ToolError("FinEd is unavailable right now.")
+        message = _latest_user_message(self.chat_ctx)
+        if message is None:
+            raise ToolError("A current learning question is required before a return.")
+        question = message.text_content or ""
+        if classify_tax_route(question) != "fined":
+            raise ToolError("This question remains within TaxEd's tax scope.")
+        try:
+            pending = create_pending_handoff(
+                direction="fined",
+                question=question,
+                locale=language,
+                question_turn_id=message.id,
+                now=self._monotonic_clock(),
+            )
+        except Exception:
+            raise ToolError("FinEd return is unavailable right now.") from None
+        context.userdata.pending_handoff = pending
+        return {"offered": True, "permission": pending.permission_text}
+
+    @function_tool(name="handoff_to_fined")
+    async def handoff_to_fined(
+        self,
+        context: RunContext[SessionState],
+    ) -> Agent:
+        """Return a FinEd agent only after immediate fresh handoff consent."""
+        pending = context.userdata.pending_handoff
+        if (
+            self.fined_factory is None
+            or pending is None
+            or pending.direction != "fined"
+            or not validate_fresh_consent(
+                pending, self.chat_ctx, now=self._monotonic_clock()
+            )
+        ):
+            raise ToolError("Fresh permission is required before returning to FinEd.")
+        transferred_context = build_handoff_chat_context(self.chat_ctx, pending)
+        try:
+            fined = self.fined_factory(transferred_context, True)
+            await context.session.say(_connecting_fined_message(pending.locale))
+        except Exception:
+            raise ToolError(
+                "FinEd is unavailable right now. Please try again."
+            ) from None
+        context.userdata.pending_handoff = None
+        return fined
+
+
+def _latest_user_message(chat_ctx: llm.ChatContext) -> llm.ChatMessage | None:
+    for item in reversed(chat_ctx.items):
+        if isinstance(item, llm.ChatMessage) and item.role == "user":
+            return item
+    return None
+
+
+def _latest_user_text(chat_ctx: llm.ChatContext) -> str:
+    message = _latest_user_message(chat_ctx)
+    return message.text_content or "" if message is not None else ""
+
+
+def _strict_iso_date(value: str | None, default: date) -> date:
+    if value is None:
+        return default
+    if not isinstance(value, str) or _ISO_DATE.fullmatch(value) is None:
+        raise ToolError("as_of_date must use YYYY-MM-DD.")
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise ToolError("as_of_date must use YYYY-MM-DD.") from None
+
+
+def _generic_event_needs_asset(query: str) -> bool:
+    normalized = query.casefold()
+    return _GENERIC_TAX_EVENT.search(normalized) is not None and not any(
+        pattern.search(normalized) for pattern in _ASSET_TERMS
+    )
+
+
+def _locale_from_context(chat_ctx: llm.ChatContext | None) -> TaxLocale:
+    if chat_ctx is None:
+        return "en-IN"
+    for message in chat_ctx.messages():
+        content = message.text_content or ""
+        if content.startswith("Response locale: "):
+            return normalize_tax_locale(content.removeprefix("Response locale: "))
+    return "en-IN"
+
+
+def _taxed_introduction(locale: TaxLocale) -> str:
+    if locale == "hi-IN":
+        return "मैं TaxEd हूँ। मैं आधिकारिक स्रोतों से निवेश कर के सामान्य नियम समझाऊँगी।"
+    if locale == "hi-LATN":
+        return (
+            "Main TaxEd hoon. Main official sources se investment tax rules samjhaungi."
+        )
+    return "I am TaxEd. I explain general investment-tax rules from official sources."
+
+
+def _connecting_fined_message(locale: TaxLocale) -> str:
+    if locale == "hi-IN":
+        return "मैं आपको अब FinEd से वापस जोड़ रही हूँ।"
+    if locale == "hi-LATN":
+        return "Main aapko ab FinEd se wapas connect kar rahi hoon."
+    return "I am connecting you back to FinEd now."
