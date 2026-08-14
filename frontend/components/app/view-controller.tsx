@@ -17,7 +17,7 @@ interface ViewControllerProps {
 const MICROPHONE_PERMISSION_ERROR =
   'Microphone access is required for a voice call. Allow microphone access in your browser settings, then try connecting again.';
 const VOICE_CONNECTION_ERROR = 'Voice connection failed. Check your network and try again.';
-const CONNECTION_START_TIMEOUT_MS = 25_000;
+const CONNECTION_START_TIMEOUT_MS = 60_000;
 
 async function startSessionWithTimeout(start: () => Promise<void>): Promise<void> {
   let timeout: ReturnType<typeof setTimeout> | undefined;

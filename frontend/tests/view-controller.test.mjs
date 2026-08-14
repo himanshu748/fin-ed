@@ -463,6 +463,61 @@ test('starting a new session ends the current room and connects a fresh room', a
   assert.equal(result.startCalls, 1);
 });
 
+test('a forty-second LiveKit cloud start can still complete without being disconnected', async () => {
+  let resolveStart;
+  const startPromise = new Promise((resolve) => {
+    resolveStart = resolve;
+  });
+  const result = loadViewController({
+    agentState: 'idle',
+    isConnected: false,
+    startPromise,
+  });
+  const welcome = findElement(
+    result.view,
+    (element) => typeof element.props?.onStartCall === 'function'
+  );
+  assert.ok(welcome, 'welcome view must expose the start action');
+
+  const scheduled = [];
+  const nativeSetTimeout = globalThis.setTimeout;
+  const nativeClearTimeout = globalThis.clearTimeout;
+  globalThis.setTimeout = (callback, delay) => {
+    scheduled.push({ callback, delay, cleared: false });
+    return scheduled.length;
+  };
+  globalThis.clearTimeout = (id) => {
+    const task = scheduled[id - 1];
+    if (task) task.cleared = true;
+  };
+
+  try {
+    const startAction = welcome.props.onStartCall();
+    const startupDeadline = scheduled[0];
+    assert.ok(startupDeadline, 'the startup must retain a finite deadline');
+
+    if (startupDeadline.delay <= 40_000) startupDeadline.callback();
+    else resolveStart();
+
+    await startAction;
+  } finally {
+    globalThis.setTimeout = nativeSetTimeout;
+    globalThis.clearTimeout = nativeClearTimeout;
+  }
+
+  assert.equal(result.startCalls, 1);
+  assert.equal(result.endCalls, 0, 'a viable slow cloud start must not be disconnected');
+  assert.equal(
+    result.stateWrites.some(
+      (write) =>
+        write.index === 1 &&
+        write.value === 'Voice connection failed. Check your network and try again.'
+    ),
+    false,
+    'a viable slow cloud start must not report a failure'
+  );
+});
+
 test('a stalled LiveKit start times out, ends the room, and unlocks retry', async () => {
   const neverSettles = new Promise(() => undefined);
   const result = loadViewController({
