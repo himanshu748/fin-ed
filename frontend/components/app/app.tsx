@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import { useSession } from '@livekit/components-react';
 import type { AppConfig } from '@/app-config';
+import { AgentHandoffProvider } from '@/components/agent-handoff/agent-handoff-provider';
 import { AgentSessionProvider } from '@/components/agents-ui/agent-session-provider';
 import { StartAudioButton } from '@/components/agents-ui/start-audio-button';
 import { ViewController } from '@/components/app/view-controller';
@@ -51,22 +52,24 @@ export function App({ appConfig }: AppProps) {
 
   return (
     <AgentSessionProvider session={session}>
-      <HumanHelpProvider>
-        <PaperTradingProvider>
-          <AppSetup />
-          <main className="min-h-svh">
-            <ViewController
-              appConfig={appConfig}
-              learningMode={learningMode}
-              onLearningModeChange={setLearningMode}
+      <AgentHandoffProvider>
+        <HumanHelpProvider>
+          <PaperTradingProvider>
+            <AppSetup />
+            <main className="min-h-svh">
+              <ViewController
+                appConfig={appConfig}
+                learningMode={learningMode}
+                onLearningModeChange={setLearningMode}
+              />
+            </main>
+            <StartAudioButton
+              label="Allow audio"
+              className="fixed right-4 bottom-4 z-[70] border border-[var(--ledger-rule)]"
             />
-          </main>
-          <StartAudioButton
-            label="Allow audio"
-            className="fixed right-4 bottom-4 z-[70] border border-[var(--ledger-rule)]"
-          />
-        </PaperTradingProvider>
-      </HumanHelpProvider>
+          </PaperTradingProvider>
+        </HumanHelpProvider>
+      </AgentHandoffProvider>
     </AgentSessionProvider>
   );
 }

@@ -927,7 +927,7 @@ test('unavailable persistence fails safely without applying or reporting a fill'
   assert.equal(resultCalls, 0);
 });
 
-test('App places PaperTradingProvider inside AgentSessionProvider around the session UI', () => {
+test('App places the agent and paper providers inside AgentSessionProvider around the session UI', () => {
   const filename = require.resolve('../components/app/app.tsx');
   const source = require('node:fs').readFileSync(filename, 'utf8');
   const output = ts.transpileModule(source, {
@@ -940,6 +940,7 @@ test('App places PaperTradingProvider inside AgentSessionProvider around the ses
   }).outputText;
   const compiledModule = { exports: {} };
   const AgentSessionProvider = Symbol('AgentSessionProvider');
+  const AgentHandoffProvider = Symbol('AgentHandoffProvider');
   const HumanHelpProvider = Symbol('HumanHelpProvider');
   const PaperTradingProvider = Symbol('PaperTradingProvider');
   const ViewController = Symbol('ViewController');
@@ -958,6 +959,7 @@ test('App places PaperTradingProvider inside AgentSessionProvider around the ses
     ],
     ['react/jsx-runtime', jsxRuntime],
     ['@livekit/components-react', { useSession: () => ({ room: {} }) }],
+    ['@/components/agent-handoff/agent-handoff-provider', { AgentHandoffProvider }],
     ['@/components/agents-ui/agent-session-provider', { AgentSessionProvider }],
     ['@/components/agents-ui/start-audio-button', { StartAudioButton: Symbol('StartAudioButton') }],
     ['@/components/app/view-controller', { ViewController }],
@@ -981,8 +983,9 @@ test('App places PaperTradingProvider inside AgentSessionProvider around the ses
   const tree = compiledModule.exports.App({ appConfig: {} });
 
   assert.equal(tree.type, AgentSessionProvider);
-  assert.equal(tree.props.children.type, HumanHelpProvider);
-  assert.equal(tree.props.children.props.children.type, PaperTradingProvider);
-  const paperChildren = tree.props.children.props.children.props.children;
+  assert.equal(tree.props.children.type, AgentHandoffProvider);
+  assert.equal(tree.props.children.props.children.type, HumanHelpProvider);
+  assert.equal(tree.props.children.props.children.props.children.type, PaperTradingProvider);
+  const paperChildren = tree.props.children.props.children.props.children.props.children;
   assert.ok(paperChildren.some((child) => child?.props?.children?.type === ViewController));
 });

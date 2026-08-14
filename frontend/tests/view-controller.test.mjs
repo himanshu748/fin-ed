@@ -91,6 +91,13 @@ function createSessionHarness({
     view: initialView,
     openDashboard() {},
   };
+  let activeAgent = {
+    version: 1,
+    active_agent: 'fined',
+    display_name: 'FinEd Saathi',
+    voice_name: 'Nikhil',
+    specialty: null,
+  };
   const humanHelp = {
     requests: [],
     isOpen: false,
@@ -227,6 +234,11 @@ function createSessionHarness({
       ],
       ['@/components/agents-ui/agent-chat-transcript', { AgentChatTranscript }],
       ['@/components/agents-ui/agent-control-bar', { AgentControlBar }],
+      ['@/components/agent-handoff/active-agent-badge', { ActiveAgentBadge: () => null }],
+      [
+        '@/components/agent-handoff/agent-handoff-provider',
+        { useAgentHandoff: () => ({ activeAgent }) },
+      ],
       ['@/components/human-help/escalation-dashboard', { HumanHelpDashboard: () => null }],
       ['@/components/human-help/escalation-provider', { useHumanHelp: () => humanHelp }],
       ['@/components/paper-trading/paper-trading-dashboard', { PaperTradingDashboard }],
@@ -252,6 +264,9 @@ function createSessionHarness({
     AgentControlBar,
     PaperTradingDashboard,
     paperTrading,
+    setActiveAgent(nextActiveAgent) {
+      activeAgent = nextActiveAgent;
+    },
     timelines,
     render() {
       stateCursor = 0;
@@ -558,6 +573,21 @@ test('opening the paper workspace does not end the live voice session', () => {
       ],
       ['@/components/agents-ui/agent-chat-transcript', { AgentChatTranscript: () => null }],
       ['@/components/agents-ui/agent-control-bar', { AgentControlBar: () => null }],
+      ['@/components/agent-handoff/active-agent-badge', { ActiveAgentBadge: () => null }],
+      [
+        '@/components/agent-handoff/agent-handoff-provider',
+        {
+          useAgentHandoff: () => ({
+            activeAgent: {
+              version: 1,
+              active_agent: 'fined',
+              display_name: 'FinEd Saathi',
+              voice_name: 'Nikhil',
+              specialty: null,
+            },
+          }),
+        },
+      ],
       ['@/components/human-help/escalation-dashboard', { HumanHelpDashboard: () => null }],
       [
         '@/components/human-help/escalation-provider',
@@ -637,6 +667,33 @@ test('the connected workspace shows and copies a safe ChatGPT-style session ID',
     (element) => element.type === 'button' && element.props?.['aria-label'] === 'Copy session ID'
   );
   assert.match(textContent(copiedButton), /Copied/);
+});
+
+test('the session view keeps its mounted workspace while the validated agent identity changes', () => {
+  const harness = createSessionHarness({ reduceMotion: true });
+  let view = harness.render();
+  assert.match(textContent(view), /FinEd Saathi/);
+  assert.match(textContent(view), /Nikhil/);
+  assert.ok(
+    findElement(view, (element) => element.type === harness.AgentChatTranscript),
+    'transcript must remain mounted before a handoff'
+  );
+
+  harness.setActiveAgent({
+    version: 1,
+    active_agent: 'taxed',
+    display_name: 'TaxEd',
+    voice_name: 'Anusha',
+    specialty: 'Investment Tax Specialist',
+  });
+  view = harness.render();
+  assert.match(textContent(view), /TaxEd/);
+  assert.match(textContent(view), /Anusha/);
+  assert.match(textContent(view), /Investment Tax Specialist/);
+  assert.ok(
+    findElement(view, (element) => element.type === harness.AgentChatTranscript),
+    'a status change must not unmount the transcript'
+  );
 });
 
 test('the connected workspace switches between live and saved browser sessions', async () => {

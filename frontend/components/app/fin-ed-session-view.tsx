@@ -24,6 +24,8 @@ import {
   useVoiceAssistant,
 } from '@livekit/components-react';
 import type { AppConfig } from '@/app-config';
+import { ActiveAgentBadge } from '@/components/agent-handoff/active-agent-badge';
+import { useAgentHandoff } from '@/components/agent-handoff/agent-handoff-provider';
 import { AgentAudioVisualizerBar } from '@/components/agents-ui/agent-audio-visualizer-bar';
 import { AgentChatTranscript } from '@/components/agents-ui/agent-chat-transcript';
 import { AgentControlBar } from '@/components/agents-ui/agent-control-bar';
@@ -109,6 +111,7 @@ export function FinEdSessionView({ appConfig, learningMode, onNewSession }: FinE
   const { messages } = useSessionMessages();
   const paperTrading = usePaperTrading();
   const humanHelp = useHumanHelp();
+  const { activeAgent } = useAgentHandoff();
   const shouldReduceMotion = useReducedMotion();
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(true);
   const [isSessionIdCopied, setIsSessionIdCopied] = useState(false);
@@ -248,7 +251,7 @@ export function FinEdSessionView({ appConfig, learningMode, onNewSession }: FinE
               />
             </span>
             <div className="min-w-0">
-              <p className="font-display truncate font-bold">FinEd Saathi</p>
+              <p className="font-display truncate font-bold">{activeAgent.display_name}</p>
               <p className="font-data truncate text-xs text-[var(--muted-ink)]">
                 {activeMode?.label ?? 'Ask Anything'} mode
               </p>
@@ -257,11 +260,12 @@ export function FinEdSessionView({ appConfig, learningMode, onNewSession }: FinE
 
           <div className="flex flex-wrap items-center justify-end gap-2">
             <div className="hidden border-r border-[var(--ledger-rule)] pr-3 text-right md:block">
-              <p className="font-display text-sm font-bold">Nikhil</p>
+              <p className="font-display text-sm font-bold">{activeAgent.voice_name}</p>
               <p className="font-data text-[11px] text-[var(--muted-ink)]">
                 Murf Falcon 2 · India voice · {VOICE_LANGUAGES}
               </p>
             </div>
+            <ActiveAgentBadge />
             <div className="flex min-h-11 min-w-0 items-center gap-2 rounded-[10px] border border-[var(--ledger-rule)] bg-[var(--surface)] px-2.5 py-1.5">
               <div className="min-w-0">
                 <p className="font-data text-[10px] tracking-[0.08em] text-[var(--muted-ink)] uppercase">
@@ -361,8 +365,9 @@ export function FinEdSessionView({ appConfig, learningMode, onNewSession }: FinE
           </div>
         </div>
         <div className="section-shell border-t border-[var(--soft-rule)] py-2 text-xs text-[var(--muted-ink)] md:hidden">
-          <span className="font-semibold text-[var(--ledger-ink)]">Nikhil</span> · Murf Falcon 2 ·
-          India voice · {VOICE_LANGUAGES}
+          <span className="font-semibold text-[var(--ledger-ink)]">{activeAgent.voice_name}</span> ·
+          Murf Falcon 2 · India voice · {VOICE_LANGUAGES}
+          {activeAgent.specialty && ` · ${activeAgent.specialty}`}
         </div>
       </header>
 
@@ -482,8 +487,11 @@ export function FinEdSessionView({ appConfig, learningMode, onNewSession }: FinE
                 Ask one market concept at a time.
               </h1>
               <p className="mt-3 leading-7 text-[var(--muted-ink)]">
-                Nikhil answers in English, Hindi, or both using Murf Falcon 2.
-                <br /> He matches the language style you use.
+                {activeAgent.voice_name} answers in English, Hindi or both using Murf Falcon 2.
+                <br />{' '}
+                {activeAgent.specialty
+                  ? 'TaxEd explains verified Indian investment-tax rules.'
+                  : 'He matches the language style you use.'}
               </p>
 
               <div className="my-8 rounded-[12px] border border-[var(--soft-rule)] bg-[var(--paper)] p-5">

@@ -309,6 +309,21 @@ function loadSessionViewForFocus(react, paperTrading) {
       ],
       ['@/components/agents-ui/agent-chat-transcript', { AgentChatTranscript: () => null }],
       ['@/components/agents-ui/agent-control-bar', { AgentControlBar: () => null }],
+      ['@/components/agent-handoff/active-agent-badge', { ActiveAgentBadge: () => null }],
+      [
+        '@/components/agent-handoff/agent-handoff-provider',
+        {
+          useAgentHandoff: () => ({
+            activeAgent: {
+              version: 1,
+              active_agent: 'fined',
+              display_name: 'FinEd Saathi',
+              voice_name: 'Nikhil',
+              specialty: null,
+            },
+          }),
+        },
+      ],
       ['@/components/human-help/escalation-dashboard', { HumanHelpDashboard: () => null }],
       [
         '@/components/human-help/escalation-provider',
