@@ -2,15 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a consented in-session TaxEd specialist that uses verified female Falcon voices to explain only officially sourced Indian investment-tax rules, including the Income-tax Act, 2025 rules in force on 14 August 2026.
+**Goal:** Add a consented in-session TaxEd specialist that uses multilingual Anusha to explain only officially sourced Indian investment-tax rules, including the Income-tax Act, 2025 rules in force on 14 August 2026.
 
-**Architecture:** FinEd and TaxEd are separate LiveKit `Agent` classes inside one `AgentSession`. A two-stage server-side consent record binds each handoff to the immediately preceding permission question and fresh affirmative response. TaxEd reads a validated packaged rule registry, receives only sanitized relevant context and overrides the session TTS with Murf Anusha for Indian English or Hinglish and Anjali for Hindi while the browser receives one strict active-agent status RPC.
+**Architecture:** FinEd and TaxEd are separate LiveKit `Agent` classes inside one `AgentSession`. A two-stage server-side consent record binds each handoff to the immediately preceding permission question and fresh affirmative response. TaxEd reads a validated packaged rule registry, receives only sanitized relevant context and overrides the session TTS with multilingual Murf Anusha while the browser receives one strict active-agent status RPC.
 
 **Tech Stack:** Python 3.12, LiveKit Agents 1.6.6, Murf Falcon 2, pytest, Ruff, Next.js 15, React 19, TypeScript, Node test runner and pnpm.
 
 ## Global Constraints
 
-- FinEd uses Nikhil. TaxEd uses Murf voice `Anusha` with locale `en-IN` for Indian English and Hinglish, or `Anjali` with locale `hi-IN` for Hindi. Both use style `Conversational` and model `falcon-2`.
+- FinEd uses Nikhil. TaxEd uses Murf voice `en-IN-anusha` with the validated `en-IN`, `hi-IN` or `hi-LATN` locale, style `Conversational` and model `falcon-2`.
 - TaxEd accepts only `en-IN`, `hi-IN` or `hi-LATN`. Unknown language values fall back to `en-IN`.
 - A handoff requires a new explicit yes to the exact immediately preceding permission question. Silence, stale yes, unrelated yes, negation and conditional consent fail closed.
 - TaxEd uses only its packaged official-source registry. It has no market quote, paper trade, broker, memory mutation, outbound call or human-help tools.
@@ -350,7 +350,7 @@ Extend the entrypoint fake Murf constructor to record every instance. Assert the
 {"voice": "Nikhil", "style": "Conversational", "model": "falcon-2", "locale": "en-IN"}
 ```
 
-Invoke the captured TaxEd factory for each supported conversation locale. Assert `en-IN` and `hi-LATN` create `Anusha` with Murf locale `en-IN`. Assert `hi-IN` creates `Anjali` with Murf locale `hi-IN`. Every voice uses `Conversational`, `falcon-2`, the existing sentence tokenizer and text pacing. Assert unknown locale becomes `en-IN` with Anusha. Assert browser sessions receive a real status bridge while outbound reminder sessions cannot create TaxEd.
+Invoke the captured TaxEd factory for each supported locale and assert it creates `en-IN-anusha` with the requested locale, `Conversational`, `falcon-2`, the existing sentence tokenizer and text pacing. Assert unknown locale becomes `en-IN`. Assert browser sessions receive a real status bridge while outbound reminder sessions cannot create TaxEd.
 
 - [ ] **Step 2: Run tests and verify RED**
 
@@ -379,17 +379,17 @@ def create_taxed(locale, chat_ctx) -> TaxEdAssistant:
         fined_factory=create_fined,
         status_bridge=status_bridge,
         tts=murf.TTS(
-            voice=tax_voice_for_locale(locale).voice_id,
+            voice="en-IN-anusha",
             style="Conversational",
             model="falcon-2",
-            locale=tax_voice_for_locale(locale).murf_locale,
+            locale=normalize_tax_locale(locale),
             tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
             text_pacing=True,
         ),
     )
 ```
 
-`create_taxed` constructs a per-agent `murf.TTS` with the server-owned female voice mapping and passes the exact voice display name to TaxEd status. `create_fined` relies on the session-level Nikhil TTS. Both receive the same status bridge and factory closures. Start the session with `create_fined()`.
+`create_taxed` constructs a per-agent `murf.TTS` with multilingual Anusha. `create_fined` relies on the session-level Nikhil TTS. Both receive the same status bridge and factory closures. Start the session with `create_fined()`.
 
 If registry loading fails, log only the fixed registry-unavailable warning and start FinEd with no TaxEd factory. Outbound sessions always receive no TaxEd factory even when the registry is healthy.
 
@@ -446,7 +446,7 @@ Accept only these exact combinations:
   version: 1,
   active_agent: 'taxed',
   display_name: 'TaxEd',
-  voice_name: 'Anusha' | 'Anjali',
+  voice_name: 'Anusha',
   specialty: 'Investment Tax Specialist',
 }
 ```
@@ -455,7 +455,7 @@ Reject unknown keys, mixed identity combinations, invalid versions, oversized UT
 
 - [ ] **Step 2: Write failing provider and UI tests**
 
-Verify the provider registers and unregisters `fined.agent.v1.status`, resets to FinEd when the connected agent participant changes and ignores registration errors. Render the session view and assert it initially shows FinEd with Nikhil then shows TaxEd with Anusha or Anjali and `Investment Tax Specialist` after a valid handler call. The badge must use `role="status"`, `aria-live="polite"` and no forced animation.
+Verify the provider registers and unregisters `fined.agent.v1.status`, resets to FinEd when the connected agent participant changes and ignores registration errors. Render the session view and assert it initially shows FinEd with Nikhil then shows TaxEd with Anusha and `Investment Tax Specialist` after a valid handler call. The badge must use `role="status"`, `aria-live="polite"` and no forced animation.
 
 - [ ] **Step 3: Run tests and verify RED**
 
@@ -535,7 +535,7 @@ Migrate the analytics table additively and keep old rows readable as zero speaki
 
 Document:
 
-- TaxEd scope and verified Anusha or Anjali voice mapping
+- TaxEd scope and verified multilingual Anusha voice
 - current-law verification date of 2026-08-14
 - Income-tax Act, 2025 transition boundary
 - English, Hindi and Hinglish handoff prompts
