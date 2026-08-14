@@ -83,7 +83,7 @@ def test_packaged_dividend_rule_uses_section_93_no_deduction_boundary() -> None:
     assert dividend_rule["plain_explanation"] == (
         "From 1 April 2026, Section 93(2) provides that no deduction shall be "
         "allowed for any dividend income, income from units of a Mutual Fund "
-        "specified under Schedule VII (Table: Sl. No. 20 or 21), or income from "
+        "specified under Schedule VII (Table: Sl. No. 20 or 21) or income from "
         "units of a specified company referred to in section 2(h) of the Unit "
         "Trust of India (Transfer of Undertaking and Repeal) Act, 2002."
     )
@@ -240,6 +240,25 @@ def test_transition_search_selects_the_act_for_the_question_date() -> None:
 def test_uncategorized_gold_gain_abstains_without_a_verified_gold_gain_rule() -> None:
     results = load_packaged_tax_rules().search(
         "How is a short-term gold gain taxed?",
+        as_of_date=date(2026, 8, 14),
+        checked_on=CHECKED_ON,
+    )
+
+    assert results == []
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Is indexation available on long-term gold capital gains?",
+        "Is a gold gain taxed at 12.5%?",
+    ],
+)
+def test_rate_or_tax_event_words_do_not_anchor_an_unverified_gold_gain_rule(
+    query: str,
+) -> None:
+    results = load_packaged_tax_rules().search(
+        query,
         as_of_date=date(2026, 8, 14),
         checked_on=CHECKED_ON,
     )

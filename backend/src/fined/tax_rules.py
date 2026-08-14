@@ -46,22 +46,37 @@ _MAX_KEYWORDS = 32
 _MAX_KEYWORD_LENGTH = 120
 _MAX_QUERY_LENGTH = 1_000
 _MAX_RESULTS = 4
-_GENERIC_TAX_TOKENS = frozenset(
+_ASSET_ANCHOR_TOKENS = frozenset(
     {
-        "capital",
-        "gain",
-        "gains",
-        "long",
-        "ltcg",
-        "rate",
-        "rates",
-        "section",
-        "short",
-        "stcg",
-        "tax",
-        "taxation",
-        "taxed",
-        "term",
+        "act",
+        "asset",
+        "bond",
+        "bonds",
+        "business",
+        "buyback",
+        "company",
+        "debt",
+        "debenture",
+        "derivative",
+        "dividend",
+        "dividends",
+        "equity",
+        "etf",
+        "fund",
+        "funds",
+        "futures",
+        "gold",
+        "income",
+        "jewellery",
+        "listed",
+        "mld",
+        "mutual",
+        "option",
+        "physical",
+        "share",
+        "shares",
+        "trust",
+        "unlisted",
     }
 )
 
@@ -164,7 +179,7 @@ class TaxRuleRegistry:
                 if _keyword_matches(query_tokens, _tokens(keyword))
             ]
             if not matched_keywords or not any(
-                _is_asset_specific(keyword_tokens)
+                _contains_asset_anchor(keyword_tokens)
                 for keyword_tokens in matched_keywords
             ):
                 continue
@@ -330,8 +345,8 @@ def _keyword_matches(
     )
 
 
-def _is_asset_specific(keyword_tokens: Sequence[str]) -> bool:
-    return any(token not in _GENERIC_TAX_TOKENS for token in keyword_tokens)
+def _contains_asset_anchor(keyword_tokens: Sequence[str]) -> bool:
+    return any(token in _ASSET_ANCHOR_TOKENS for token in keyword_tokens)
 
 
 def _today() -> date:
