@@ -830,16 +830,14 @@ def test_fined_prompt_keeps_general_education_and_requires_consented_tax_route()
         "classify_tax_route",
         "offer_tax_handoff",
         "handoff_to_taxed",
-        "fresh explicit",
+        "wait for the learner to agree",
         "do not answer",
     ):
         assert required in prompt
 
 
 @pytest.mark.asyncio
-async def test_fined_tax_handoff_requires_fresh_consent_and_consumes_offer_once() -> (
-    None
-):
+async def test_fined_tax_handoff_requires_agreement_and_consumes_offer_once() -> None:
     # Catches eager construction, model-supplied question trust or consent replay.
     source = ChatContext.empty()
     source.add_message(
@@ -910,7 +908,7 @@ async def test_fined_tax_handoff_requires_fresh_consent_and_consumes_offer_once(
     assert "How are equity ETF gains taxed? PAN [REDACTED]" in copied_text
     assert "ABCDE1234F" not in copied_text
     assert session.said
-    with pytest.raises(ToolError, match="permission"):
+    with pytest.raises(ToolError, match="connection question"):
         await assistant.handoff_to_taxed(context)
 
 

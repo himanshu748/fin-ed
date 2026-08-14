@@ -632,8 +632,8 @@ async def test_lookup_uses_injected_current_date_and_strict_iso_dates() -> None:
 
 
 @pytest.mark.asyncio
-async def test_taxed_return_requires_fresh_offer_and_consumes_it_once() -> None:
-    # Catches a return agent being constructed without immediate explicit consent.
+async def test_taxed_return_requires_agreement_and_consumes_offer_once() -> None:
+    # Catches a return agent being constructed without agreement to the prompt.
     source = llm.ChatContext.empty()
     source.add_message(role="user", content="What is an ETF?", id="return-question")
     created: list[tuple[llm.ChatContext, bool]] = []
@@ -646,7 +646,7 @@ async def test_taxed_return_requires_fresh_offer_and_consumes_it_once() -> None:
     state = _state()
     context = _context(state)
 
-    with pytest.raises(ToolError, match="permission"):
+    with pytest.raises(ToolError, match="connection question"):
         await assistant.handoff_to_fined(context)
     offer = await assistant.offer_fined_return(context, "en-IN")
 
@@ -689,7 +689,7 @@ async def test_taxed_return_requires_fresh_offer_and_consumes_it_once() -> None:
         message.text_content or "" for message in created[0][0].messages()
     )
     assert "What is an ETF?" in copied_text
-    with pytest.raises(ToolError, match="permission"):
+    with pytest.raises(ToolError, match="connection question"):
         await assistant.handoff_to_fined(context)
 
 

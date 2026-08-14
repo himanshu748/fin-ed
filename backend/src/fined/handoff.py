@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 import math
@@ -368,13 +367,13 @@ def create_pending_handoff(
     )
 
 
-def validate_fresh_consent(
+def validate_handoff_agreement(
     pending: PendingHandoff | None,
     chat_ctx: llm.ChatContext,
     *,
     now: float,
 ) -> bool:
-    """Validate an exact prompt followed immediately by a fresh explicit yes."""
+    """Validate a recent connection question followed by clear learner agreement."""
     if pending is None or not isinstance(chat_ctx, llm.ChatContext):
         return False
     if not _is_valid_pending_handoff(pending):
@@ -392,82 +391,28 @@ def validate_fresh_consent(
     if _fingerprint(pending.question) != pending.question_fingerprint:
         return False
 
-    question_indices = [
+    permission_indices = [
         index
         for index, item in enumerate(chat_ctx.items)
-        if isinstance(item, llm.ChatMessage) and item.id == pending.question_turn_id
+        if isinstance(item, llm.ChatMessage)
+        and item.role == "assistant"
+        and item.text_content == pending.permission_text
     ]
-    if len(question_indices) != 1:
-        return False
-    question_index = question_indices[0]
-    question_message = chat_ctx.items[question_index]
-    if question_message.role != "user":
-        return False
-    question_text = sanitize_handoff_text(question_message.text_content or "")
-    if _fingerprint(question_text) != pending.question_fingerprint:
+    if not permission_indices:
         return False
 
-    cursor = question_index + 1
-    allowed_offer_tool = (
-        "offer_tax_handoff" if pending.direction == "taxed" else "offer_fined_return"
-    )
-    call_ids: set[str] = set()
-    completed_call_ids: set[str] = set()
-    while cursor < len(chat_ctx.items) and isinstance(
-        chat_ctx.items[cursor], (llm.FunctionCall, llm.FunctionCallOutput)
-    ):
-        item = chat_ctx.items[cursor]
-        if item.name != allowed_offer_tool:
-            return False
-        if isinstance(item, llm.FunctionCall):
-            if item.call_id in call_ids:
-                return False
-            call_ids.add(item.call_id)
-        else:
-            if item.call_id not in call_ids or item.call_id in completed_call_ids:
-                return False
-            if item.is_error or not _offer_output_matches_permission(
-                item.output, pending.permission_text
-            ):
-                return False
-            completed_call_ids.add(item.call_id)
-        cursor += 1
-    if len(call_ids) != 1 or call_ids != completed_call_ids:
-        return False
-    if cursor >= len(chat_ctx.items):
-        return False
-    permission_message = chat_ctx.items[cursor]
-    if (
-        not isinstance(permission_message, llm.ChatMessage)
-        or permission_message.role != "assistant"
-        or permission_message.text_content != pending.permission_text
+    permission_index = permission_indices[-1]
+    messages_after_permission = [
+        item
+        for item in chat_ctx.items[permission_index + 1 :]
+        if isinstance(item, llm.ChatMessage) and item.role in {"user", "assistant"}
+    ]
+    if not messages_after_permission or any(
+        item.role == "assistant" for item in messages_after_permission
     ):
         return False
-    cursor += 1
-    if cursor >= len(chat_ctx.items):
-        return False
-    affirmation_message = chat_ctx.items[cursor]
-    if not isinstance(affirmation_message, llm.ChatMessage):
-        return False
-    if affirmation_message.role != "user":
-        return False
-    if not _is_affirmation_for_direction(
-        affirmation_message.text_content or "", pending.direction
-    ):
-        return False
-    cursor += 1
-    if cursor == len(chat_ctx.items):
-        return True
-    if cursor != len(chat_ctx.items) - 1:
-        return False
-    current_call = chat_ctx.items[cursor]
-    expected_handoff_tool = (
-        "handoff_to_taxed" if pending.direction == "taxed" else "handoff_to_fined"
-    )
-    return (
-        isinstance(current_call, llm.FunctionCall)
-        and current_call.name == expected_handoff_tool
-        and bool(current_call.call_id)
+    return _is_affirmation_for_direction(
+        messages_after_permission[-1].text_content or "", pending.direction
     )
 
 
@@ -608,27 +553,6 @@ def _contains_fixed_term(text: str, terms: tuple[str, ...]) -> bool:
     return any(f" {term} " in bounded for term in terms)
 
 
-def _offer_output_matches_permission(output: str, permission_text: str) -> bool:
-    if output == permission_text:
-        return True
-    if not isinstance(output, str) or len(output) > 512:
-        return False
-    try:
-        public_output = json.loads(output)
-    except json.JSONDecodeError:
-        try:
-            public_output = ast.literal_eval(output)
-        except (SyntaxError, ValueError):
-            return False
-    if isinstance(public_output, str):
-        return public_output == permission_text
-    if not isinstance(public_output, dict):
-        return False
-    if "offered" in public_output and public_output["offered"] is not True:
-        return False
-    return public_output.get("permission") == permission_text
-
-
 def _normalize_routing_text(text: str) -> str:
     normalized_characters = []
     for character in text.casefold():
@@ -690,10 +614,91 @@ def _is_affirmation(text: str) -> bool:
 
 def _is_affirmation_for_direction(text: str, direction: HandoffDirection) -> bool:
     normalized = _normalize_affirmation(text)
-    return (
+    if not normalized or len(normalized) > 200:
+        return False
+    if (
         normalized in _AFFIRMATIONS
         or normalized in _DIRECTIONAL_AFFIRMATIONS[direction]
+    ):
+        return True
+
+    words = frozenset(normalized.split())
+    blocked_words = {
+        "no",
+        "not",
+        "never",
+        "maybe",
+        "later",
+        "cancel",
+        "stop",
+        "disconnect",
+        "but",
+        "if",
+        "unless",
+        "nahi",
+        "nahin",
+        "na",
+        "mat",
+        "lekin",
+        "agar",
+        "नहीं",
+        "नही",
+        "ना",
+        "मत",
+        "शायद",
+        "बाद",
+        "लेकिन",
+        "अगर",
+    }
+    if words & blocked_words:
+        return False
+    if any(phrase in normalized for phrase in ("don t", "won t", "cannot")):
+        return False
+
+    opposite_target_phrases = {
+        "taxed": ("fined", "finette", "fin ed"),
+        "fined": ("taxed", "tax ed"),
+    }
+    if any(target in normalized for target in opposite_target_phrases[direction]):
+        return False
+
+    positive_words = {
+        "yes",
+        "yeah",
+        "yep",
+        "sure",
+        "okay",
+        "ok",
+        "please",
+        "haan",
+        "han",
+        "हाँ",
+        "हां",
+    }
+    positive_phrases = (
+        "go ahead",
+        "ji haan",
+        "जी हाँ",
+        "जी हां",
     )
+    action_phrases = (
+        "go ahead",
+        "kar do",
+        "kar dijiye",
+        "कर दो",
+        "कर दीजिए",
+        "जोड़",
+        "जोड़",
+        "मिला",
+    )
+    has_positive = bool(words & positive_words) or any(
+        phrase in normalized for phrase in positive_phrases
+    )
+    has_action = any(
+        word.startswith(("connect", "reconnect", "switch", "transfer"))
+        for word in words
+    ) or any(phrase in normalized for phrase in action_phrases)
+    return has_positive and has_action
 
 
 def _redact_long_digit_candidate(match: re.Match[str]) -> str:
@@ -736,5 +741,5 @@ __all__ = [
     "normalize_tax_locale",
     "permission_prompt",
     "sanitize_handoff_text",
-    "validate_fresh_consent",
+    "validate_handoff_agreement",
 ]

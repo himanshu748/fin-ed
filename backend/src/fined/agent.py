@@ -61,7 +61,7 @@ from fined.handoff import (
     build_handoff_chat_context,
     classify_tax_route,
     create_pending_handoff,
-    validate_fresh_consent,
+    validate_handoff_agreement,
 )
 from fined.historical_returns import (
     HistoricalReturnInput,
@@ -628,8 +628,8 @@ def _build_tax_handoff_prompt(outbound_reminder: OutboundReminder | None) -> str
     return """- General ETF education stays with FinEd.
 - For an Indian investment-tax question, do not answer the tax rule from model knowledge.
 - Call offer_tax_handoff. Its classify_tax_route guard must approve the route.
-- Speak the exact returned permission question and wait for a fresh explicit yes.
-- Only then call handoff_to_taxed. Never infer consent from an earlier answer."""
+- Speak the returned connection question and wait for the learner to agree.
+- Then call handoff_to_taxed. Never infer agreement from an earlier answer."""
 
 
 def build_system_prompt(
@@ -1067,7 +1067,7 @@ class FinEdAssistant(Agent):
         self,
         context: RunContext[SessionState],
     ) -> Agent:
-        """Return a TaxEd agent only after immediate fresh handoff consent."""
+        """Return a TaxEd agent after the learner agrees to the connection."""
         state = context.userdata
         _require_browser_session(state)
         pending = state.pending_handoff
@@ -1075,11 +1075,13 @@ class FinEdAssistant(Agent):
             self.taxed_factory is None
             or pending is None
             or pending.direction != "taxed"
-            or not validate_fresh_consent(
+            or not validate_handoff_agreement(
                 pending, self.chat_ctx, now=self._monotonic_clock()
             )
         ):
-            raise ToolError("Fresh permission is required before connecting to TaxEd.")
+            raise ToolError(
+                "Please answer the TaxEd connection question before switching."
+            )
         transferred_context = build_handoff_chat_context(self.chat_ctx, pending)
         try:
             taxed = self.taxed_factory(pending.locale, transferred_context)

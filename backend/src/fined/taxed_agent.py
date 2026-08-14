@@ -34,7 +34,7 @@ from fined.handoff import (
     classify_tax_route,
     create_pending_handoff,
     normalize_tax_locale,
-    validate_fresh_consent,
+    validate_handoff_agreement,
 )
 from fined.speech import strip_markdown_links_for_speech
 from fined.tax_rules import TaxRuleRegistry
@@ -171,7 +171,7 @@ BOUNDARIES
 
 HANDOFF
 - For a non-tax learning question, call offer_fined_return and speak its exact permission question.
-- Call handoff_to_fined only after a new direct affirmation to that question.
+- Call handoff_to_fined after the learner agrees to that connection question.
 
 STYLE
 - Keep speech concise and conversational.
@@ -353,17 +353,19 @@ class TaxEdAssistant(Agent):
         self,
         context: RunContext[SessionState],
     ) -> Agent:
-        """Return a FinEd agent only after immediate fresh handoff consent."""
+        """Return a FinEd agent after the learner agrees to the connection."""
         pending = context.userdata.pending_handoff
         if (
             self.fined_factory is None
             or pending is None
             or pending.direction != "fined"
-            or not validate_fresh_consent(
+            or not validate_handoff_agreement(
                 pending, self.chat_ctx, now=self._monotonic_clock()
             )
         ):
-            raise ToolError("Fresh permission is required before returning to FinEd.")
+            raise ToolError(
+                "Please answer the FinEd connection question before switching."
+            )
         transferred_context = build_handoff_chat_context(self.chat_ctx, pending)
         try:
             fined = self.fined_factory(transferred_context, True)
