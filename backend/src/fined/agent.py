@@ -175,6 +175,7 @@ ProhibitedAgentIntent = Literal[
     "tax_saving_recommendation",
     "paper_order",
     "real_trade_order",
+    "oversized_input",
 ]
 
 _TAX_MARKERS = (
@@ -331,6 +332,12 @@ _TRADE_ACTIONS = (
     "prepare",
     "put in",
     "le lo",
+    "kharid",
+    "kharido",
+    "kharid do",
+    "bech",
+    "becho",
+    "bech do",
     "खरीद",
     "बेच",
     "खरीदो",
@@ -368,7 +375,14 @@ _TRADE_EXECUTION_MARKERS = (
     "करो",
     "लगा दो",
 )
-_PAPER_ORDER_MARKERS = ("paper trade", "paper order", "पेपर ऑर्डर")
+_PAPER_ORDER_MARKERS = (
+    "paper trade",
+    "paper trading",
+    "paper order",
+    "paper portfolio",
+    "virtual money",
+    "पेपर ऑर्डर",
+)
 _LEADING_TRADE_ACTION = re.compile(
     r"^(?:please\s+)?(?:buy|sell|purchase|place|execute|confirm)\b",
     re.IGNORECASE,
@@ -732,8 +746,10 @@ def classify_prohibited_agent_intent(
     text: str,
 ) -> ProhibitedAgentIntent | None:
     """Classify personal tax work and order execution with fixed multilingual terms."""
-    if not isinstance(text, str) or len(text) > 2_000:
+    if not isinstance(text, str):
         return None
+    if len(text) > 2_000:
+        return "oversized_input"
     normalized = _normalize_boundary_text(text)
     if not normalized:
         return None
@@ -780,6 +796,11 @@ def classify_prohibited_agent_intent(
 
 def render_prohibited_agent_refusal(intent: ProhibitedAgentIntent) -> str:
     """Return fixed public copy for a deterministic prohibited-intent result."""
+    if intent == "oversized_input":
+        return (
+            "I can't safely process a request this long. "
+            "Please ask a shorter learning question."
+        )
     if intent in {"paper_order", "real_trade_order"}:
         return (
             "I can't place or confirm a paper or real order. "

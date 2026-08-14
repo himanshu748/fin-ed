@@ -591,6 +591,12 @@ async def test_llm_node_delegates_safe_education_to_the_provider(
         "मेरे लिए 10 रिलायंस शेयर खरीद दो।",
         "Mere liye 10 Reliance shares buy kar do.",
         "Reliance ke 10 shares le lo mere liye.",
+        "Mere liye 10 Reliance shares kharid",
+        "Mere liye 10 Reliance shares kharido",
+        "Mere liye 10 Reliance shares kharid do",
+        "Mere liye Reliance shares bech",
+        "Mere liye Reliance shares becho",
+        "Mere liye Reliance shares bech do",
     ],
 )
 async def test_fined_refuses_shared_prohibited_intents_before_provider_inference(
@@ -639,6 +645,8 @@ async def test_fined_refuses_shared_prohibited_intents_before_provider_inference
         "What is an ELSS fund?",
         "How can ELSS reduce my tax?",
         "शेयर का पेपर ऑर्डर क्या होता है?",
+        "Reliance shares kharid ya bech ka educational example kya hai?",
+        "Paper trading mein shares kharidna aur bechna kaise kaam karta hai?",
     ],
 )
 async def test_fined_shared_boundary_keeps_neutral_education_with_provider(
@@ -673,6 +681,14 @@ async def test_fined_shared_boundary_keeps_neutral_education_with_provider(
         "Put in a paper order for 10 Reliance shares.",
         "Paper trade mein 10 Reliance shares buy kar do.",
         "मेरे लिए शेयर का पेपर ऑर्डर लगा दो।",
+        "Buy 10 Reliance shares in paper trading",
+        "Buy 10 Reliance shares in the paper portfolio",
+        "Buy 10 Reliance shares using virtual money",
+        "Paper trading mein 10 Reliance shares kharid do",
+        "Sell 5 Reliance shares in paper trading",
+        "Sell 5 Reliance shares in the paper portfolio",
+        "Sell 5 Reliance shares using virtual money",
+        "Paper trading mein 5 Reliance shares bech do",
     ],
 )
 async def test_fined_keeps_safe_paper_order_requests_with_provider(
@@ -702,6 +718,46 @@ async def test_fined_keeps_safe_paper_order_requests_with_provider(
 
     assert provider_called is True
     assert output == ["safe paper workflow"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        "Buy 10 Reliance shares for me",
+        "What is an ETF?",
+    ],
+)
+async def test_fined_refuses_oversized_input_before_provider_inference(
+    suffix: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Catches oversized prohibited or benign text failing open to the provider.
+    provider_called = False
+
+    async def fake_llm_node(*args, **kwargs):
+        nonlocal provider_called
+        del args, kwargs
+        provider_called = True
+        yield "provider should not receive oversized raw text"
+
+    monkeypatch.setattr(Agent.default, "llm_node", fake_llm_node)
+    user_request = "x" * (2_029 - len(suffix)) + " " + suffix
+    assert len(user_request) == 2_030
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=user_request)
+
+    output = [
+        chunk
+        async for chunk in FinEdAssistant().llm_node(
+            chat_ctx,
+            [],
+            ModelSettings(),
+        )
+    ]
+
+    assert provider_called is False
+    assert len(output) == 1
+    assert suffix not in output[0]
 
 
 def test_fined_assistant_defaults_to_general_and_exposes_exact_tool_names() -> None:
