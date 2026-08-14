@@ -33,6 +33,7 @@ from fined.handoff import (
     build_handoff_chat_context,
     classify_tax_route,
     create_pending_handoff,
+    is_direct_handoff_request,
     normalize_tax_locale,
     validate_handoff_agreement,
 )
@@ -322,7 +323,7 @@ class TaxEdAssistant(Agent):
         self,
         context: RunContext[SessionState],
         language: str,
-    ) -> dict[str, object]:
+    ) -> dict[str, object] | Agent:
         """Offer FinEd for the newest non-tax learning request."""
         if self.fined_factory is None:
             raise ToolError("FinEd is unavailable right now.")
@@ -345,6 +346,17 @@ class TaxEdAssistant(Agent):
             )
         except Exception:
             raise ToolError("FinEd return is unavailable right now.") from None
+        if is_direct_handoff_request(question, "fined"):
+            transferred_context = build_handoff_chat_context(self.chat_ctx, pending)
+            try:
+                fined = self.fined_factory(transferred_context, True)
+                await context.session.say(_connecting_fined_message(pending.locale))
+            except Exception:
+                raise ToolError(
+                    "FinEd is unavailable right now. Please try again."
+                ) from None
+            context.userdata.pending_handoff = None
+            return fined
         context.userdata.pending_handoff = pending
         return {"offered": True, "permission": pending.permission_text}
 

@@ -632,6 +632,37 @@ async def test_lookup_uses_injected_current_date_and_strict_iso_dates() -> None:
 
 
 @pytest.mark.asyncio
+async def test_direct_fined_return_command_switches_without_a_second_prompt() -> None:
+    # Catches an explicit return command being turned into another consent question.
+    source = llm.ChatContext.empty()
+    source.add_message(
+        role="user",
+        content="Switch me back to FinEd.",
+        id="direct-return-command",
+    )
+    created: list[tuple[llm.ChatContext, bool]] = []
+
+    def create_fined(chat_ctx: llm.ChatContext, announce_entry: bool) -> Agent:
+        created.append((chat_ctx, announce_entry))
+        return Agent(instructions="returning FinEd")
+
+    assistant = _assistant(chat_ctx=source, fined_factory=create_fined)
+    state = _state()
+    session = FakeSession(state)
+
+    returned = await assistant.offer_fined_return(
+        _context(state, session),
+        "en-IN",
+    )
+
+    assert isinstance(returned, Agent)
+    assert len(created) == 1
+    assert created[0][1] is True
+    assert session.said == ["I am connecting you back to FinEd now."]
+    assert state.pending_handoff is None
+
+
+@pytest.mark.asyncio
 async def test_taxed_return_requires_agreement_and_consumes_offer_once() -> None:
     # Catches a return agent being constructed without agreement to the prompt.
     source = llm.ChatContext.empty()

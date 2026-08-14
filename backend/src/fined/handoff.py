@@ -416,6 +416,61 @@ def validate_handoff_agreement(
     )
 
 
+def is_direct_handoff_request(
+    text: str,
+    direction: HandoffDirection,
+) -> bool:
+    """Return whether one bounded utterance explicitly requests this handoff."""
+    if direction not in {"taxed", "fined"} or not isinstance(text, str):
+        return False
+    normalized = _normalize_affirmation(text)
+    if not normalized or len(normalized) > 200:
+        return False
+    words = frozenset(normalized.split())
+    target_words = {
+        "taxed": {"taxed"},
+        "fined": {"fined", "finette"},
+    }
+    target_phrases = {
+        "taxed": ("tax ed",),
+        "fined": ("fin ed",),
+    }
+    action_words = {
+        "connect",
+        "connecting",
+        "reconnect",
+        "reconnecting",
+        "switch",
+        "switching",
+        "transfer",
+        "transferring",
+        "return",
+        "returning",
+    }
+    action_phrases = (
+        "go back",
+        "kar do",
+        "kar dijiye",
+        "wapas",
+        "le chalo",
+        "कर दो",
+        "कर दीजिए",
+        "वापस",
+        "ले चलिए",
+        "जोड़",
+        "जोड़",
+        "मिला",
+        "लौट",
+    )
+    has_target = bool(words & target_words[direction]) or any(
+        target in normalized for target in target_phrases[direction]
+    )
+    has_action = bool(words & action_words) or any(
+        phrase in normalized for phrase in action_phrases
+    )
+    return has_target and has_action and _is_affirmation_for_direction(text, direction)
+
+
 def sanitize_handoff_text(text: str) -> str:
     """Redact recognized private identifiers and reject uncertain opaque IDs."""
     if not isinstance(text, str):
