@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import math
@@ -404,15 +405,31 @@ def validate_fresh_consent(
     ):
         return False
     cursor += 1
-    if cursor != len(chat_ctx.items) - 1:
+    if cursor >= len(chat_ctx.items):
         return False
     affirmation_message = chat_ctx.items[cursor]
     if not isinstance(affirmation_message, llm.ChatMessage):
         return False
     if affirmation_message.role != "user":
         return False
+    if (
+        _normalize_affirmation(affirmation_message.text_content or "")
+        not in _AFFIRMATIONS
+    ):
+        return False
+    cursor += 1
+    if cursor == len(chat_ctx.items):
+        return True
+    if cursor != len(chat_ctx.items) - 1:
+        return False
+    current_call = chat_ctx.items[cursor]
+    expected_handoff_tool = (
+        "handoff_to_taxed" if pending.direction == "taxed" else "handoff_to_fined"
+    )
     return (
-        _normalize_affirmation(affirmation_message.text_content or "") in _AFFIRMATIONS
+        isinstance(current_call, llm.FunctionCall)
+        and current_call.name == expected_handoff_tool
+        and bool(current_call.call_id)
     )
 
 
@@ -556,10 +573,15 @@ def _contains_fixed_term(text: str, terms: tuple[str, ...]) -> bool:
 def _offer_output_matches_permission(output: str, permission_text: str) -> bool:
     if output == permission_text:
         return True
+    if not isinstance(output, str) or len(output) > 512:
+        return False
     try:
         public_output = json.loads(output)
-    except (TypeError, json.JSONDecodeError):
-        return False
+    except json.JSONDecodeError:
+        try:
+            public_output = ast.literal_eval(output)
+        except (SyntaxError, ValueError):
+            return False
     if isinstance(public_output, str):
         return public_output == permission_text
     if not isinstance(public_output, dict):

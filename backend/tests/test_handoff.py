@@ -154,6 +154,59 @@ def test_fresh_exact_affirmation_validates(locale: str, affirmation: str) -> Non
     assert validate_fresh_consent(pending, chat_ctx, now=20.0) is True
 
 
+def test_livekit_current_handoff_call_after_affirmation_preserves_consent() -> None:
+    """The executing handoff call is already in LiveKit's live chat context."""
+    pending = create_pending_handoff(
+        direction="taxed",
+        question="How are equity ETF gains taxed?",
+        locale="en-IN",
+        question_turn_id="turn-tax-livekit-call",
+        now=10.0,
+    )
+    chat_ctx = _consent_context(pending, "yes")
+    chat_ctx.items.append(
+        llm.FunctionCall(
+            call_id="current-handoff",
+            name="handoff_to_taxed",
+            arguments="{}",
+        )
+    )
+
+    assert validate_fresh_consent(pending, chat_ctx, now=20.0) is True
+
+
+@pytest.mark.parametrize(
+    "extra_item",
+    [
+        llm.FunctionCall(
+            call_id="wrong-handoff",
+            name="lookup_market_price",
+            arguments="{}",
+        ),
+        llm.FunctionCallOutput(
+            call_id="current-handoff",
+            name="handoff_to_taxed",
+            output="already ran",
+            is_error=False,
+        ),
+    ],
+)
+def test_only_the_current_directional_handoff_call_may_follow_consent(
+    extra_item: llm.FunctionCall | llm.FunctionCallOutput,
+) -> None:
+    pending = create_pending_handoff(
+        direction="taxed",
+        question="How are equity ETF gains taxed?",
+        locale="en-IN",
+        question_turn_id="turn-tax-wrong-livekit-call",
+        now=10.0,
+    )
+    chat_ctx = _consent_context(pending, "yes")
+    chat_ctx.items.append(extra_item)
+
+    assert validate_fresh_consent(pending, chat_ctx, now=20.0) is False
+
+
 @pytest.mark.parametrize(
     "response",
     [
@@ -292,6 +345,42 @@ def test_json_offer_output_must_contain_the_exact_stored_permission() -> None:
                 {"offered": True, "permission": pending.permission_text},
                 ensure_ascii=False,
             ),
+            is_error=False,
+        )
+    )
+    chat_ctx.add_message(role="assistant", content=pending.permission_text)
+    chat_ctx.add_message(role="user", content="yes")
+
+    assert validate_fresh_consent(pending, chat_ctx, now=20.0) is True
+
+
+def test_livekit_python_repr_offer_output_preserves_fresh_consent() -> None:
+    """LiveKit 1.6 stringifies valid dictionary tool results with ``str``."""
+    pending = create_pending_handoff(
+        direction="taxed",
+        question="What STT applies to futures?",
+        locale="en-IN",
+        question_turn_id="turn-tax-livekit-output",
+        now=10.0,
+    )
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(
+        role="user",
+        content=pending.question,
+        id=pending.question_turn_id,
+    )
+    chat_ctx.items.append(
+        llm.FunctionCall(
+            call_id="livekit-offer",
+            name="offer_tax_handoff",
+            arguments="{}",
+        )
+    )
+    chat_ctx.items.append(
+        llm.FunctionCallOutput(
+            call_id="livekit-offer",
+            name="offer_tax_handoff",
+            output=str({"offered": True, "permission": pending.permission_text}),
             is_error=False,
         )
     )

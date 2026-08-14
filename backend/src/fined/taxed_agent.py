@@ -69,6 +69,7 @@ TaxRuleCategoryInput = Literal[
 ]
 
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_CALENDAR_YEAR = re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)")
 _CANONICAL_TAX_CATEGORIES = frozenset(
     {
         "capital_assets",
@@ -86,7 +87,22 @@ _CATEGORY_ALIASES: dict[str, TaxRuleCategory] = {
     "etf": "equity_oriented_fund",
     "shares": "equity_oriented_fund",
 }
+_CATEGORY_LABELS: dict[str, str] = {
+    "capital_assets": "capital assets",
+    "debt_instruments": "debt instruments",
+    "derivatives_stt": "equity derivatives",
+    "dividends": "dividends",
+    "equity_oriented_fund": "listed equity shares and equity-oriented funds",
+    "listed_bonds": "listed bonds",
+    "physical_gold": "physical gold",
+    "share_buyback": "share buybacks",
+    "tax_year_transition": "tax-year transition",
+}
 _EXPLICIT_LISTED_BONDS = re.compile(r"(?<!\w)listed[\s-]+bonds?(?!\w)", re.IGNORECASE)
+_EXPLICIT_EQUITY_ASSET = re.compile(
+    r"(?<!\w)(?:equity(?:[\s-]+shares?)?|shares?|stocks?)(?!\w)",
+    re.IGNORECASE,
+)
 _ASSET_TERMS = tuple(
     re.compile(rf"(?<!\w){re.escape(term)}(?!\w)", re.IGNORECASE)
     for term in (
@@ -140,7 +156,8 @@ SOURCE CONTRACT
 - Call search_tax_rules before every substantive tax explanation.
 - Use only records returned with verified true. Never fill a gap from model memory.
 - State the investment category, tax event and applicability date.
-- Preserve each concise Markdown official source link in the visible transcript.
+- Use the human-readable investment category returned by the tool.
+- Copy official_source exactly as Markdown in the visible transcript. Never output a raw URL.
 - If a lookup is unverified, stale or unsupported, say you cannot verify the rule.
 - Ask which asset or investment category applies before searching a generic capital-gains or STT question.
 
@@ -242,12 +259,21 @@ class TaxEdAssistant(Agent):
         """Return at most four verified official registry records."""
         if not isinstance(query, str) or not query.strip() or len(query) > 1_000:
             raise ToolError("A bounded tax-rule query is required.")
-        parsed_date = _strict_iso_date(as_of_date, self._today())
+        current_date = self._today()
+        requested_date = _strict_iso_date(as_of_date, current_date)
+        parsed_date = (
+            requested_date
+            if as_of_date is None
+            or str(requested_date.year) in _CALENDAR_YEAR.findall(query)
+            else current_date
+        )
         try:
             safe_category = _normalize_tax_category(category, query=query)
         except ValueError:
+            logger.info("Tax rule lookup rejected an unsupported category")
             return dict(_UNKNOWN_CATEGORY_RESULT)
         if safe_category is None and _generic_event_needs_asset(query):
+            logger.info("Tax rule lookup requires an asset category")
             return {
                 "verified": False,
                 "clarification_required": True,
@@ -266,13 +292,29 @@ class TaxEdAssistant(Agent):
                 checked_on=self._today(),
             )
         except Exception:
+            logger.warning(
+                "Tax rule registry search failed; category=%s as_of_date=%s",
+                safe_category,
+                parsed_date.isoformat(),
+            )
             return dict(_UNVERIFIED_RESULT)
         if not rules:
+            logger.info(
+                "Tax rule lookup returned no matches; category=%s as_of_date=%s",
+                safe_category,
+                parsed_date.isoformat(),
+            )
             return dict(_UNVERIFIED_RESULT)
+        logger.info(
+            "Tax rule lookup verified %d record(s); category=%s as_of_date=%s",
+            len(rules),
+            safe_category,
+            parsed_date.isoformat(),
+        )
         context.userdata.mark_analytics_success("tax_rule_delivered")
         return {
             "verified": True,
-            "rules": [rule.to_public_dict() for rule in rules[:4]],
+            "rules": [_format_tax_rule_for_agent(rule) for rule in rules[:4]],
         }
 
     @function_tool(name="offer_fined_return")
@@ -367,6 +409,8 @@ def _normalize_tax_category(
     if not isinstance(category, str):
         raise ValueError("unknown tax category")
     normalized = category.strip().casefold()
+    if normalized == "capital_assets" and _EXPLICIT_EQUITY_ASSET.search(query):
+        return "equity_oriented_fund"
     if normalized in _CANONICAL_TAX_CATEGORIES:
         return cast(TaxRuleCategory, normalized)
     if normalized == "bonds":
@@ -376,6 +420,25 @@ def _normalize_tax_category(
     if normalized in _CATEGORY_ALIASES:
         return _CATEGORY_ALIASES[normalized]
     raise ValueError("unknown tax category")
+
+
+def _format_tax_rule_for_agent(rule: object) -> dict[str, object]:
+    public = rule.to_public_dict()  # type: ignore[attr-defined]
+    category = str(public.get("investment_category", ""))
+    return {
+        "rule_id": public.get("rule_id"),
+        "topic": public.get("topic"),
+        "investment_category": _CATEGORY_LABELS.get(
+            category, category.replace("_", " ")
+        ),
+        "plain_explanation": public.get("plain_explanation"),
+        "effective_from": public.get("effective_from"),
+        "effective_to": public.get("effective_to"),
+        "applicability_note": public.get("applicability_note"),
+        "last_verified_on": public.get("last_verified_on"),
+        "review_due_on": public.get("review_due_on"),
+        "official_source": public.get("source_link"),
+    }
 
 
 def _generic_event_needs_asset(query: str) -> bool:

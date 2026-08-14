@@ -158,6 +158,8 @@ def test_taxed_prompt_requires_sourced_date_bound_fail_closed_answers() -> None:
         "applicability date",
         "markdown",
         "official source",
+        "never output a raw url",
+        "human-readable investment category",
         "cannot verify",
         "personal tax liability",
         "itr",
@@ -458,6 +460,47 @@ async def test_natural_etf_alias_retrieves_official_equity_fund_rule() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("category", [None, "shares", "capital_assets"])
+async def test_natural_shares_question_retrieves_both_verified_equity_rules(
+    category: str | None,
+) -> None:
+    """The exact handoff question must not miss singular registry wording."""
+    assistant = _assistant(registry=load_packaged_tax_rules())  # type: ignore[arg-type]
+
+    result = await assistant.search_tax_rules(
+        _context(_state()),
+        query="How are capital gains on Indian shares taxed?",
+        as_of_date="2026-08-14",
+        category=category,
+    )
+
+    assert result["verified"] is True
+    assert [rule["rule_id"] for rule in result["rules"][:2]] == [
+        "ita2025_section196_equity_stcg",
+        "ita2025_section198_equity_ltcg",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unmentioned_model_date_cannot_make_a_current_lookup_stale() -> None:
+    """A model-invented date must not replace today for a current question."""
+    assistant = _assistant(registry=load_packaged_tax_rules())  # type: ignore[arg-type]
+
+    result = await assistant.search_tax_rules(
+        _context(_state()),
+        query="How are capital gains on Indian shares taxed?",
+        as_of_date="2024-07-23",
+        category="capital_assets",
+    )
+
+    assert result["verified"] is True
+    assert [rule["rule_id"] for rule in result["rules"][:2]] == [
+        "ita2025_section196_equity_stcg",
+        "ita2025_section198_equity_ltcg",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_listed_bonds_alias_retrieves_packaged_listed_bond_rule() -> None:
     # Catches public bonds normalization missing the official listed-bond record.
     assistant = _assistant(registry=load_packaged_tax_rules())  # type: ignore[arg-type]
@@ -486,7 +529,25 @@ async def test_verified_lookup_returns_public_records_and_marks_success() -> Non
         category="equity_oriented_fund",
     )
 
-    assert result == {"verified": True, "rules": [FakeRule().to_public_dict()]}
+    assert result["verified"] is True
+    assert result["rules"] == [
+        {
+            "rule_id": "rule-equity-ltcg",
+            "topic": "Equity-oriented fund long-term capital gains",
+            "investment_category": ("listed equity shares and equity-oriented funds"),
+            "plain_explanation": "A verified general rule explanation.",
+            "effective_from": "2026-04-01",
+            "effective_to": None,
+            "applicability_note": "Applies from 1 April 2026.",
+            "last_verified_on": "2026-08-14",
+            "review_due_on": "2026-09-14",
+            "official_source": (
+                "[Income-tax Act, 2025](https://www.incometaxindia.gov.in/example)"
+            ),
+        }
+    ]
+    assert "official_source_url" not in result["rules"][0]
+    assert "equity_oriented_fund" not in str(result["rules"][0])
     assert registry.calls == [
         {
             "query": "How are equity ETF long-term gains taxed?",

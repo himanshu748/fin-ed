@@ -11,6 +11,7 @@ import {
   ConversationScrollButton,
 } from '@/components/ai-elements/conversation';
 import { Message, MessageContent, MessageResponse } from '@/components/ai-elements/message';
+import { formatOfficialSourceLinks } from '@/lib/official-source-links';
 
 /**
  * Props for the AgentChatTranscript component.
@@ -66,13 +67,15 @@ export function AgentChatTranscript({
           const { id, timestamp, from, message } = receivedMessage;
           const locale = 'en-IN';
           const messageOrigin = from?.isLocal ? 'user' : 'assistant';
+          const displayMessage =
+            messageOrigin === 'assistant' ? formatOfficialSourceLinks(message) : message;
           const time = new Date(timestamp);
           const title = time.toLocaleTimeString(locale, { timeStyle: 'full' });
 
           return (
             <Message key={id} title={title} from={messageOrigin}>
-              <MessageContent className="break-words [&_a]:break-all [&_a]:text-[var(--ledger-blue)] [&_a]:underline [&_a]:underline-offset-4">
-                <MessageResponse>{message}</MessageResponse>
+              <MessageContent className="break-words [&_a]:break-words [&_a]:text-[var(--ledger-blue)] [&_a]:underline [&_a]:underline-offset-4">
+                <MessageResponse>{displayMessage}</MessageResponse>
               </MessageContent>
             </Message>
           );
