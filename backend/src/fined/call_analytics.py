@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -9,10 +10,11 @@ import secrets
 import sqlite3
 import tempfile
 import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
 CALL_SUCCESS_DEFINITION = (
     "The learner completed a verified action: received grounded market evidence, "
@@ -170,10 +172,13 @@ class SQLiteCallAnalyticsStore:
     def __init__(self, database_path: str | Path, *, snapshot_path: str | Path) -> None:
         self._database_path = Path(database_path)
         self._snapshot_path = Path(snapshot_path)
+        self._snapshot_lock_path = self._snapshot_path.with_name(
+            f".{self._snapshot_path.name}.lock"
+        )
         self._database_path.parent.mkdir(parents=True, exist_ok=True)
         self._snapshot_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
-        if not self._snapshot_path.exists():
+        with self._publication_lock():
             self._write_snapshot(self.public_summary())
 
     def record(self, call: CallAnalyticsInput) -> None:
@@ -184,29 +189,30 @@ class SQLiteCallAnalyticsStore:
         duration_seconds = max(
             0, round((call.ended_at - call.started_at).total_seconds())
         )
-        with self._connect() as connection:
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO call_outcomes (
-                    call_id, channel, started_at, ended_at, duration_seconds,
-                    outcome, detail, fined_talk_seconds, taxed_talk_seconds,
-                    handoff_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    call.call_id,
-                    call.channel,
-                    call.started_at.isoformat(),
-                    call.ended_at.isoformat(),
-                    duration_seconds,
-                    outcome,
-                    detail,
-                    call.fined_talk_seconds,
-                    call.taxed_talk_seconds,
-                    call.handoff_count,
-                ),
-            )
-        self._write_snapshot(self.public_summary())
+        with self._publication_lock():
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO call_outcomes (
+                        call_id, channel, started_at, ended_at, duration_seconds,
+                        outcome, detail, fined_talk_seconds, taxed_talk_seconds,
+                        handoff_count
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        call.call_id,
+                        call.channel,
+                        call.started_at.isoformat(),
+                        call.ended_at.isoformat(),
+                        duration_seconds,
+                        outcome,
+                        detail,
+                        call.fined_talk_seconds,
+                        call.taxed_talk_seconds,
+                        call.handoff_count,
+                    ),
+                )
+            self._write_snapshot(self.public_summary())
 
     def public_summary(self) -> dict[str, object]:
         with self._connect() as connection:
@@ -277,7 +283,8 @@ class SQLiteCallAnalyticsStore:
 
     def _initialize(self) -> None:
         with self._connect() as connection:
-            connection.execute("PRAGMA journal_mode=WAL")
+            self._enable_write_ahead_log(connection)
+            connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS call_outcomes (
@@ -304,6 +311,32 @@ class SQLiteCallAnalyticsStore:
                         f"ALTER TABLE call_outcomes "
                         f"ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"
                     )
+
+    @staticmethod
+    def _enable_write_ahead_log(connection: sqlite3.Connection) -> None:
+        retry_delays = (0.025, 0.05, 0.1, 0.2, 0.4)
+        for retry_delay in (*retry_delays, None):
+            try:
+                connection.execute("PRAGMA journal_mode=WAL")
+                return
+            except sqlite3.OperationalError as error:
+                if "locked" not in str(error).casefold() or retry_delay is None:
+                    raise
+                time.sleep(retry_delay)
+
+    @contextmanager
+    def _publication_lock(self) -> Iterator[None]:
+        file_descriptor = os.open(
+            self._snapshot_lock_path,
+            os.O_CREAT | os.O_RDWR,
+            0o600,
+        )
+        with os.fdopen(file_descriptor, "rb+") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     def _write_snapshot(self, summary: dict[str, object]) -> None:
         payload = json.dumps(

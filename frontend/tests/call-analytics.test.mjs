@@ -136,6 +136,50 @@ test('rejects malformed or impossible speaking measurements', () => {
   }
 });
 
+test('rejects recent rows that exceed aggregate counts or measurements', () => {
+  const totals = validSummary().totals;
+  for (const contradictoryTotals of [
+    {
+      ...totals,
+      total_calls: 0,
+      successful_calls: 0,
+      failed_calls: 0,
+      success_rate_percent: 0,
+    },
+    { ...totals, total_duration_seconds: 41 },
+    { ...totals, fined_talk_seconds: 19 },
+    { ...totals, taxed_talk_seconds: 11 },
+    { ...totals, handoff_count: 1 },
+  ]) {
+    assert.throws(() => decodeCallAnalyticsSummary(validSummary({ totals: contradictoryTotals })));
+  }
+});
+
+test('accepts twenty recent rows when aggregate measurements include older calls', () => {
+  const recentCalls = Array.from({ length: 20 }, (_, index) => ({
+    ...validSummary().recent_calls[0],
+    call_id: `CALL-A1B2-C3D4-E5F6-0123-4567-${index.toString(16).toUpperCase().padStart(4, '0')}`,
+  }));
+  const summary = decodeCallAnalyticsSummary(
+    validSummary({
+      totals: {
+        total_calls: 25,
+        successful_calls: 20,
+        failed_calls: 5,
+        success_rate_percent: 80,
+        total_duration_seconds: 900,
+        fined_talk_seconds: 500,
+        taxed_talk_seconds: 300,
+        handoff_count: 50,
+      },
+      recent_calls: recentCalls,
+    })
+  );
+
+  assert.equal(summary.recent_calls.length, 20);
+  assert.equal(summary.totals.total_calls, 25);
+});
+
 test('analytics route and responsive dashboard expose the Day 8 contract', () => {
   const route = readFileSync(join(frontendRoot, 'app/api/analytics/route.ts'), 'utf8');
   const page = readFileSync(join(frontendRoot, 'app/analytics/page.tsx'), 'utf8');

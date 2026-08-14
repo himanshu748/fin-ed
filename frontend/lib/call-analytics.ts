@@ -98,6 +98,15 @@ function safeCount(value: unknown): number {
   return Number(value);
 }
 
+function sumDoesNotExceed(values: number[], total: number): boolean {
+  let sum = 0;
+  for (const value of values) {
+    if (value > total - sum) return false;
+    sum += value;
+  }
+  return true;
+}
+
 export function emptyCallAnalyticsSummary(): CallAnalyticsSummary {
   return {
     version: 2,
@@ -202,6 +211,27 @@ export function decodeCallAnalyticsSummary(value: unknown): CallAnalyticsSummary
       handoff_count: handoffCount,
     };
   });
+  if (
+    recentCalls.length > totalCalls ||
+    !sumDoesNotExceed(
+      recentCalls.map((call) => call.duration_seconds),
+      totalDuration
+    ) ||
+    !sumDoesNotExceed(
+      recentCalls.map((call) => call.fined_talk_seconds),
+      finedTalk
+    ) ||
+    !sumDoesNotExceed(
+      recentCalls.map((call) => call.taxed_talk_seconds),
+      taxedTalk
+    ) ||
+    !sumDoesNotExceed(
+      recentCalls.map((call) => call.handoff_count),
+      handoffs
+    )
+  ) {
+    throw new Error('Recent calls exceed analytics totals');
+  }
 
   return {
     version: 2,
