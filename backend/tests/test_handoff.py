@@ -745,6 +745,74 @@ def test_context_transfer_omits_uncertain_explicit_broker_id_format() -> None:
     assert "How are equity ETF gains taxed?" in copied_text
 
 
+@pytest.mark.parametrize(
+    "unsafe_context",
+    [
+        "My client code ABC123/45. How are ETF gains taxed?",
+        "My client code is AB 1234. How are ETF gains taxed?",
+        "My UCC AB 1234. How are ETF gains taxed?",
+    ],
+)
+def test_context_transfer_omits_ambiguous_broker_identifier_values(
+    unsafe_context: str,
+) -> None:
+    # Catches bare or split labelled values surviving as a complete or suffix leak.
+    source = llm.ChatContext.empty()
+    source.add_message(
+        role="user",
+        content="What STT applies to equity ETFs?",
+        id="turn-ambiguous-broker-id-tax",
+    )
+    source.add_message(role="user", content=unsafe_context)
+    pending = create_pending_handoff(
+        direction="taxed",
+        question="What STT applies to equity ETFs?",
+        locale="en-IN",
+        question_turn_id="turn-ambiguous-broker-id-tax",
+        now=10.0,
+    )
+
+    copied = build_handoff_chat_context(source, pending)
+    copied_text = "\n".join(message.text_content or "" for message in copied.messages())
+
+    assert "ABC123/45" not in copied_text
+    assert "1234" not in copied_text
+    assert "How are ETF gains taxed?" not in copied_text
+    assert "What STT applies to equity ETFs?" in copied_text
+
+
+@pytest.mark.parametrize(
+    "ordinary_context",
+    [
+        "What does client code mean?",
+        "How is UCC used by a broker?",
+    ],
+)
+def test_context_transfer_preserves_ordinary_broker_identifier_prose(
+    ordinary_context: str,
+) -> None:
+    # Catches fail-closed broker checks dropping ordinary explanatory context.
+    source = llm.ChatContext.empty()
+    source.add_message(
+        role="user",
+        content="What STT applies to equity ETFs?",
+        id="turn-ordinary-broker-prose-tax",
+    )
+    source.add_message(role="assistant", content=ordinary_context)
+    pending = create_pending_handoff(
+        direction="taxed",
+        question="What STT applies to equity ETFs?",
+        locale="en-IN",
+        question_turn_id="turn-ordinary-broker-prose-tax",
+        now=10.0,
+    )
+
+    copied = build_handoff_chat_context(source, pending)
+    copied_text = "\n".join(message.text_content or "" for message in copied.messages())
+
+    assert ordinary_context in copied_text
+
+
 @pytest.mark.parametrize("source_url", _OFFICIAL_SOURCE_URLS)
 def test_context_transfer_preserves_each_packaged_official_source_url(
     source_url: str,

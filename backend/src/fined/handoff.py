@@ -73,11 +73,23 @@ _EMAIL = re.compile(
     r"(?i)\b[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+\b"
 )
 _PAN = re.compile(r"(?i)(?<![a-z0-9])[a-z]{5}[0-9]{4}[a-z](?![a-z0-9])")
-_BROKER_IDENTIFIER_TERMINATOR = r"(?=$|\s|[.,;!?](?:\s|$))"
+_BROKER_IDENTIFIER_TERMINATOR = r"(?=$|[.,;!?](?:\s|$))"
 _EXPLICIT_BROKER_IDENTIFIER_PREFIX = re.compile(
     r"(?ix)"
     r"\b(?:client\s+code|ucc)\b"
     r"\s*(?:is\b|no(?:[.]|\b)|[:=#-])\s*"
+)
+_BARE_BROKER_IDENTIFIER_PREFIX = re.compile(
+    r"(?x)"
+    r"(?i:\b(?:client\s+code|ucc)\b)"
+    r"\s+"
+    r"(?!(?i:is\b|no(?:[.]|\b))|[:=#-])"
+    r"(?="
+    r"(?:"
+    r"(?=[^\s.,;!?]*[0-9_/-])[^\s.,;!?]+|"
+    r"[A-Z]{2,}(?=$|[\s.,;!?])"
+    r")"
+    r")"
 )
 _BROKER_IDENTIFIER_VALUE = re.compile(
     r"(?ix)"
@@ -415,7 +427,7 @@ def sanitize_handoff_text(text: str) -> str:
         if character in "\n\t" or not unicodedata.category(character).startswith("C")
     )
     sanitized, protected_urls = _protect_official_source_urls(sanitized)
-    if _contains_uncertain_explicit_broker_identifier(sanitized):
+    if _contains_uncertain_broker_identifier(sanitized):
         return ""
     sanitized = _BROKER_IDENTIFIER_VALUE.sub(r"\1\2[REDACTED]", sanitized)
     sanitized = _BARE_BROKER_IDENTIFIER_VALUE.sub(r"\1\2[REDACTED]", sanitized)
@@ -641,10 +653,16 @@ def _contains_uncertain_identifier(text: str) -> bool:
     return False
 
 
-def _contains_uncertain_explicit_broker_identifier(text: str) -> bool:
-    return any(
+def _contains_uncertain_broker_identifier(text: str) -> bool:
+    has_uncertain_explicit_value = any(
         _BROKER_IDENTIFIER_VALUE.match(text, prefix.start()) is None
         for prefix in _EXPLICIT_BROKER_IDENTIFIER_PREFIX.finditer(text)
+    )
+    if has_uncertain_explicit_value:
+        return True
+    return any(
+        _BARE_BROKER_IDENTIFIER_VALUE.match(text, prefix.start()) is None
+        for prefix in _BARE_BROKER_IDENTIFIER_PREFIX.finditer(text)
     )
 
 
