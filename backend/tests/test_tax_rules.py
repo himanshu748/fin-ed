@@ -7,6 +7,7 @@ from importlib import resources
 
 import pytest
 
+from fined import tax_rules
 from fined.tax_rules import (
     TaxRuleConfigurationError,
     TaxRuleRegistry,
@@ -18,6 +19,7 @@ AMENDED_ACT_URL = (
     "https://www.incometaxindia.gov.in/documents/d/guest/"
     "income_tax_act_2025_as_amended_by_fa_act_2026-pdf"
 )
+CHECKED_ON = date(2026, 8, 14)
 
 
 def packaged_rule_data() -> list[dict[str, object]]:
@@ -56,6 +58,7 @@ def test_current_equity_etf_lookup_prefers_section_198_and_serializes_source() -
         "How is a long-term equity ETF gain taxed?",
         as_of_date=date(2026, 8, 14),
         category="equity_oriented_fund",
+        checked_on=CHECKED_ON,
     )
 
     assert [rule.rule_id for rule in results[:2]] == [
@@ -78,9 +81,11 @@ def test_packaged_dividend_rule_uses_section_93_no_deduction_boundary() -> None:
 
     assert dividend_rule["official_source_url"] == AMENDED_ACT_URL
     assert dividend_rule["plain_explanation"] == (
-        "From 1 April 2026, Section 93(2) permits no deduction for dividend "
-        "income or income from units of a mutual fund specified under section "
-        "10(4)(d)."
+        "From 1 April 2026, Section 93(2) provides that no deduction shall be "
+        "allowed for any dividend income, income from units of a Mutual Fund "
+        "specified under Schedule VII (Table: Sl. No. 20 or 21), or income from "
+        "units of a specified company referred to in section 2(h) of the Unit "
+        "Trust of India (Transfer of Undertaking and Repeal) Act, 2002."
     )
 
 
@@ -132,19 +137,19 @@ def test_search_filters_by_effective_date_category_and_expired_review() -> None:
             rule_data(
                 rule_id="historical",
                 investment_category="equity",
-                keywords=["gain"],
+                keywords=["equity gain"],
                 effective_to="2026-05-31",
                 status="superseded",
             ),
             rule_data(
                 rule_id="wrong_category",
                 investment_category="gold",
-                keywords=["gain"],
+                keywords=["equity gain"],
             ),
             rule_data(
                 rule_id="expired_review",
                 investment_category="equity",
-                keywords=["gain"],
+                keywords=["equity gain"],
                 review_due_on="2026-09-14",
             ),
         ]
@@ -154,15 +159,21 @@ def test_search_filters_by_effective_date_category_and_expired_review() -> None:
     assert [
         rule.rule_id
         for rule in registry.search(
-            "gain", as_of_date=date(2026, 5, 31), category="equity"
+            "equity gain",
+            as_of_date=date(2026, 5, 31),
+            category="equity",
+            checked_on=CHECKED_ON,
         )
     ] == ["expired_review", "historical"]
-    assert registry.search("gain", as_of_date=date(2026, 6, 1), category="equity") == [
-        rules[2]
-    ]
+    assert registry.search(
+        "equity gain",
+        as_of_date=date(2026, 6, 1),
+        category="equity",
+        checked_on=CHECKED_ON,
+    ) == [rules[2]]
     assert (
         registry.search(
-            "gain",
+            "equity gain",
             as_of_date=date(2026, 10, 1),
             category="equity",
             checked_on=date(2026, 10, 1),
@@ -172,11 +183,13 @@ def test_search_filters_by_effective_date_category_and_expired_review() -> None:
 
 
 def test_search_fails_closed_when_checked_after_review_due_date() -> None:
-    registry = TaxRuleRegistry(validate_tax_rule_data([rule_data(keywords=["gain"])]))
+    registry = TaxRuleRegistry(
+        validate_tax_rule_data([rule_data(keywords=["equity gain"])])
+    )
 
     assert (
         registry.search(
-            "gain",
+            "equity gain",
             as_of_date=date(2026, 8, 1),
             checked_on=date(2026, 9, 15),
         )
@@ -198,7 +211,7 @@ def test_uncategorized_search_matches_complete_stored_keyword_phrases(
     results = load_packaged_tax_rules().search(
         query,
         as_of_date=date(2026, 8, 14),
-        checked_on=date(2026, 8, 14),
+        checked_on=CHECKED_ON,
     )
 
     assert [rule.rule_id for rule in results] == expected_rule_ids
@@ -210,18 +223,40 @@ def test_transition_search_selects_the_act_for_the_question_date() -> None:
     historical_results = registry.search(
         "Which Income-tax Act applies for this tax year?",
         as_of_date=date(2026, 3, 31),
-        checked_on=date(2026, 8, 14),
+        checked_on=CHECKED_ON,
     )
     current_results = registry.search(
         "Which Income-tax Act applies for this tax year?",
         as_of_date=date(2026, 4, 1),
-        checked_on=date(2026, 8, 14),
+        checked_on=CHECKED_ON,
     )
 
     assert [rule.rule_id for rule in historical_results] == [
         "ita1961_transition_before_2026"
     ]
     assert [rule.rule_id for rule in current_results] == ["ita2025_transition_2026"]
+
+
+def test_uncategorized_gold_gain_abstains_without_a_verified_gold_gain_rule() -> None:
+    results = load_packaged_tax_rules().search(
+        "How is a short-term gold gain taxed?",
+        as_of_date=date(2026, 8, 14),
+        checked_on=CHECKED_ON,
+    )
+
+    assert results == []
+
+
+def test_uncategorized_debt_fund_gain_prefers_the_section_76_boundary() -> None:
+    results = load_packaged_tax_rules().search(
+        "How are long-term debt mutual fund gains taxed?",
+        as_of_date=date(2026, 8, 14),
+        checked_on=CHECKED_ON,
+    )
+
+    assert [rule.rule_id for rule in results] == [
+        "ita2025_section76_debt_and_unlisted_bonds"
+    ]
 
 
 def test_search_ranks_keyword_matches_deterministically() -> None:
@@ -235,6 +270,19 @@ def test_search_ranks_keyword_matches_deterministically() -> None:
     assert [
         rule.rule_id
         for rule in registry.search(
-            "long-term equity gain", as_of_date=date(2026, 8, 14)
+            "long-term equity gain",
+            as_of_date=date(2026, 8, 14),
+            checked_on=CHECKED_ON,
         )
     ] == ["specific", "alpha", "beta"]
+
+
+def test_search_uses_the_current_clock_when_checked_on_is_omitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = TaxRuleRegistry(
+        validate_tax_rule_data([rule_data(keywords=["equity gain"])])
+    )
+    monkeypatch.setattr(tax_rules, "_today", lambda: date(2026, 9, 15))
+
+    assert registry.search("equity gain", as_of_date=date(2026, 8, 1)) == []

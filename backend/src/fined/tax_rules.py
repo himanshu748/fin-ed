@@ -46,6 +46,24 @@ _MAX_KEYWORDS = 32
 _MAX_KEYWORD_LENGTH = 120
 _MAX_QUERY_LENGTH = 1_000
 _MAX_RESULTS = 4
+_GENERIC_TAX_TOKENS = frozenset(
+    {
+        "capital",
+        "gain",
+        "gains",
+        "long",
+        "ltcg",
+        "rate",
+        "rates",
+        "section",
+        "short",
+        "stcg",
+        "tax",
+        "taxation",
+        "taxed",
+        "term",
+    }
+)
 
 
 class TaxRuleConfigurationError(ValueError):
@@ -125,7 +143,7 @@ class TaxRuleRegistry:
             return []
 
         query_tokens = _tokens(query)
-        review_check_date = checked_on or date.today()
+        review_check_date = checked_on or _today()
         category_key = category.casefold() if category is not None else None
         matches: list[tuple[int, str, TaxRule]] = []
         for rule in self._rules:
@@ -140,13 +158,17 @@ class TaxRuleRegistry:
                 and rule.investment_category.casefold() != category_key
             ):
                 continue
-            score = sum(
-                1
+            matched_keywords = [
+                _tokens(keyword)
                 for keyword in rule.keywords
                 if _keyword_matches(query_tokens, _tokens(keyword))
-            )
-            if score:
-                matches.append((score, rule.rule_id, rule))
+            ]
+            if not matched_keywords or not any(
+                _is_asset_specific(keyword_tokens)
+                for keyword_tokens in matched_keywords
+            ):
+                continue
+            matches.append((len(matched_keywords), rule.rule_id, rule))
 
         matches.sort(key=lambda item: (-item[0], item[1]))
         return [item[2] for item in matches[: min(limit, _MAX_RESULTS)]]
@@ -306,3 +328,11 @@ def _keyword_matches(
         query_tokens[index : index + width] == keyword_tokens
         for index in range(len(query_tokens) - width + 1)
     )
+
+
+def _is_asset_specific(keyword_tokens: Sequence[str]) -> bool:
+    return any(token not in _GENERIC_TAX_TOKENS for token in keyword_tokens)
+
+
+def _today() -> date:
+    return date.today()
