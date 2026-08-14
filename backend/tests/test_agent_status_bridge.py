@@ -189,3 +189,56 @@ def test_bridge_requires_a_nonempty_participant_identity() -> None:
     # Catches a status broadcast with no participant-scoped destination.
     with pytest.raises(ValueError, match="participant identity"):
         LiveKitAgentStatusBridge(FakeLocalParticipant(), " ")
+
+
+def test_status_query_accepts_only_one_exact_versioned_empty_request() -> None:
+    # Catches browser-controlled fields or loose versions entering the read-only query.
+    assert status_bridge_module.decode_agent_status_query('{"version":1}') is None
+
+    for payload in (
+        "not json",
+        "[]",
+        "{}",
+        '{"version":true}',
+        '{"version":1.0}',
+        '{"version":2}',
+        '{"version":1,"active_agent":"taxed"}',
+        '{"version":1,"version":1}',
+        "😀" * 1_025,
+    ):
+        with pytest.raises(ValueError, match="Agent status query is unavailable"):
+            status_bridge_module.decode_agent_status_query(payload)
+
+
+@pytest.mark.parametrize(
+    ("active_agent_name", "expected"),
+    [
+        (
+            "fined",
+            '{"version":1,"active_agent":"fined","display_name":"FinEd Saathi",'
+            '"voice_name":"Nikhil","specialty":null}',
+        ),
+        (
+            "taxed",
+            '{"version":1,"active_agent":"taxed","display_name":"TaxEd",'
+            '"voice_name":"Anusha","specialty":"Investment Tax Specialist"}',
+        ),
+    ],
+)
+def test_status_query_returns_only_the_canonical_current_status(
+    active_agent_name: object, expected: str
+) -> None:
+    # Catches model text or mixed identities becoming a reconnect response.
+    assert (
+        status_bridge_module.encode_active_agent_status(active_agent_name) == expected
+    )
+
+
+def test_status_query_fails_closed_for_unknown_active_state() -> None:
+    private_state = "taxed-private-session-42"
+
+    with pytest.raises(ValueError) as failure:
+        status_bridge_module.encode_active_agent_status(private_state)
+
+    assert str(failure.value) == "Agent status query is unavailable."
+    assert private_state not in str(failure.value)

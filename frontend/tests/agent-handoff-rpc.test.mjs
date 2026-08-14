@@ -17,11 +17,13 @@ require.extensions['.ts'] = (module, filename) => {
 
 const {
   AGENT_STATUS_RPC_METHOD,
+  AGENT_STATUS_QUERY_RPC_METHOD,
   MAX_AGENT_STATUS_RPC_BYTES,
   FINED_ACTIVE_AGENT_STATUS,
   TAXED_ACTIVE_AGENT_STATUS,
   createAgentStatusRpcHandler,
   decodeActiveAgentStatus,
+  queryActiveAgentStatus,
 } = require('../lib/agent-handoff.ts');
 
 test('strict decoder accepts only the two canonical active-agent identities', () => {
@@ -73,4 +75,43 @@ test('RPC handler authorizes the connected backend agent before applying one sta
     /authorized/
   );
   assert.deepEqual(received, [TAXED_ACTIVE_AGENT_STATUS]);
+});
+
+test('status query asks only the connected backend participant for its canonical current state', async () => {
+  const calls = [];
+  const participant = {
+    async performRpc(options) {
+      calls.push(options);
+      return JSON.stringify(TAXED_ACTIVE_AGENT_STATUS);
+    },
+  };
+
+  assert.deepEqual(
+    await queryActiveAgentStatus(participant, 'backend-agent'),
+    TAXED_ACTIVE_AGENT_STATUS
+  );
+  assert.equal(AGENT_STATUS_QUERY_RPC_METHOD, 'fined.agent.v1.status.query');
+  assert.deepEqual(calls, [
+    {
+      destinationIdentity: 'backend-agent',
+      method: 'fined.agent.v1.status.query',
+      payload: '{"version":1}',
+      responseTimeout: 5_000,
+    },
+  ]);
+});
+
+test('status query rejects an invalid destination or noncanonical response', async () => {
+  let calls = 0;
+  const participant = {
+    async performRpc() {
+      calls += 1;
+      return '{"version":1,"active_agent":"taxed","display_name":"TaxEd","voice_name":"Nikhil","specialty":null}';
+    },
+  };
+
+  await assert.rejects(() => queryActiveAgentStatus(participant, ' '));
+  assert.equal(calls, 0);
+  await assert.rejects(() => queryActiveAgentStatus(participant, 'backend-agent'));
+  assert.equal(calls, 1);
 });

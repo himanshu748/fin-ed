@@ -7,9 +7,11 @@ from dataclasses import dataclass
 from typing import Literal, Protocol
 
 AGENT_STATUS_RPC_METHOD = "fined.agent.v1.status"
+AGENT_STATUS_QUERY_RPC_METHOD = "fined.agent.v1.status.query"
 AGENT_STATUS_RPC_TIMEOUT_SECONDS = 5
 MAX_AGENT_STATUS_RPC_BYTES = 1_024
 AGENT_STATUS_UI_UNAVAILABLE_MESSAGE = "Agent status is unavailable right now."
+AGENT_STATUS_QUERY_UNAVAILABLE_MESSAGE = "Agent status query is unavailable."
 
 AgentName = Literal["fined", "taxed"]
 
@@ -34,6 +36,46 @@ class AgentStatusUIUnavailableError(RuntimeError):
 
     def __init__(self) -> None:
         super().__init__(AGENT_STATUS_UI_UNAVAILABLE_MESSAGE)
+
+
+def decode_agent_status_query(payload: str) -> None:
+    """Accept only the bounded version-one read-only query shape."""
+
+    try:
+        if (
+            not isinstance(payload, str)
+            or len(payload.encode("utf-8")) > MAX_AGENT_STATUS_RPC_BYTES
+        ):
+            raise ValueError
+        pairs = json.loads(payload, object_pairs_hook=list)
+        if (
+            not isinstance(pairs, list)
+            or len(pairs) != 1
+            or not isinstance(pairs[0], tuple)
+            or pairs[0][0] != "version"
+            or type(pairs[0][1]) is not int
+            or pairs[0][1] != 1
+        ):
+            raise ValueError
+    except Exception:
+        raise ValueError(AGENT_STATUS_QUERY_UNAVAILABLE_MESSAGE) from None
+
+
+def encode_active_agent_status(active_agent_name: object) -> str:
+    """Encode one canonical current status without accepting browser state."""
+
+    try:
+        if active_agent_name == "fined":
+            status = AgentStatus.fined()
+        elif active_agent_name == "taxed":
+            status = AgentStatus.taxed()
+        else:
+            raise ValueError
+        return json.dumps(
+            status.to_payload(), separators=(",", ":"), ensure_ascii=False
+        )
+    except Exception:
+        raise ValueError(AGENT_STATUS_QUERY_UNAVAILABLE_MESSAGE) from None
 
 
 @dataclass(frozen=True)

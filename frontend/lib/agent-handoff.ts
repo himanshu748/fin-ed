@@ -1,5 +1,7 @@
 export const AGENT_STATUS_RPC_METHOD = 'fined.agent.v1.status';
+export const AGENT_STATUS_QUERY_RPC_METHOD = 'fined.agent.v1.status.query';
 export const MAX_AGENT_STATUS_RPC_BYTES = 1_024;
+const AGENT_STATUS_QUERY_TIMEOUT_MS = 5_000;
 
 export interface ActiveAgentStatus {
   version: 1;
@@ -100,4 +102,29 @@ export function createAgentStatusRpcHandler(
     applyStatus(decodeActiveAgentStatus(payload));
     return '{"version":1,"accepted":true}';
   };
+}
+
+interface AgentStatusRpcSender {
+  performRpc(options: {
+    destinationIdentity: string;
+    method: string;
+    payload: string;
+    responseTimeout: number;
+  }): Promise<string>;
+}
+
+export async function queryActiveAgentStatus(
+  localParticipant: AgentStatusRpcSender,
+  expectedAgentIdentity: string
+): Promise<ActiveAgentStatus> {
+  if (typeof expectedAgentIdentity !== 'string' || expectedAgentIdentity.trim().length === 0) {
+    throw new Error('Expected agent identity is required');
+  }
+  const response = await localParticipant.performRpc({
+    destinationIdentity: expectedAgentIdentity,
+    method: AGENT_STATUS_QUERY_RPC_METHOD,
+    payload: '{"version":1}',
+    responseTimeout: AGENT_STATUS_QUERY_TIMEOUT_MS,
+  });
+  return decodeActiveAgentStatus(response);
 }

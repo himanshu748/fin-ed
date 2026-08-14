@@ -40,7 +40,13 @@ from fined.agent import (
     build_system_prompt,
     parse_participant_profile,
 )
-from fined.agent_status_bridge import LiveKitAgentStatusBridge
+from fined.agent_status_bridge import (
+    AGENT_STATUS_QUERY_RPC_METHOD,
+    AGENT_STATUS_QUERY_UNAVAILABLE_MESSAGE,
+    LiveKitAgentStatusBridge,
+    decode_agent_status_query,
+    encode_active_agent_status,
+)
 from fined.call_analytics import (
     AgentTalkTimeTracker,
     CallAnalyticsInput,
@@ -335,8 +341,8 @@ async def my_agent(ctx: JobContext) -> None:
     )
     embedding_client = genai.Client()
     client_closed = False
-    registered_paper_rpc_methods: list[str] = []
-    paper_rpcs_unregistered = False
+    registered_browser_rpc_methods: list[str] = []
+    browser_rpcs_unregistered = False
     analytics_recorded = False
     llm_fallback_task: asyncio.Task[None] | None = None
     taxed_tts_manager = _TaxEdTTSManager()
@@ -348,16 +354,16 @@ async def my_agent(ctx: JobContext) -> None:
         client_closed = True
         await _close_embedding_client(embedding_client)
 
-    def unregister_paper_rpcs_once() -> None:
-        nonlocal paper_rpcs_unregistered
-        if paper_rpcs_unregistered:
+    def unregister_browser_rpcs_once() -> None:
+        nonlocal browser_rpcs_unregistered
+        if browser_rpcs_unregistered:
             return
-        paper_rpcs_unregistered = True
-        for method in reversed(registered_paper_rpc_methods):
+        browser_rpcs_unregistered = True
+        for method in reversed(registered_browser_rpc_methods):
             try:
                 ctx.room.local_participant.unregister_rpc_method(method)
             except Exception:
-                logger.warning("Paper RPC cleanup failed for %s", method)
+                logger.warning("Browser RPC cleanup failed for %s", method)
 
     try:
         install_current_websocket_serializer()
@@ -529,6 +535,17 @@ async def my_agent(ctx: JobContext) -> None:
             await session.say(PAPER_RESULT_SENTENCE)
             return PAPER_RESULT_ACK
 
+        async def on_agent_status_query(data: rtc.RpcInvocationData) -> str:
+            try:
+                if data.caller_identity != participant.identity:
+                    raise ValueError
+                decode_agent_status_query(data.payload)
+                return encode_active_agent_status(state.active_agent_name)
+            except Exception:
+                raise rtc.RpcError(
+                    2002, AGENT_STATUS_QUERY_UNAVAILABLE_MESSAGE
+                ) from None
+
         async def on_paper_holding_quotes(data: rtc.RpcInvocationData) -> str:
             if data.caller_identity != participant.identity:
                 raise rtc.RpcError(2001, "Paper quote caller is not authorized.")
@@ -575,13 +592,17 @@ async def my_agent(ctx: JobContext) -> None:
 
         if outbound_reminder is None:
             ctx.room.local_participant.register_rpc_method(
+                AGENT_STATUS_QUERY_RPC_METHOD, on_agent_status_query
+            )
+            registered_browser_rpc_methods.append(AGENT_STATUS_QUERY_RPC_METHOD)
+            ctx.room.local_participant.register_rpc_method(
                 PAPER_ORDER_RESULT_METHOD, on_paper_order_result
             )
-            registered_paper_rpc_methods.append(PAPER_ORDER_RESULT_METHOD)
+            registered_browser_rpc_methods.append(PAPER_ORDER_RESULT_METHOD)
             ctx.room.local_participant.register_rpc_method(
                 PAPER_HOLDING_QUOTES_METHOD, on_paper_holding_quotes
             )
-            registered_paper_rpc_methods.append(PAPER_HOLDING_QUOTES_METHOD)
+            registered_browser_rpc_methods.append(PAPER_HOLDING_QUOTES_METHOD)
 
         async def on_shutdown(reason: str) -> None:
             nonlocal analytics_recorded
@@ -618,7 +639,7 @@ async def my_agent(ctx: JobContext) -> None:
                 logger.info("Agent usage summary: %s", usage.get_summary())
             finally:
                 try:
-                    unregister_paper_rpcs_once()
+                    unregister_browser_rpcs_once()
                 finally:
                     try:
                         await taxed_tts_manager.close_all()
@@ -653,7 +674,7 @@ async def my_agent(ctx: JobContext) -> None:
             await session.say(build_caller_greeting(profile, caller_memory))
     except BaseException:
         try:
-            unregister_paper_rpcs_once()
+            unregister_browser_rpcs_once()
         finally:
             try:
                 await taxed_tts_manager.close_all()

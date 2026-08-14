@@ -44,20 +44,48 @@ function dependenciesChanged(previous, next) {
   return previous.some((value, index) => !Object.is(value, next[index]));
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+const FINED_RESPONSE = JSON.stringify({
+  version: 1,
+  active_agent: 'fined',
+  display_name: 'FinEd Saathi',
+  voice_name: 'Nikhil',
+  specialty: null,
+});
+const TAXED_RESPONSE = JSON.stringify({
+  version: 1,
+  active_agent: 'taxed',
+  display_name: 'TaxEd',
+  voice_name: 'Anusha',
+  specialty: 'Investment Tax Specialist',
+});
+
 function createProviderHarness({
   agentIdentity = 'backend-fined',
   agentSid = 'PA_fined_1',
   registerError = null,
+  queryResponses = [FINED_RESPONSE],
 } = {}) {
   const states = [];
   const effects = [];
   const callbacks = [];
   const registrations = [];
+  const queries = [];
   let stateCursor = 0;
   let callbackCursor = 0;
   let effectCursor = 0;
   let pendingEffects = [];
   let currentAgent = agentIdentity ? { identity: agentIdentity, sid: agentSid } : null;
+  let queryResponseIndex = 0;
   const context = { current: null };
   const room = {
     registerRpcMethod(method, handler) {
@@ -66,6 +94,12 @@ function createProviderHarness({
     },
     unregisterRpcMethod(method) {
       registrations.push({ method, handler: null });
+    },
+    async performRpc(options) {
+      queries.push(options);
+      const response = queryResponses[queryResponseIndex++] ?? FINED_RESPONSE;
+      if (response instanceof Error) throw response;
+      return await response;
     },
   };
   const react = {
@@ -138,6 +172,7 @@ function createProviderHarness({
 
   return {
     registrations,
+    queries,
     render,
     setAgentIdentity(identity) {
       currentAgent = identity ? { identity, sid: currentAgent?.sid ?? 'PA_fined_1' } : null;
@@ -154,6 +189,11 @@ function createProviderHarness({
         effects[index] = { ...record, cleanup: typeof cleanup === 'function' ? cleanup : null };
       }
     },
+    async settleQueries() {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    },
     state() {
       return states[0];
     },
@@ -163,6 +203,7 @@ function createProviderHarness({
 test('provider scopes one status RPC to the current connected agent and resets on agent change', async () => {
   const harness = createProviderHarness();
   harness.render();
+  await harness.settleQueries();
   assert.equal(harness.registrations.length, 1);
   assert.equal(harness.registrations[0].method, 'fined.agent.v1.status');
 
@@ -187,8 +228,9 @@ test('provider scopes one status RPC to the current connected agent and resets o
 });
 
 test('same-identity participant replacement resets status and replaces the scoped RPC once', async () => {
-  const harness = createProviderHarness();
+  const harness = createProviderHarness({ queryResponses: [FINED_RESPONSE, TAXED_RESPONSE] });
   harness.render();
+  await harness.settleQueries();
   await harness.registrations[0].handler({
     callerIdentity: 'backend-fined',
     payload: JSON.stringify({
@@ -214,11 +256,15 @@ test('same-identity participant replacement resets status and replaces the scope
       { method: 'fined.agent.v1.status', registered: true },
     ]
   );
+  await harness.settleQueries();
+  assert.equal(harness.state().display_name, 'TaxEd');
+  assert.equal(harness.queries.length, 2);
 });
 
 test('a status update on the same participant SID preserves one provider registration', async () => {
   const harness = createProviderHarness();
   harness.render();
+  await harness.settleQueries();
   await harness.registrations[0].handler({
     callerIdentity: 'backend-fined',
     payload: JSON.stringify({
@@ -233,6 +279,7 @@ test('a status update on the same participant SID preserves one provider registr
 
   assert.equal(harness.state().display_name, 'TaxEd');
   assert.equal(harness.registrations.length, 1);
+  assert.equal(harness.queries.length, 1);
 });
 
 test('Strict Mode replay cleans the prior RPC and leaves one replacement registration', () => {
@@ -251,10 +298,82 @@ test('Strict Mode replay cleans the prior RPC and leaves one replacement registr
   );
 });
 
+test('a fresh FinEd participant replaces a previously queried TaxEd status', async () => {
+  const harness = createProviderHarness({ queryResponses: [TAXED_RESPONSE, FINED_RESPONSE] });
+  harness.render();
+  await harness.settleQueries();
+  assert.equal(harness.state().display_name, 'TaxEd');
+
+  harness.replaceAgentParticipant({ identity: 'backend-fined', sid: 'PA_fined_2' });
+  harness.render();
+  await harness.settleQueries();
+
+  assert.equal(harness.state().display_name, 'FinEd Saathi');
+  assert.equal(harness.queries.length, 2);
+});
+
+test('query failure leaves the safe FinEd default without crashing', async () => {
+  const harness = createProviderHarness({
+    queryResponses: [new Error('private transport failure')],
+  });
+
+  harness.render();
+  await harness.settleQueries();
+
+  assert.equal(harness.state().display_name, 'FinEd Saathi');
+  assert.equal(harness.queries.length, 1);
+});
+
+test('out-of-order query completion cannot restore status from a prior participant SID', async () => {
+  const stale = deferred();
+  const current = deferred();
+  const harness = createProviderHarness({
+    queryResponses: [stale.promise, current.promise],
+  });
+  harness.render();
+  harness.replaceAgentParticipant({ identity: 'backend-fined', sid: 'PA_fined_2' });
+  harness.render();
+
+  current.resolve(TAXED_RESPONSE);
+  await harness.settleQueries();
+  assert.equal(harness.state().display_name, 'TaxEd');
+  stale.resolve(FINED_RESPONSE);
+  await harness.settleQueries();
+
+  assert.equal(harness.state().display_name, 'TaxEd');
+});
+
+test('Strict Mode replay ignores its stale query and leaves one live handler', async () => {
+  const stale = deferred();
+  const current = deferred();
+  const harness = createProviderHarness({
+    queryResponses: [stale.promise, current.promise],
+  });
+  harness.render();
+  harness.strictModeReplayEffects();
+
+  current.resolve(TAXED_RESPONSE);
+  await harness.settleQueries();
+  stale.resolve(FINED_RESPONSE);
+  await harness.settleQueries();
+
+  assert.equal(harness.state().display_name, 'TaxEd');
+  assert.deepEqual(
+    harness.registrations.map(({ method, handler }) => ({ method, registered: handler !== null })),
+    [
+      { method: 'fined.agent.v1.status', registered: true },
+      { method: 'fined.agent.v1.status', registered: false },
+      { method: 'fined.agent.v1.status', registered: true },
+    ]
+  );
+  assert.equal(harness.queries.length, 2);
+});
+
 test('provider tolerates an RPC registration failure', () => {
   const harness = createProviderHarness({ registerError: new Error('room unavailable') });
   assert.doesNotThrow(() => harness.render());
   assert.equal(harness.state().voice_name, 'Nikhil');
+  assert.equal(harness.queries.length, 0);
 });
 
 test('badge announces a validated identity without animation', () => {

@@ -15,6 +15,7 @@ import {
   type ActiveAgentStatus,
   FINED_ACTIVE_AGENT_STATUS,
   createAgentStatusRpcHandler,
+  queryActiveAgentStatus,
 } from '@/lib/agent-handoff';
 
 interface AgentHandoffContextValue {
@@ -24,6 +25,12 @@ interface AgentHandoffContextValue {
 interface AgentStatusRpcRegistry {
   registerRpcMethod(method: string, handler: ReturnType<typeof createAgentStatusRpcHandler>): void;
   unregisterRpcMethod(method: string): void;
+  performRpc(options: {
+    destinationIdentity: string;
+    method: string;
+    payload: string;
+    responseTimeout: number;
+  }): Promise<string>;
 }
 
 const AgentHandoffContext = createContext<AgentHandoffContextValue>({
@@ -55,8 +62,10 @@ export function AgentHandoffProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     if (!expectedAgentIdentity) return;
+    let active = true;
+    let unregister: (() => void) | undefined;
     try {
-      return registerAgentStatusRpcHandler(
+      unregister = registerAgentStatusRpcHandler(
         session.room.localParticipant,
         expectedAgentIdentity,
         applyStatus
@@ -64,6 +73,15 @@ export function AgentHandoffProvider({ children }: PropsWithChildren) {
     } catch {
       return;
     }
+    void queryActiveAgentStatus(session.room.localParticipant, expectedAgentIdentity)
+      .then((status) => {
+        if (active) applyStatus(status);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+      unregister?.();
+    };
   }, [
     agentParticipant,
     agentParticipantSid,

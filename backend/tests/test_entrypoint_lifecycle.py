@@ -169,11 +169,16 @@ class FakeLocalParticipant:
         self.fail_at = fail_at
         self.rpc_methods: dict[str, Any] = {}
         self.outbound_rpc_calls: list[dict[str, object]] = []
+        self.rpc_registration_attempts = 0
+        self.fail_rpc_registration_at: int | None = None
 
     def register_rpc_method(self, method_name: str, handler: Any) -> Any:
         self.events.append("rpc_registration")
+        self.rpc_registration_attempts += 1
         if self.fail_at == "rpc_registration":
             raise LifecycleAbort("rpc_registration")
+        if self.rpc_registration_attempts == self.fail_rpc_registration_at:
+            raise LifecycleAbort(f"rpc_registration_{self.rpc_registration_attempts}")
         self.rpc_methods[method_name] = handler
         return handler
 
@@ -467,7 +472,7 @@ async def test_every_post_client_failure_closes_once_and_propagates(
         await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
 
     assert harness.client.aio.close_attempts == 1
-    expected_unregistrations = 2 * int(
+    expected_unregistrations = 3 * int(
         fail_at in {"shutdown_registration", "start", "say"}
     )
     assert harness.events.count("rpc_unregistration") == expected_unregistrations
@@ -490,12 +495,12 @@ async def test_shutdown_failure_still_closes_once_and_propagates(
     with pytest.raises(LifecycleAbort, match=fail_at):
         await callback("normal shutdown")
     assert harness.client.aio.close_attempts == 1
-    assert harness.events.count("rpc_unregistration") == 2
+    assert harness.events.count("rpc_unregistration") == 3
 
     with pytest.raises(LifecycleAbort, match=fail_at):
         await callback("duplicate shutdown")
     assert harness.client.aio.close_attempts == 1
-    assert harness.events.count("rpc_unregistration") == 2
+    assert harness.events.count("rpc_unregistration") == 3
 
 
 @pytest.mark.asyncio
@@ -527,12 +532,13 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
         "agent_state_registration",
         "rpc_registration",
         "rpc_registration",
+        "rpc_registration",
         "shutdown_registration",
         "start",
         "say",
     ]
     assert harness.client.aio.close_attempts == 0
-    assert harness.events.count("rpc_registration") == 2
+    assert harness.events.count("rpc_registration") == 3
     assert harness.events.count("rpc_unregistration") == 0
     assert len(harness.context.shutdown_callbacks) == 1
     state = harness.session.userdata
@@ -595,13 +601,83 @@ async def test_success_defers_one_close_to_idempotent_shutdown(
     await callback("duplicate shutdown")
 
     assert harness.client.aio.close_attempts == 1
-    assert harness.events.count("rpc_unregistration") == 2
+    assert harness.events.count("rpc_unregistration") == 3
     assert entrypoint.PAPER_ORDER_RESULT_METHOD not in (
         harness.context.local_participant.rpc_methods
     )
     assert entrypoint.PAPER_HOLDING_QUOTES_METHOD not in (
         harness.context.local_participant.rpc_methods
     )
+    assert entrypoint.AGENT_STATUS_QUERY_RPC_METHOD not in (
+        harness.context.local_participant.rpc_methods
+    )
+
+
+@pytest.mark.asyncio
+async def test_browser_status_query_returns_only_current_canonical_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Catches reconnect queries returning stale identity data or mutating agent state.
+    harness = _install_lifecycle_fakes(monkeypatch, None, tmp_path / "generated")
+    await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
+    state = harness.session.userdata
+    assert state is not None
+    handler = harness.context.local_participant.rpc_methods[
+        entrypoint.AGENT_STATUS_QUERY_RPC_METHOD
+    ]
+
+    state.active_agent_name = "taxed"  # type: ignore[union-attr]
+    response = await handler(
+        SimpleNamespace(caller_identity="learner-1", payload='{"version":1}')
+    )
+
+    assert response == (
+        '{"version":1,"active_agent":"taxed","display_name":"TaxEd",'
+        '"voice_name":"Anusha","specialty":"Investment Tax Specialist"}'
+    )
+    assert state.active_agent_name == "taxed"  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_browser_status_query_rejects_wrong_caller_and_invalid_payload_safely(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Catches participant confusion and parser details escaping through the RPC boundary.
+    harness = _install_lifecycle_fakes(monkeypatch, None, tmp_path / "generated")
+    await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
+    handler = harness.context.local_participant.rpc_methods[
+        entrypoint.AGENT_STATUS_QUERY_RPC_METHOD
+    ]
+
+    for caller_identity, payload in (
+        ("other-participant", '{"version":1}'),
+        ("learner-1", "not json private-secret"),
+        ("learner-1", '{"version":true}'),
+        ("learner-1", "😀" * 1_025),
+    ):
+        with pytest.raises(rtc.RpcError) as failure:
+            await handler(
+                SimpleNamespace(caller_identity=caller_identity, payload=payload)
+            )
+        assert failure.value.code == 2002
+        assert failure.value.message == "Agent status query is unavailable."
+        assert "private-secret" not in str(failure.value)
+
+
+@pytest.mark.asyncio
+async def test_partial_browser_rpc_registration_rolls_back_status_query_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Catches a later browser RPC failure leaking the already-installed query handler.
+    harness = _install_lifecycle_fakes(monkeypatch, None, tmp_path / "generated")
+    harness.context.local_participant.fail_rpc_registration_at = 2
+
+    with pytest.raises(LifecycleAbort, match="rpc_registration_2"):
+        await entrypoint.my_agent(harness.context)  # type: ignore[arg-type]
+
+    assert harness.context.local_participant.rpc_registration_attempts == 2
+    assert harness.events.count("rpc_unregistration") == 1
+    assert harness.context.local_participant.rpc_methods == {}
 
 
 @pytest.mark.asyncio
@@ -855,6 +931,9 @@ async def test_outbound_job_never_loads_or_exposes_taxed(
     assert isinstance(fined_agent.status_bridge, UnavailableAgentStatusBridge)
     assert harness.tax_registry_loads == []
     assert len(harness.tts_instances) == 1
+    assert entrypoint.AGENT_STATUS_QUERY_RPC_METHOD not in (
+        harness.context.local_participant.rpc_methods
+    )
 
 
 @pytest.mark.asyncio
