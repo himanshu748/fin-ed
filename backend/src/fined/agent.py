@@ -383,7 +383,10 @@ _PAPER_ORDER_MARKERS = (
     "virtual money",
     "पेपर ऑर्डर",
 )
-_ORDER_CLAUSE_SEPARATOR = re.compile(r"[.!?।;]+")
+_ORDER_CLAUSE_SEPARATOR = re.compile(
+    r"[.!?।;]+|,\s*(?:(?:but\s+)?(?:now|then)\b|but\b)",
+    re.IGNORECASE,
+)
 _NEGATED_CONTEXT_PREFIX = re.compile(
     r"(?:\bdo\s+not(?:\s+use)?|\bdon't(?:\s+use)?|"
     r"\bnot(?:\s+(?:a|an|the|in))?|\bwithout|\bno)\s*$",

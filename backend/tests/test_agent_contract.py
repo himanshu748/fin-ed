@@ -603,6 +603,8 @@ async def test_llm_node_delegates_safe_education_to_the_provider(
         "Do not use virtual money. Buy 10 Reliance shares for me",
         "Use my broker to buy 10 Reliance shares, not paper trading",
         "Buy 10 Reliance shares for me, not in paper trading",
+        "I use paper trading to learn, but now buy 10 Reliance shares for me",
+        "Paper trading is useful, but buy 10 Reliance shares for me",
     ],
 )
 async def test_fined_refuses_shared_prohibited_intents_before_provider_inference(
@@ -735,6 +737,8 @@ async def test_fined_keeps_safe_paper_order_requests_with_provider(
         "Do not use virtual money. Buy 10 Reliance shares for me",
         "Use my broker to buy 10 Reliance shares, not paper trading",
         "Buy 10 Reliance shares for me, not in paper trading",
+        "I use paper trading to learn, but now buy 10 Reliance shares for me",
+        "Paper trading is useful, but buy 10 Reliance shares for me",
     ],
 )
 def test_real_order_context_precedes_unbound_paper_language(

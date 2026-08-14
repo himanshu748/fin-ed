@@ -224,6 +224,8 @@ def test_taxed_prompt_requires_sourced_date_bound_fail_closed_answers() -> None:
         "Do not use virtual money. Buy 10 Reliance shares for me",
         "Use my broker to buy 10 Reliance shares, not paper trading",
         "Buy 10 Reliance shares for me, not in paper trading",
+        "I use paper trading to learn, but now buy 10 Reliance shares for me",
+        "Paper trading is useful, but buy 10 Reliance shares for me",
     ],
 )
 async def test_taxed_refuses_prohibited_requests_before_provider_inference(
