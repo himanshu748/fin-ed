@@ -278,6 +278,39 @@ def test_uncategorized_debt_fund_gain_prefers_the_section_76_boundary() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("query", "category", "expected_rule_id"),
+    [
+        (
+            "How is a long-term gain taxed?",
+            "equity_oriented_fund",
+            "ita2025_section198_equity_ltcg",
+        ),
+        (
+            "What is GST on gold?",
+            "physical_gold",
+            "cbic_physical_gold_gst",
+        ),
+        (
+            "What is the STT rate for an option?",
+            "derivatives_stt",
+            "nse_finance_act_2026_stt_derivatives",
+        ),
+    ],
+)
+def test_validated_category_anchors_generic_tax_event_keywords(
+    query: str, category: str, expected_rule_id: str
+) -> None:
+    results = load_packaged_tax_rules().search(
+        query,
+        as_of_date=date(2026, 8, 14),
+        category=category,
+        checked_on=CHECKED_ON,
+    )
+
+    assert [rule.rule_id for rule in results] == [expected_rule_id]
+
+
 def test_search_ranks_keyword_matches_deterministically() -> None:
     records = [
         rule_data(rule_id="beta", keywords=["equity", "gain"]),

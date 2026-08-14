@@ -178,9 +178,12 @@ class TaxRuleRegistry:
                 for keyword in rule.keywords
                 if _keyword_matches(query_tokens, _tokens(keyword))
             ]
-            if not matched_keywords or not any(
+            has_asset_anchor = any(
                 _contains_asset_anchor(keyword_tokens)
                 for keyword_tokens in matched_keywords
+            )
+            if not matched_keywords or not (
+                has_asset_anchor or category_key is not None
             ):
                 continue
             matches.append((len(matched_keywords), rule.rule_id, rule))
