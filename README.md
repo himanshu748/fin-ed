@@ -267,7 +267,7 @@ fin-ed/
 - [Gemini model catalog](https://ai.google.dev/gemini-api/docs/models)
 - [Deepgram Nova-3](https://developers.deepgram.com/docs/models-languages-overview)
 - [Angel One SmartAPI](https://smartapi.angelone.in/)
-- [Income-tax Act, 2025 as amended by Finance Act, 2026](https://www.incometaxindia.gov.in/documents/d/guest/income_tax_act_2025_as_amended_by_fa_act_2026-pdf)
+- [Income Tax Department: Income Tax Act 2025](https://www.incometax.gov.in/iec/foportal/newdownloads/income-tax-act-2025)
 - [Income Tax Department transition FAQ](https://www.incometax.gov.in/iec/foportal/help/all-topics/e-filing-services/General%20Questions-faqs?mobile-app=1)
 
 ## License
