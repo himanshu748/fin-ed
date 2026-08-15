@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -27,6 +28,8 @@ from fined.market_data.provider import (
     MarketDataUnavailableError,
     UnavailableMarketDataProvider,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def config() -> AngelOneMarketDataConfig:
@@ -501,6 +504,22 @@ async def test_historical_prices_sanitize_empty_or_malformed_candles(
 def test_provider_factory_fails_closed_when_credentials_are_incomplete(
     environment: dict[str, str],
 ) -> None:
+    assert isinstance(
+        create_market_data_provider(environment=environment),
+        UnavailableMarketDataProvider,
+    )
+
+
+def test_copied_backend_env_example_keeps_optional_market_data_unavailable() -> None:
+    environment = {
+        name: value
+        for line in (REPO_ROOT / "backend" / ".env.example")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line and not line.startswith("#") and "=" in line
+        for name, value in (line.split("=", 1),)
+    }
+
     assert isinstance(
         create_market_data_provider(environment=environment),
         UnavailableMarketDataProvider,
