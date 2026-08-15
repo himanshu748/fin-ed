@@ -675,6 +675,20 @@ test('publishes a privacy-safe Day 10 architecture diagram', () => {
   const path = join(frontendRoot, asset);
   assert.ok(existsSync(path), `missing Day 10 architecture asset: ${asset}`);
 
+  const publicationAsset = 'public/images/day-10/fined-architecture.png';
+  const publicationPath = join(frontendRoot, publicationAsset);
+  assert.ok(
+    existsSync(publicationPath),
+    `missing Day 10 publication architecture asset: ${publicationAsset}`
+  );
+  const publicationBytes = readBytes(publicationAsset);
+  assert.equal(publicationBytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+  assert.deepEqual(
+    [publicationBytes.readUInt32BE(16), publicationBytes.readUInt32BE(20)],
+    [1600, 900],
+    'publication architecture must preserve the 16:9 canvas'
+  );
+
   const source = read(asset);
   includesAll(
     source,

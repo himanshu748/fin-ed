@@ -51,7 +51,7 @@ The normal setup works without Angel One, Twilio, a knowledge index or outbound 
 
 ## Architecture
 
-![FinEd Saathi architecture](frontend/public/images/day-10/fined-architecture.svg)
+![FinEd Saathi architecture](frontend/public/images/day-10/fined-architecture.png)
 
 The browser sends speech through LiveKit to Deepgram, Gemini and Murf Falcon 2. FinEd owns normal lessons. A fresh permission binds a tax question to TaxEd, which uses the official Indian tax registry and the server-selected Anusha locale. Optional side systems remain outside the core voice path.
 

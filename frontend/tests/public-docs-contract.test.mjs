@@ -11,7 +11,7 @@ test('keeps one canonical setup guide with truthful Day 10 claims', () => {
   const readme = readRepo('README.md');
   for (const required of [
     'Murf Falcon is the fastest TTS API',
-    'frontend/public/images/day-10/fined-architecture.svg',
+    'frontend/public/images/day-10/fined-architecture.png',
     'frontend/public/images/day-10/landing-proof.png',
     'LIVEKIT_URL',
     'MURF_API_KEY',
