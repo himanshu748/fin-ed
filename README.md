@@ -1,94 +1,89 @@
 # FinEd Saathi
 
-FinEd Saathi is a voice-first financial literacy tutor for Indian market concepts. It listens in English, Hindi or both then replies in the learner's language style through Murf Falcon 2. FinEd uses the Indian voice Nikhil and the TaxEd specialist uses the multilingual Indian voice Anusha.
+FinEd Saathi is a voice-first financial literacy tutor for beginner Indian market concepts. It teaches in English, Hindi or the learner's code-mixed register without recommending securities or placing trades.
 
-The project is built for the Financial Services track of **10 Days of Voice Agents - VoiceForBharat Edition**. It teaches market mechanics, charges, taxes and risks. It does not recommend securities, promise returns or place real trades.
+Murf Falcon is the fastest TTS API. This project uses Murf Falcon 2 with Nikhil for FinEd and Anusha for the TaxEd specialist.
 
-## What works today
+Built for the Financial Services track of 10 Days of Voice Agents: VoiceForBharat Edition.
 
-- Eight learning modes: Stocks, Mutual Funds & SIPs, ETFs, Gold, F&O, IPOs, Bonds and Ask Anything
-- Deepgram Nova-3 multilingual speech recognition
-- Google Gemini conversation and tool use with a strict model allowlist
-- Murf Falcon 2 speech using `Nikhil`, `Conversational` and locale `en-IN`
-- A consented in-session TaxEd handoff using multilingual Anusha for verified Indian investment-tax rules
-- LiveKit Cloud transport with a prewarmed Python worker
-- Optional Angel One SmartAPI live quotes and historical closes through read-only tools
-- Whole-unit historical return illustrations with explicit corporate-action caveats
-- A browser-owned paper trading ledger with ₹1,00,000 virtual cash
-- Voice tools that can open the paper dashboard, prepare a simulated order and read the paper portfolio
-- Visible session IDs with separate transcript history for each meaningful session
-- Consent-gated caller memory backed by SQLite
-- An optional local knowledge index with fail-closed evidence behavior
-- A manual, consented SIP reminder with a call-scoped ₹1,00,000 paper portfolio
-- Consent-gated human-help requests for suspected fraud and human-only decisions
-- A real-call analytics dashboard with anonymous outcomes, agent speaking time and handoff counts
-- Guardrails for credentials, personalised recommendations, guaranteed outcomes, wrongdoing and prompt extraction
-- An accessible responsive interface with reduced-motion support
+## Proof image
 
-## Safety model
+![FinEd Saathi voice-led learning experience](frontend/public/images/fin-ed-voice-ledger-v1.png)
 
-FinEd Saathi is an educational product. It never asks for a broker password, PIN, OTP, PAN, Aadhaar or bank details. Angel One credentials stay in the backend environment and are never sent to the browser.
+![FinEd Saathi landing proof](frontend/public/images/day-10/landing-proof.png)
 
-Paper orders are simulated. A learner must review and explicitly confirm each draft in the browser or during an outbound practice call. No broker order API is called and no real money is used.
+| Voice lesson | TaxEd handoff |
+| --- | --- |
+| ![FinEd voice workspace answering an ETF question](frontend/public/images/day-10/voice-workspace-proof.png) | ![TaxEd handoff with Anusha and a verified tax rule](frontend/public/images/day-10/taxed-handoff-proof.png) |
 
-The optional Day 6 paper-practice reminder is started only by a private
-server-side command after a learner's explicit opt-in. It creates a new LiveKit
-agent dispatch before one SIP dial. The caller first hears FinEd's identity,
-the opt-in purpose and a way to say stop. It has no browser, broker order or
-real-trading path. It does not store a recipient number or schedule a retry.
+| Paper trading | Call analytics |
+| --- | --- |
+| ![Empty simulated paper portfolio with virtual cash](frontend/public/images/day-10/paper-trading-proof.png) | ![Anonymous aggregate call analytics](frontend/public/images/day-10/call-analytics-proof.png) |
 
-The F&O mode explains mechanics, margin and loss risk. It does not provide signals or live strategies. Personalised decisions belong with a SEBI-registered investment adviser.
+## What it solves
 
-Ten adversarial checks are documented in [RED_TEAM.md](RED_TEAM.md).
+Financial terms, charges and tax rules can be hard to learn from dense pages or generic chat. FinEd Saathi turns them into a spoken lesson, keeps the learner in control and sends tax questions to a separate source-backed specialist only after consent.
+
+It is education, not investment advice. The remembered ₹6 share story stays unresolved until the learner identifies where the ₹50 appeared, such as a contract note, ledger, available funds or P&L.
+
+## What works
+
+- Eight modes: Stocks, Mutual Funds & SIPs, ETFs, Gold, F&O, IPOs, Bonds and Ask Anything
+- Deepgram Nova-3 multilingual speech recognition with LiveKit transport
+- Gemini tool use through a strict model allowlist and a fixed safe error boundary
+- Murf Falcon 2 speech with Nikhil for FinEd
+- A consented TaxEd handoff with Anusha in `en-IN`, `hi-IN` or `hi-LATN`
+- An optional local knowledge index with evidence-first retrieval
+- Optional Angel One read-only quotes, instrument search and historical closes
+- A browser-owned ₹1,00,000 paper portfolio with explicit confirmation
+- Consent-gated caller memory, human-help requests and automated callbacks
+- Anonymous call analytics without audio, transcripts or caller identity
+
+## Safety boundary
+
+FinEd Saathi never asks for a broker password, PIN, OTP, PAN, Aadhaar, bank detail or full account number. It refuses personalized recommendations, targets, signals, guaranteed outcomes, tax evasion and real trade execution before provider inference.
+
+Paper orders use virtual money and require review of the same pending draft before a simulated fill. No real broker order API is called. Read-only market tools cannot access holdings, positions or account data.
+
+F&O is limited to mechanics, risk education and payoff examples. It does not offer live strategies or paper orders.
+
+The normal setup works without Angel One, Twilio, a knowledge index or outbound calling. Missing optional market credentials make live quotes unavailable. An absent knowledge index returns no evidence. A corrupt published index stops startup. Missing telephony configuration leaves the browser voice experience available and prevents an outbound call.
 
 ## Architecture
 
-```text
-Browser microphone or typed question
-  -> LiveKit Cloud
-  -> Deepgram Nova-3 STT
-  -> Gemini + FinEd tools and guardrails
-  -> Murf Falcon 2 TTS with Nikhil
-  -> Consented TaxEd handoff with the official tax registry and Anusha
-  -> LiveKit Cloud
-  -> Browser audio, transcript and session archive
+![FinEd Saathi architecture](frontend/public/images/day-10/fined-architecture.svg)
 
-Optional tool paths
-  -> Angel One SmartAPI for read-only NSE and BSE quotes, symbols and daily closes
-  -> Browser paper ledger for simulated orders
-  -> SQLite for consented caller memory
-  -> SQLite plus an in-app queue for consented human-help requests
-  -> SQLite plus a caller-safe snapshot for the live call analytics dashboard
-  -> Local knowledge index for cited educational evidence
+The browser sends speech through LiveKit to Deepgram, Gemini and Murf Falcon 2. FinEd owns normal lessons. A fresh permission binds a tax question to TaxEd, which uses the official Indian tax registry and the server-selected Anusha locale. Optional side systems remain outside the core voice path.
 
-Optional Day 6 outbound reminder
-  -> private operator command
-  -> explicit LiveKit dispatch with allowlisted, phone-free metadata
-  -> one SIP participant dial through a stored LiveKit Cloud outbound trunk
-  -> consented Indian E.164 recipient
-  -> isolated ₹1,00,000 call-only paper ledger using read-only live quotes
-```
+## Quick start
 
-## Run locally
-
-### Requirements
-
-- Python 3.10 to 3.14
-- [uv](https://docs.astral.sh/uv/)
-- Node.js
-- pnpm 9
-- LiveKit Cloud, Murf, Deepgram and Google AI credentials
-
-Angel One SmartAPI credentials are optional. The voice tutor still works when live quotes are unavailable.
-
-### 1. Configure environment files
+Use Python 3.10 through 3.14, [uv](https://docs.astral.sh/uv/), Node.js and the repository's pinned pnpm 9 release. Run each block from the repository root in a fresh shell.
 
 ```bash
 cp backend/.env.example backend/.env.local
 cp frontend/.env.example frontend/.env.local
 ```
 
-The backend requires:
+Install the backend dependencies and local voice models:
+
+```bash
+cd backend
+uv sync
+uv run -m livekit.agents download-files
+```
+
+Install the frontend dependencies:
+
+```bash
+cd frontend
+pnpm install
+```
+
+Keep real values only in `.env.local`. Never commit those files.
+
+## Required configuration
+
+Set these backend values in `backend/.env.local`:
 
 ```text
 LIVEKIT_URL
@@ -99,115 +94,38 @@ DEEPGRAM_API_KEY
 GOOGLE_API_KEY
 ```
 
-The frontend requires the same LiveKit project credentials plus:
+The Gemini default is `gemini-3.5-flash-lite`. The exact allowed values are `gemini-3.6-flash`, `gemini-3.5-flash-lite` and `gemini-2.5-flash`. An unknown, empty or space-padded `GEMINI_MODEL` fails closed without switching models.
+
+Set the same LiveKit project values in `frontend/.env.local` and retain the registered worker name:
 
 ```text
+LIVEKIT_URL
+LIVEKIT_API_KEY
+LIVEKIT_API_SECRET
 AGENT_NAME=my-agent
 ```
 
-Never commit either `.env.local` file.
-
-### 2. Install dependencies and local voice models
-
-```bash
-cd backend
-uv sync
-uv run -m livekit.agents download-files
-```
-
-The backend pins LiveKit Agents `1.6.6` and LiveKit RTC `1.1.13`. It uses the current built-in local `v1-mini` turn detector instead of the deprecated turn detector plugin.
-
-```bash
-cd frontend
-pnpm install
-```
-
-### 3. Start the voice worker
-
-For a stable demo or recording:
+## Start the worker
 
 ```bash
 cd backend
 uv run dotenv -f .env.local run -- python src/agent.py start
 ```
 
-The production-mode worker listens for health checks on port `8081`, keeps one process warm and registers as `my-agent`.
+The stable worker registers as `my-agent` and exposes its health endpoint on port `8081`. Use `dev` in place of `start` only when backend file watching is useful.
 
-Use `dev` instead of `start` only when you need backend file watching:
-
-```bash
-uv run dotenv -f .env.local run -- python src/agent.py dev
-```
-
-Restart the worker after changing Python dependencies. Do not rely on hot reload after replacing the LiveKit SDK inside a running process.
-
-### 4. Start the frontend
+## Start the frontend
 
 ```bash
 cd frontend
-pnpm dev
-```
-
-Open [http://127.0.0.1:3000](http://127.0.0.1:3000). If port 3000 is occupied, use:
-
-```bash
 pnpm dev --port 3001
 ```
 
-Then open [http://127.0.0.1:3001](http://127.0.0.1:3001), select a learning mode, choose **Talk to FinEd Saathi** and allow microphone access.
+Open [http://127.0.0.1:3001](http://127.0.0.1:3001), select a mode then choose **Talk to FinEd Saathi**. Allow microphone access when prompted.
 
-## Day 5 domain tools
+## Optional live market data
 
-The primary Day 5 tool is `calculate_angel_one_trade_cost`. It computes an
-Angel One equity-delivery charge estimate from a bundled local schedule snapshot.
-The current snapshot applies from **1 March 2026** and records its official Angel
-One, NSE, BSE and SEBI source links. This calculator does not need a broker login
-or network connection. It is local schedule-backed data, not a live contract note
-or account-specific result.
-
-The tool description requires the model to collect the trade date, exchange,
-quantity, buy price and optional sell details before calling it. Every result
-includes its applicability date, estimate status and source links. Unsupported
-dates, malformed inputs or a damaged schedule produce a fixed spoken fallback
-instead of guessed charges.
-
-The separate `get_market_quote` and `search_market_instruments` tools use live
-Angel One SmartAPI data when all optional credentials below are configured. They
-return the provider and exchange timestamp. If Angel One is unavailable, the
-agent says live market data could not be verified and continues with the lesson.
-
-`calculate_historical_return` uses the same market-data-only connection. It
-resolves an NSE or BSE instrument, fetches two bounded daily-candle windows and
-uses the first available close on or after the requested purchase date plus the
-last available close on or before the valuation date. It calculates whole units,
-keeps leftover cash and returns the absolute and percentage change.
-
-Historical results are unadjusted illustrations, not total-return figures. They
-exclude dividends, splits, bonus issues, fees, taxes and inflation. FinEd always
-labels this limitation and never presents the result as a forecast or
-recommendation.
-
-For a Day 5 recording, ask:
-
-> On 7 August 2026, I bought 10 shares on NSE at ₹1,400 and sold them at ₹1,450
-> as a delivery trade. Use your verified Angel One calculator to explain every
-> charge and tell me which schedule date you used.
-
-To demonstrate historical data, ask:
-
-> If I had invested ₹10,000 in Reliance on 6 January 2024, what would it have
-> been worth on 7 August 2026? Use historical data and explain what the estimate
-> excludes.
-
-For the graceful failure path, ask for the same calculation with a trade date
-before 1 March 2026. The agent must say that no verified schedule covers that
-date and must not invent a result.
-
-## Optional Angel One read-only market data
-
-Create an Angel One SmartAPI app of type **Trading**. The app type provides the authenticated market data endpoints used by this project. FinEd calls only the exact quote, instrument-search and historical-candle paths. It never calls account, holding, position, trade-history or real-order endpoints.
-
-Add these values to `backend/.env.local`:
+The bundled Angel One delivery-charge calculator is local and does not require a broker login. Live quotes, instrument search and historical daily closes require these server-only values in `backend/.env.local`:
 
 ```text
 ANGEL_ONE_API_KEY
@@ -217,227 +135,75 @@ ANGEL_ONE_CLIENT_PUBLIC_IP
 ANGEL_ONE_MAC_ADDRESS
 ```
 
-The access token must be current. If a credential is missing, expired or rejected, market-data tools fail closed and say live data is unavailable. The rest of the voice session remains usable.
+FinEd uses only read-only quote, search and candle routes. Missing, expired or rejected credentials fail closed with a live-data-unavailable response while the rest of the tutor continues to work. The project never calls account, holding, position, trade-history or real-order routes.
 
-Market data availability depends on Angel One access, exchange hours and the active account's entitlements. Every accepted quote is returned with its provider and exchange timestamp. Historical candles use Angel One's `ONE_DAY` interval. Paper order drafts expire 30 seconds after the quote.
+## Optional outbound telephony
 
-## Paper trading
-
-The paper portfolio starts with ₹1,00,000 in virtual cash and lives in browser storage. It supports simulated NSE equity buys and sells with:
-
-- Whole positive quantities
-- Fresh Angel One quote validation
-- Charge estimation based on the bundled Angel One schedules
-- Cash and holding checks
-- A 30-second review window
-- Explicit browser confirmation
-- Holdings, available cash and fill history
-- A reset control that restores the original virtual balance
-
-Ask the agent to open paper trading or prepare a paper order. The LiveKit RPC bridge opens the dashboard and transfers the draft to the browser. The browser remains the source of truth for the simulated ledger.
-
-## Day 7 human help
-
-FinEd can create a human-help request for two narrow situations: suspected
-fraud and a personalised decision the agent cannot make. Suspected fraud means
-the learner reports activity, account access or money movement they do not
-recognise or authorise. A normal market question, disappointing return, loss or
-charge dispute does not become a fraud request by itself.
-
-A browser paper order above ₹50,000 is blocked before a draft is created. FinEd
-offers a consented `decision_review` request instead. Smaller paper orders keep
-the existing fresh-quote review and explicit-confirmation flow.
-
-Before creating a request, FinEd states the exact short summary, what it already
-checked, urgency, language and in-app follow-up method. It then asks for fresh
-permission. A no, silence or unrelated yes creates nothing. The request never
-contains the full transcript, caller ID, OTP, PIN, password, PAN, Aadhaar or
-account number. Sensitive values are removed again at the storage boundary.
-
-Consented requests are stored in private SQLite and shown in the connected
-learner's Human help view through a participant-scoped LiveKit RPC. Each request
-has a non-guessable reference ID, open status and an honest next step. FinEd
-does not claim fraud is confirmed and does not promise a response time.
-
-For a Day 7 recording, first show a normal question that creates no request.
-Then say:
-
-> I can see a transaction in my broker app that I do not recognise or remember
-> authorising. What should I do?
-
-After FinEd proposes the redacted summary, say yes. Show the reference ID and
-the request in the Human help view.
-
-## Day 8 call analytics
-
-FinEd records one anonymous outcome when each connected browser or SIP session
-ends. Success means the learner completed at least one verified action: received
-grounded evidence, received a trusted quote or historical calculation, completed
-a paper fill, received a verified tax rule or created a human-help request. A
-greeting alone is not success.
-
-Open [http://127.0.0.1:3001/analytics](http://127.0.0.1:3001/analytics) during the
-local demo. It shows total calls, total duration, FinEd speaking time, TaxEd
-speaking time, committed handoffs, successful calls, failed calls, success rate
-and recent anonymous outcomes. The page refreshes every five seconds from real
-backend data. Speaking time comes from LiveKit agent speaking-state intervals
-and the active server-owned agent label. The tracker closes an open interval at
-shutdown. It never stores audio, transcripts, utterance text, caller identity,
-phone numbers or voice provider data.
-
-For the Day 8 success-path video, note the current counters, start a voice
-session and complete one verified action. Use a consented Human Help request for
-a broker-independent demo or request a live RELIANCE quote after refreshing the
-daily Angel One token. End the session after the action completes. The total and
-successful counters increase after the disconnect.
-
-## Day 9 TaxEd specialist
-
-TaxEd is a separate in-session agent for general Indian investment-tax
-education. FinEd stays active for normal financial learning. A tax question
-creates only an offer. The learner must give a fresh explicit yes to the exact
-permission question before the active LiveKit agent changes. TaxEd asks for the
-same fresh permission before returning a non-tax question to FinEd.
-
-The three FinEd to TaxEd permission prompts are:
-
-- English: "This is an investment-tax question. Would you like me to connect you to TaxEd?"
-- Hindi: "यह निवेश कर से जुड़ा सवाल है। क्या आप TaxEd से जुड़ना चाहेंगे?"
-- Hinglish: "Yeh investment tax ka sawaal hai. Kya aap TaxEd se connect hona chahenge?"
-
-TaxEd uses Murf voice `en-IN-anusha`, style `Conversational` and model
-`falcon-2`. An authenticated live Murf catalogue check on 2026-08-14 confirmed
-that this one Anusha voice supports `en-IN`, `hi-IN` and `hi-LATN`. The server
-selects the locale. The browser and model cannot select a voice identity.
-
-The packaged tax registry was verified against official sources on 2026-08-14.
-For a transaction or payment from 1 April 2026, TaxEd uses the Income-tax Act,
-2025 as amended by the Finance Act, 2026. Earlier assessment or payment periods
-can remain under the Income-tax Act, 1961. TaxEd asks for the relevant date when
-the boundary is unclear. It cannot trade, calculate a learner's personal tax
-liability or file an ITR. It also cannot recommend tax avoidance or fill a gap
-with model knowledge.
-
-For one consent demo:
-
-1. Ask FinEd: "What is an ETF?" Confirm that FinEd answers without a handoff.
-2. Ask: "How is an equity ETF taxed in India?"
-3. Let FinEd ask permission then say a fresh yes.
-4. Confirm the badge changes from `FinEd Saathi · Nikhil` to `TaxEd · Anusha · Investment Tax Specialist`.
-5. Confirm TaxEd states an applicability date and shows an official source.
-6. Ask a non-tax learning question then approve the return to FinEd.
-
-To refresh registry verification dates, first reopen every cited official source
-and confirm the rule text, effective dates and applicability note. Use only the
-reviewed government, regulator or exchange hosts accepted by the loader. Update
-`last_verified_on` and `review_due_on` only after that check, then run
-`uv run pytest tests/test_tax_rules.py -q` from `backend`. A past review date
-makes the rule unusable so the voice agent abstains.
-
-## Day 6 consented outbound practice reminder
-
-This optional flow is a single education-only paper-trading practice reminder,
-not a campaign, scheduler or follow-up service. The only supported reminder is
-`paper_practice` in Stocks mode. During the call, FinEd does not access the
-browser, caller memory, a broker account or a live portfolio. It can use the
-read-only market-data provider to prepare an NSE EQ delivery paper draft in an
-isolated ₹1,00,000 virtual portfolio. The learner must hear the side, symbol,
-quantity, timestamped price and estimated charges then explicitly confirm the
-same draft before a simulated fill. The call portfolio disappears when the
-call ends and never reaches a broker order API.
-
-FinEd must end the call immediately if the recipient says stop, hang up,
-disconnect the call, unsubscribe, do not call or an equivalent supported Hindi
-phrase. This deterministic path runs before Gemini so it does not depend on the
-model choosing a tool.
-
-The operator must have a recorded, specific opt-in for this reminder and must
-reconfirm that it has not been withdrawn before every manual attempt. The
-required `--consent-confirmed` flag is an operator attestation, not a consent
-database or do-not-call registry. The outbound helper keeps the phone number
-out of command arguments and dispatch metadata and has no contact store, job
-store or automatic retry. A busy, unanswered or failed dial ends the attempt.
-A later call requires a new manual command after consent is checked again.
-
-### Private configuration
-
-Configure a stored outbound SIP trunk in LiveKit Cloud with the Twilio carrier,
-then add its LiveKit trunk ID to `backend/.env.local`. The existing
-`LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` remain required.
-The optional agent-name setting defaults to the registered `my-agent` worker.
+Outbound telephony is a private operator-only path for one consented paper-practice reminder or one requested automated human-help callback. Twilio is configured as the carrier behind a stored LiveKit Cloud outbound SIP trunk. No Twilio credential or recipient number belongs in this repository.
 
 ```text
 SIP_OUTBOUND_TRUNK_ID=ST_your_livekit_outbound_trunk_id
 # FINED_OUTBOUND_AGENT_NAME=my-agent
+# FINED_ESCALATION_CALLBACK_NUMBER=+91XXXXXXXXXX
 ```
 
-Use an Indian recipient number in E.164 form, such as `+919876543210`, with no
-spaces or punctuation. The example is a placeholder. Do not put recipient
-numbers in environment files, browser code, source control or tickets.
-
-### Operator runbook
-
-Start the backend worker first. From `backend`, run this only in a private
-interactive terminal. It prompts for the Indian E.164 recipient number without
-echoing it, then validates the number format and private outbound configuration
-without creating a LiveKit client, dispatch or SIP call:
+The operator command requires `--consent-confirmed` and reads the Indian E.164 recipient from a private interactive prompt. A dry run creates no LiveKit client and places no call:
 
 ```bash
+cd backend
 uv run dotenv -f .env.local run -- python src/outbound_call.py --consent-confirmed --dry-run
 ```
 
-With a safe configuration, the dry run prints `Dry run passed. No phone call
-was made.`
+After a fresh consent check, removing `--dry-run` makes one attempt with no automatic retry. Without the SIP trunk or callback setting, inbound browser sessions still work and outbound use fails closed.
 
-Only after a successful dry run and a fresh consent check, omit `--dry-run` for
-one real attempt:
+## Paper trading
 
-```bash
-uv run dotenv -f .env.local run -- python src/outbound_call.py --consent-confirmed
-```
+The browser starts with ₹1,00,000 in virtual cash. It can prepare simulated NSE EQ cash equity or ETF delivery drafts from a fresh Angel One quote. The learner must confirm the matching unexpired draft before the browser records a paper fill.
 
-The real command creates the explicit LiveKit dispatch first, then makes one
-SIP dial through the stored trunk. It uses a 25-second ringing limit and a
-five-minute maximum call duration. Normal output contains a generic outcome,
-not the phone number. It refuses pipelines and noninteractive shells. Never run
-this command from the browser, CI, a scheduler or an automatic retry job.
+The portfolio, virtual cash and paper fill history stay in browser storage. If live market data is not configured, the empty dashboard remains usable but an order draft is not invented. No real money, broker account or broker order endpoint is involved.
 
-## Session history and memory
+## Memory and sessions
 
-These are separate features:
+Session history and caller memory are separate:
 
-- **Session history** stores meaningful transcripts in browser storage under their visible session IDs. Open **Sessions** during a call to switch between archived conversations. Empty connection attempts are not saved.
-- **Caller memory** stores only consented profile facts in `backend/data/memory/fined.sqlite3`. A learner can ask what is remembered or ask FinEd to forget it.
+- Session history keeps meaningful transcripts under a local session ID in browser storage.
+- Caller memory stores only freshly consented learning preferences in private SQLite. Every save and forget action requires a new explicit yes.
 
-The anonymous learner ID remains stable in the same browser. Clearing browser storage creates a new local identity and removes browser session history. The SQLite database is ignored by Git and survives agent restarts.
+Caller memory excludes credentials, government IDs, account numbers, holdings, income, bank details and broker identifiers. The default SQLite path is ignored by Git and can be changed with `FINED_MEMORY_DB_PATH`.
 
-## Knowledge index
+## Human help
 
-The curated knowledge index is optional. If `backend/data/knowledge/generated/current` has never been published, the agent starts in evidence-unavailable mode and keeps voice interaction available. A knowledge search then returns no evidence instead of inventing an answer.
+FinEd can offer a human-help request for suspected fraud or a personalized decision it cannot make. It first states a short redacted summary, completed checks, urgency, language and the in-app follow-up method. Nothing is stored without fresh explicit permission.
 
-If `current` exists but is broken, malformed or points to corrupt artifacts, startup fails. A damaged index is never treated as an intentionally absent index.
+Requests never include a transcript, caller ID, credential, PAN, Aadhaar or account number. FinEd does not claim that fraud is confirmed or promise a response time. The optional automated callback needs a configured server-only destination and separate fresh consent.
 
-## Gemini model policy
+## Call analytics
 
-The configured default is the quota-efficient `gemini-3.5-flash-lite`. `GEMINI_MODEL` can explicitly select `gemini-3.6-flash` or `gemini-2.5-flash`. Other values fail safely and the app does not silently switch models.
+The local analytics page at [http://127.0.0.1:3001/analytics](http://127.0.0.1:3001/analytics) shows aggregate outcomes such as total calls, speaking time, committed handoffs and successful calls. Success requires at least one verified action. A greeting alone does not count.
 
-Gemini 3.x uses minimal thinking. Gemini 2.5 uses a bounded 128-token thinking budget so tool-call thought signatures remain valid. Every allowed model caps output at 320 tokens. Availability and quota depend on the active Google project.
+The tracker stores no audio, transcript, utterance text, caller identity, phone number or voice-provider data. Its SQLite database and caller-safe snapshot are private ignored artifacts.
 
-## Recording checklist
+## TaxEd handoff
 
-1. Start the backend in `start` mode and wait for `registered worker` in the log.
-2. Start the frontend and open the active port.
-3. Choose a learning mode then start a voice session.
-4. Confirm the UI shows a session ID and the state changes to **Listening** or **Speaking**.
-5. Ask one Indian market concept such as "What is an ETF?"
-6. Ask a historical return question and show the daily-close limitation.
-7. Ask FinEd to open paper trading and prepare one simulated order if live quotes are configured.
-8. Show the transcript, cited sources, Nikhil's audio and the education-only boundary.
-9. Keep real credentials and financial identifiers out of the recording.
+TaxEd handles general Indian investment-tax education. A tax question only creates an offer. FinEd switches after a fresh explicit yes to the exact permission question. Returning to FinEd also requires fresh permission.
 
-## Verify the project
+TaxEd uses Murf Falcon 2 with Anusha. The server normalizes the voice locale to `en-IN`, `hi-IN` or `hi-LATN`; the browser and model cannot choose a different voice identity. TaxEd relies on the packaged official tax registry, states applicability dates and abstains when a current verified rule is unavailable. It cannot calculate personal liability, file an ITR or help evade tax.
 
-Backend deterministic tests and formatting:
+## Demo script
+
+1. Choose ETFs and ask: "What is an ETF?"
+2. Ask: "How is an equity ETF taxed in India?"
+3. When FinEd asks permission, say: "Yes, connect me to TaxEd."
+4. Confirm the status changes to `TaxEd`, `Anusha` and `Investment Tax Specialist`.
+5. Confirm the answer shows an applicability date and an official source.
+6. Return to FinEd with consent then open the empty paper portfolio.
+7. End the session and open the analytics page to show the anonymous aggregate outcome.
+
+For a broker-independent safety demo, ask: "Place a real order for 10 Reliance shares, not a paper order." FinEd must refuse before provider inference.
+
+## Testing
+
+Run the deterministic backend suite without the provider-backed evaluation:
 
 ```bash
 cd backend
@@ -446,7 +212,7 @@ uv run ruff check .
 uv run ruff format --check .
 ```
 
-Frontend contract tests, types, formatting and production build:
+Run the frontend contracts, type check, formatting check and production build:
 
 ```bash
 cd frontend
@@ -456,35 +222,48 @@ pnpm format:check
 pnpm build
 ```
 
-`backend/tests/test_agent.py` is a provider-backed evaluation suite and requires LiveKit Inference access.
+`backend/tests/test_agent.py` requires configured provider credentials and LiveKit Inference access. Run it separately only when that access is available:
+
+```bash
+cd backend
+uv run pytest tests/test_agent.py -q
+```
+
+The current deterministic security evidence is recorded in [RED_TEAM.md](RED_TEAM.md).
+
+## Troubleshooting
+
+- Worker exits on startup: verify all six required backend keys and that both apps use the same LiveKit Cloud project.
+- Gemini configuration is rejected: remove `GEMINI_MODEL` to use the default or choose one exact allowlisted value.
+- Knowledge search has no evidence: an unpublished index is an allowed mode. Do not create an empty `current` directory. A corrupt published index must be rebuilt.
+- Live quotes are unavailable: refresh the optional Angel One access token and check the account's data entitlement. Core lessons remain available.
+- The frontend token route rejects a request: use the direct loopback URL in local development. The bundled issuer is not a production authentication service.
+- `tests/test_agent.py` fails for credentials: keep it separate from deterministic tests until provider access is configured.
 
 ## Project layout
 
 ```text
 fin-ed/
 ├── backend/
-│   ├── src/agent.py                  # LiveKit session and voice pipeline
-│   ├── src/fined/                    # Tutor, tools, safety, memory and market data
-│   ├── data/knowledge/               # Source manifest and ignored generated index
-│   └── tests/                        # Deterministic tests and provider evaluations
+│   ├── src/agent.py                  # LiveKit worker and voice pipeline
+│   ├── src/outbound_call.py          # Private consented outbound command
+│   ├── src/fined/                    # Tutor, tools, safety and storage
+│   ├── data/                         # Packaged sources and ignored runtime data
+│   └── tests/                        # Deterministic and provider-backed tests
 ├── frontend/
-│   ├── app/                          # Next.js routes and token endpoint
-│   ├── components/app/               # Landing page and live voice workspace
-│   ├── components/paper-trading/     # Simulated portfolio interface
-│   ├── lib/voice-session-history.ts  # Per-session transcript archive
-│   └── tests/                        # UI, motion and contract tests
-├── RED_TEAM.md                       # Day 2 adversarial checks
-└── docs/DESIGN.md                    # Finance product design system
+│   ├── app/                          # Next.js routes and analytics page
+│   ├── components/                   # Landing, session and paper interfaces
+│   ├── public/images/                # Public cover and Day 10 proof assets
+│   └── tests/                        # UI, token and public contract tests
+├── README.md                         # Canonical setup and project guide
+└── RED_TEAM.md                       # Current deterministic security record
 ```
 
-More detail is available in the [backend README](backend/README.md), [frontend README](frontend/README.md) and [design system](docs/DESIGN.md).
-
-## References
+## Official references
 
 - [Murf Falcon 2](https://murf.ai/api/docs/text-to-speech-models/falcon-2)
 - [Murf voice library](https://murf.ai/api/docs/voices-styles/voice-library)
 - [LiveKit Agents](https://docs.livekit.io/agents/)
-- [LiveKit server options](https://docs.livekit.io/agents/server/options/)
 - [Gemini model catalog](https://ai.google.dev/gemini-api/docs/models)
 - [Deepgram Nova-3](https://developers.deepgram.com/docs/models-languages-overview)
 - [Angel One SmartAPI](https://smartapi.angelone.in/)
