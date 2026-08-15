@@ -99,6 +99,11 @@ class FakeTTS:
         self.fail_close = False
         self.prewarm_attempts = 0
         self.close_attempts = 0
+        self.option_updates: list[dict[str, object]] = []
+
+    def update_options(self, **kwargs: object) -> None:
+        self.kwargs.update(kwargs)
+        self.option_updates.append(kwargs)
 
     def prewarm(self) -> None:
         self.prewarm_attempts += 1
@@ -751,6 +756,20 @@ async def test_browser_job_wires_one_recursive_taxed_factory_with_anusha_locales
     assert returning_fined.taxed_factory is fined_agent.taxed_factory
     assert returning_fined.status_bridge is fined_agent.status_bridge
     assert returning_fined.announce_entry is True
+    assert returning_fined.tts_locale_controller is fined_agent.tts_locale_controller
+
+    fined_agent.tts_locale_controller.update_for_spoken_text("यह हिंदी उत्तर है।")
+    assert harness.tts_instances[0][0].kwargs["locale"] == "hi-IN"
+    assert harness.tts_instances[0][0].option_updates == [{"locale": "hi-IN"}]
+
+    returning_fined.tts_locale_controller.update_for_spoken_text(
+        "This answer is in English."
+    )
+    assert harness.tts_instances[0][0].kwargs["locale"] == "en-IN"
+    assert harness.tts_instances[0][0].option_updates == [
+        {"locale": "hi-IN"},
+        {"locale": "en-IN"},
+    ]
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,7 @@ from typing import cast
 import pytest
 from livekit.agents import Agent, ChatContext, ModelSettings, RunContext, ToolError, llm
 
+import fined.agent as fined_agent_module
 from fined.agent import (
     FinEdAssistant,
     ParticipantProfile,
@@ -102,6 +103,21 @@ class FakeMarketDataProvider:
         if self.historical_prices is None:
             raise MarketDataUnavailableError("provider detail must stay hidden")
         return self.historical_prices
+
+
+@dataclass
+class FakeLocaleTTS:
+    current_locale: str = "en-IN"
+    updates: list[str] = field(default_factory=list)
+
+    def update_options(self, *, locale: str) -> None:
+        self.current_locale = locale
+        self.updates.append(locale)
+
+
+async def _speech_chunks(*chunks: str):
+    for chunk in chunks:
+        yield chunk
 
 
 @dataclass
@@ -402,6 +418,62 @@ def test_prompt_matches_the_users_language_register() -> None:
         "do not repeat the remembered romanized-hindi sentence",
     ):
         assert required in prompt
+
+
+@pytest.mark.asyncio
+async def test_fined_routes_nikhil_locale_before_first_spoken_language_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Catches Hindi text reaching Murf while Nikhil is still configured as en-IN.
+    observed: list[tuple[str, str]] = []
+    tts = FakeLocaleTTS()
+    controller_type = fined_agent_module.FinEdTTSLocaleController
+    controller = controller_type(tts)
+
+    async def fake_default_tts_node(
+        _assistant: Agent,
+        text,
+        _model_settings: ModelSettings,
+    ):
+        async for chunk in text:
+            observed.append((chunk, tts.current_locale))
+            yield chunk
+
+    monkeypatch.setattr(Agent.default, "tts_node", fake_default_tts_node)
+    assistant = FinEdAssistant(tts_locale_controller=controller)
+
+    hindi = [
+        chunk
+        async for chunk in assistant.tts_node(
+            _speech_chunks("...", "नमस्ते, मैं आपकी मदद कर सकता हूँ।"),
+            ModelSettings(),
+        )
+    ]
+    english = [
+        chunk
+        async for chunk in assistant.tts_node(
+            _speech_chunks("I can explain ETFs."),
+            ModelSettings(),
+        )
+    ]
+    repeated_english = [
+        chunk
+        async for chunk in assistant.tts_node(
+            _speech_chunks("Stocks represent ownership."),
+            ModelSettings(),
+        )
+    ]
+
+    assert hindi == ["...", "नमस्ते, मैं आपकी मदद कर सकता हूँ।"]
+    assert english == ["I can explain ETFs."]
+    assert repeated_english == ["Stocks represent ownership."]
+    assert observed == [
+        ("...", "hi-IN"),
+        ("नमस्ते, मैं आपकी मदद कर सकता हूँ।", "hi-IN"),
+        ("I can explain ETFs.", "en-IN"),
+        ("Stocks represent ownership.", "en-IN"),
+    ]
+    assert tts.updates == ["hi-IN", "en-IN"]
 
 
 def test_prompt_defines_day_two_persona_objectives_and_limits() -> None:

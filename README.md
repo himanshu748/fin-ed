@@ -31,7 +31,7 @@ It is education, not investment advice. The remembered ₹6 share story stays un
 - Eight modes: Stocks, Mutual Funds & SIPs, ETFs, Gold, F&O, IPOs, Bonds and Ask Anything
 - Deepgram Nova-3 multilingual speech recognition with LiveKit transport
 - Gemini tool use through a strict model allowlist and a fixed safe error boundary
-- Murf Falcon 2 speech with Nikhil for FinEd
+- Murf Falcon 2 speech with Nikhil using `en-IN` for English and `hi-IN` for Devanagari Hindi
 - A consented TaxEd handoff with Anusha in `en-IN`, `hi-IN` or `hi-LATN`
 - An optional local knowledge index with evidence-first retrieval
 - Optional Angel One read-only quotes, instrument search and historical closes
@@ -53,7 +53,7 @@ The normal setup works without Angel One, Twilio, a knowledge index or outbound 
 
 ![FinEd Saathi architecture](frontend/public/images/day-10/fined-architecture.png)
 
-The browser sends speech through LiveKit to Deepgram, Gemini and Murf Falcon 2. FinEd owns normal lessons. A fresh permission binds a tax question to TaxEd, which uses the official Indian tax registry and the server-selected Anusha locale. Optional side systems remain outside the core voice path.
+The browser sends speech through LiveKit to Deepgram, Gemini and Murf Falcon 2. FinEd owns normal lessons and selects Nikhil's supported locale from the actual reply before speech starts. A fresh permission binds a tax question to TaxEd, which uses the official Indian tax registry and the server-selected Anusha locale. Optional side systems remain outside the core voice path.
 
 ## Quick start
 

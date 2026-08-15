@@ -34,6 +34,7 @@ from livekit.plugins import deepgram, google, murf, noise_cancellation, silero
 
 from fined.agent import (
     FinEdAssistant,
+    FinEdTTSLocaleController,
     ParticipantProfile,
     SessionState,
     build_greeting,
@@ -404,6 +405,22 @@ async def my_agent(ctx: JobContext) -> None:
         elif outbound_reminder == PAPER_PRACTICE_REMINDER:
             state.paper_trading = CallPaperTradingBridge()
 
+        fined_stt = deepgram.STT(
+            model="nova-3",
+            language="multi",
+            endpointing_ms=100,
+        )
+        fined_llm = create_gemini_llm(google.LLM)
+        fined_tts = murf.TTS(
+            voice="Nikhil",
+            style="Conversational",
+            model="falcon-2",
+            locale="en-IN",
+            tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
+            text_pacing=True,
+        )
+        fined_tts_locale_controller = FinEdTTSLocaleController(fined_tts)
+
         if tax_registry is not None:
 
             def create_fined(
@@ -415,6 +432,7 @@ async def my_agent(ctx: JobContext) -> None:
                     chat_ctx=chat_ctx,
                     taxed_factory=create_taxed,
                     status_bridge=status_bridge,
+                    tts_locale_controller=fined_tts_locale_controller,
                     announce_entry=announce_entry,
                 )
 
@@ -444,20 +462,9 @@ async def my_agent(ctx: JobContext) -> None:
 
         session = AgentSession[SessionState](
             userdata=state,
-            stt=deepgram.STT(
-                model="nova-3",
-                language="multi",
-                endpointing_ms=100,
-            ),
-            llm=create_gemini_llm(google.LLM),
-            tts=murf.TTS(
-                voice="Nikhil",
-                style="Conversational",
-                model="falcon-2",
-                locale="en-IN",
-                tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
-                text_pacing=True,
-            ),
+            stt=fined_stt,
+            llm=fined_llm,
+            tts=fined_tts,
             turn_detection=inference.TurnDetector(version="v1-mini"),
             vad=ctx.proc.userdata["vad"],
             preemptive_generation=True,
@@ -476,6 +483,7 @@ async def my_agent(ctx: JobContext) -> None:
                 outbound_reminder=outbound_reminder,
                 outbound_call_control=state.outbound_call_control,
                 status_bridge=status_bridge,
+                tts_locale_controller=fined_tts_locale_controller,
             )
 
         usage = metrics.UsageCollector()

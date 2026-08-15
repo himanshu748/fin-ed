@@ -167,6 +167,57 @@ class OutboundCallControl(Protocol):
     async def end_call(self) -> None: ...
 
 
+class FinEdLocaleTTS(Protocol):
+    def update_options(self, *, locale: str) -> None: ...
+
+
+@dataclass
+class FinEdTTSLocaleController:
+    """Select Nikhil's supported locale before each FinEd speech stream opens."""
+
+    tts: FinEdLocaleTTS
+    locale: Literal["en-IN", "hi-IN"] = "en-IN"
+
+    def update_for_spoken_text(self, text: str) -> None:
+        locale: Literal["en-IN", "hi-IN"] = (
+            "hi-IN"
+            if any("\u0900" <= character <= "\u097f" for character in text)
+            else "en-IN"
+        )
+        if locale == self.locale:
+            return
+        self.tts.update_options(locale=locale)
+        self.locale = locale
+
+
+async def prepare_fined_speech_locale(
+    text: AsyncIterable[str],
+    controller: FinEdTTSLocaleController,
+) -> AsyncIterable[str]:
+    """Peek at spoken text, select its locale, then replay the complete stream."""
+
+    iterator = text.__aiter__()
+    buffered: list[str] = []
+    while True:
+        try:
+            chunk = await iterator.__anext__()
+        except StopAsyncIteration:
+            controller.update_for_spoken_text("".join(buffered))
+            break
+        buffered.append(chunk)
+        if any(character.isalpha() for character in chunk):
+            controller.update_for_spoken_text(chunk)
+            break
+
+    async def replay() -> AsyncIterable[str]:
+        for chunk in buffered:
+            yield chunk
+        async for chunk in iterator:
+            yield chunk
+
+    return replay()
+
+
 TaxEdFactory = Callable[[TaxLocale, llm.ChatContext], Agent]
 ProhibitedAgentIntent = Literal[
     "personal_tax_liability",
@@ -939,6 +990,7 @@ class FinEdAssistant(Agent):
         taxed_factory: TaxEdFactory | None = None,
         chat_ctx: llm.ChatContext | None = None,
         status_bridge: AgentStatusBridge | None = None,
+        tts_locale_controller: FinEdTTSLocaleController | None = None,
         announce_entry: bool = False,
         monotonic_clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -947,6 +999,7 @@ class FinEdAssistant(Agent):
         self.outbound_call_control = outbound_call_control
         self.taxed_factory = taxed_factory
         self.status_bridge = status_bridge or UnavailableAgentStatusBridge()
+        self.tts_locale_controller = tts_locale_controller
         self.announce_entry = announce_entry
         self._monotonic_clock = monotonic_clock
         agent_options: dict[str, object] = {
@@ -1013,16 +1066,19 @@ class FinEdAssistant(Agent):
         ):
             yield chunk
 
-    def tts_node(
+    async def tts_node(
         self,
         text: AsyncIterable[str],
         model_settings: ModelSettings,
     ):
-        return Agent.default.tts_node(
-            self,
-            strip_markdown_links_for_speech(text),
-            model_settings,
-        )
+        spoken_text = strip_markdown_links_for_speech(text)
+        if self.tts_locale_controller is not None:
+            spoken_text = await prepare_fined_speech_locale(
+                spoken_text,
+                self.tts_locale_controller,
+            )
+        async for frame in Agent.default.tts_node(self, spoken_text, model_settings):
+            yield frame
 
     @function_tool(name="offer_tax_handoff")
     async def offer_tax_handoff(
