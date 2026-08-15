@@ -648,3 +648,36 @@ test('Reveal delegates animation without invoking the Web Animations API', () =>
 
   assert.deepEqual({ hookCalls, animateCalls }, { hookCalls: 1, animateCalls: 0 });
 });
+
+test('publishes a privacy-safe Day 10 architecture diagram', () => {
+  const asset = 'public/images/day-10/fined-architecture.svg';
+  const path = join(frontendRoot, asset);
+  assert.ok(existsSync(path), `missing Day 10 architecture asset: ${asset}`);
+
+  const source = read(asset);
+  includesAll(
+    source,
+    [
+      'viewBox="0 0 1600 900"',
+      '<title>FinEd Saathi voice architecture</title>',
+      '<desc>',
+      'Browser or phone',
+      'LiveKit',
+      'Deepgram Nova-3',
+      'Gemini',
+      'Guardrails and tools',
+      'Murf Falcon 2',
+      'Nikhil',
+      'Anusha',
+      'Angel One read-only data',
+      'Browser paper trading',
+      'SQLite memory and analytics',
+    ],
+    'missing Day 10 architecture content'
+  );
+  assert.ok(!/[—–]/u.test(source), 'architecture copy must not use Unicode dashes');
+  assert.ok(
+    !/\+91\d{10}|session[_ -]?id|api[_ -]?key/i.test(source),
+    'architecture leaks private data'
+  );
+});
