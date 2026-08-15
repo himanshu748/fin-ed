@@ -24,7 +24,7 @@
   <text x="214" y="383" text-anchor="middle" fill="#15233B" font-family="Arial, sans-serif" font-size="19" font-weight="700">Browser or phone</text>
 
   <text x="382" y="224" fill="#15233B" font-family="Arial, sans-serif" font-size="17" font-weight="700" letter-spacing="1.5">REALTIME VOICE PIPELINE</text>
-  <rect x="382" y="250" width="834" height="378" rx="22" fill="#F6F2E8" stroke="#174EA6" stroke-width="3"/>
+  <rect x="382" y="250" width="930" height="378" rx="22" fill="#F6F2E8" stroke="#174EA6" stroke-width="3"/>
   <path d="M 324 327 H 382" stroke="#15233B" stroke-width="3" marker-end="url(#arrow-ink)"/>
 
   <g fill="#FFFCF5" stroke="#15233B" stroke-width="2">
@@ -32,14 +32,14 @@
     <rect x="574" y="302" width="172" height="76" rx="14"/>
     <rect x="770" y="302" width="132" height="76" rx="14"/>
     <rect x="926" y="302" width="188" height="76" rx="14"/>
-    <rect x="1138" y="302" width="44" height="76" rx="14"/>
+    <rect x="1138" y="302" width="132" height="76" rx="14"/>
   </g>
   <path d="M 550 340 H 574 M 746 340 H 770 M 902 340 H 926 M 1114 340 H 1138" stroke="#15233B" stroke-width="3" marker-end="url(#arrow-ink)"/>
   <text x="484" y="347" text-anchor="middle" fill="#15233B" font-family="Arial, sans-serif" font-size="19" font-weight="700">LiveKit</text>
   <text x="660" y="347" text-anchor="middle" fill="#15233B" font-family="Arial, sans-serif" font-size="18" font-weight="700">Deepgram Nova-3</text>
   <text x="836" y="347" text-anchor="middle" fill="#15233B" font-family="Arial, sans-serif" font-size="19" font-weight="700">Gemini</text>
   <text x="1020" y="347" text-anchor="middle" fill="#15233B" font-family="Arial, sans-serif" font-size="16" font-weight="700">Guardrails and tools</text>
-  <text x="1160" y="347" text-anchor="middle" transform="rotate(90 1160 347)" fill="#15233B" font-family="Arial, sans-serif" font-size="16" font-weight="700">Murf Falcon 2</text>
+  <text x="1204" y="347" text-anchor="middle" fill="#15233B" font-family="Arial, sans-serif" font-size="16" font-weight="700">Murf Falcon 2</text>
 
   <path d="M 800 378 V 432" stroke="#15233B" stroke-width="3" marker-end="url(#arrow-ink)"/>
   <g fill="#FFFCF5" stroke="#1F6B4F" stroke-width="3">
