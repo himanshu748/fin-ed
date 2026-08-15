@@ -58,6 +58,27 @@ test('publishes original FinEd editorial artwork and compact brand icons', () =>
   }
 });
 
+test('publishes fresh privacy-safe Day 10 product proof', () => {
+  const assets = [
+    'public/images/day-10/landing-proof.png',
+    'public/images/day-10/voice-workspace-proof.png',
+    'public/images/day-10/taxed-handoff-proof.png',
+    'public/images/day-10/paper-trading-proof.png',
+    'public/images/day-10/call-analytics-proof.png',
+  ];
+
+  for (const asset of assets) {
+    const path = join(frontendRoot, asset);
+    assert.ok(existsSync(path), `missing Day 10 screenshot: ${asset}`);
+    assert.ok(statSync(path).size > 80_000, `${asset} must contain real UI detail`);
+    const bytes = readBytes(asset);
+    assert.equal(bytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+    assert.equal(bytes.subarray(12, 16).toString('ascii'), 'IHDR');
+    assert.ok(bytes.readUInt32BE(16) >= 1200, `${asset} is too narrow`);
+    assert.ok(bytes.readUInt32BE(20) >= 700, `${asset} is too short`);
+  }
+});
+
 test('validates the encoded PNG and ICO asset headers', () => {
   const pngSignature = '89504e470d0a1a0a';
   const expectedPngDimensions = new Map([
