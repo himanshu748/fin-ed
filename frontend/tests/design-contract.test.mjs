@@ -680,4 +680,14 @@ test('publishes a privacy-safe Day 10 architecture diagram', () => {
     !/\+91\d{10}|session[_ -]?id|api[_ -]?key/i.test(source),
     'architecture leaks private data'
   );
+  assert.ok(
+    source.includes('1296 728'),
+    'Anusha flow must terminate at the official Indian tax registry'
+  );
+  assert.ok(!source.includes('1320 732'), 'Anusha flow must not terminate at a privacy card');
+  assert.ok(!source.includes('>Privacy-safe<'), 'privacy card must not imply a data flow');
+  assert.ok(
+    !/font-size="(?:14|16|17)"/.test(source),
+    'architecture labels must remain readable at 50%'
+  );
 });
